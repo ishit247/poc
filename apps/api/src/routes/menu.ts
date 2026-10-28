@@ -12,7 +12,8 @@ const sortOrder = z.number().int().min(-1_000_000).max(1_000_000);
 
 const categoryBody = z.object({ name, sortOrder: sortOrder.optional() }).strict();
 const categoryPatch = categoryBody.partial().strict().refine((b) => Object.keys(b).length > 0);
-const itemBody = z.object({ categoryId: uuid, name, sortOrder: sortOrder.optional() }).strict();
+const hsn = z.string().regex(/^[0-9]{4,8}$/).nullable();
+const itemBody = z.object({ categoryId: uuid, name, hsnCode: hsn.optional(), sortOrder: sortOrder.optional() }).strict();
 const itemPatch = itemBody.partial().strict().refine((b) => Object.keys(b).length > 0);
 const priceBody = z.object({
   pricePaise: z.number().int().min(0).max(100_000_000),
@@ -50,7 +51,7 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     return withTenant(p.tenantId, async (c) => {
       const [cats, items, prices] = await Promise.all([
         c.query('SELECT id, name, sort_order AS "sortOrder" FROM category WHERE deleted_at IS NULL ORDER BY sort_order, name'),
-        c.query('SELECT id, category_id AS "categoryId", name, sort_order AS "sortOrder" FROM item WHERE deleted_at IS NULL ORDER BY sort_order, name'),
+        c.query('SELECT id, category_id AS "categoryId", name, hsn_code AS "hsnCode", sort_order AS "sortOrder" FROM item WHERE deleted_at IS NULL ORDER BY sort_order, name'),
         c.query('SELECT item_id AS "itemId", channel, price_paise::int AS "pricePaise", gst_rate_bp AS "gstRateBp" FROM item_price WHERE deleted_at IS NULL'),
       ]);
       return { categories: cats.rows, items: items.rows, prices: prices.rows };
@@ -112,8 +113,8 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const row = await withTenant(p.tenantId, async (c) => {
       if (!(await liveExists(c, 'category', b.data.categoryId))) return null;
       const r = await c.query(
-        'INSERT INTO item (tenant_id, category_id, name, sort_order) VALUES ($1,$2,$3,$4) RETURNING id, category_id AS "categoryId", name, sort_order AS "sortOrder"',
-        [p.tenantId, b.data.categoryId, b.data.name, b.data.sortOrder ?? 0]);
+        'INSERT INTO item (tenant_id, category_id, name, hsn_code, sort_order) VALUES ($1,$2,$3,$4,$5) RETURNING id, category_id AS "categoryId", name, hsn_code AS "hsnCode", sort_order AS "sortOrder"',
+        [p.tenantId, b.data.categoryId, b.data.name, b.data.hsnCode ?? null, b.data.sortOrder ?? 0]);
       await audit(c, { ...actor(p), action: 'item.create', entity: 'item', entityId: r.rows[0].id });
       return r.rows[0];
     });
@@ -125,11 +126,11 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const b = itemPatch.safeParse(req.body);
     if (!ids.success || !b.success) return bad(reply);
     const p = req.principal!;
-    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', sortOrder: 'sort_order' }, 2);
+    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', hsnCode: 'hsn_code', sortOrder: 'sort_order' }, 2);
     const out = await withTenant(p.tenantId, async (c) => {
       if (b.data.categoryId && !(await liveExists(c, 'category', b.data.categoryId))) return 'bad-category' as const;
       const r = await c.query(
-        `UPDATE item SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING id, category_id AS "categoryId", name, sort_order AS "sortOrder"`,
+        `UPDATE item SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING id, category_id AS "categoryId", name, hsn_code AS "hsnCode", sort_order AS "sortOrder"`,
         [ids.data.id, ...set.values]);
       if (!r.rowCount) return 'missing' as const;
       await audit(c, { ...actor(p), action: 'item.update', entity: 'item', entityId: ids.data.id });

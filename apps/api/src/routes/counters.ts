@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import type pg from 'pg';
 import { z } from 'zod';
-import { resolveCounterMenu } from '@pos/shared';
 import { withTenant } from '../db.js';
+import { resolveForOutlet } from '../menuData.js';
 import { audit } from '../audit.js';
 
 const uuid = z.string().uuid();
@@ -88,13 +88,8 @@ export const counterRoutes: FastifyPluginAsync = async (app) => {
     const out = await withTenant(p.tenantId, async (c) => {
       const counter = await ownCounter(c, ps.data.id, p.outletIds);
       if (!counter) return null;
-      const [items, prices, stock, rules] = await Promise.all([
-        c.query('SELECT id, category_id AS "categoryId", name, sort_order AS "sortOrder" FROM item WHERE deleted_at IS NULL'),
-        c.query('SELECT item_id AS "itemId", channel, price_paise::int AS "pricePaise", gst_rate_bp AS "gstRateBp" FROM item_price WHERE deleted_at IS NULL'),
-        c.query('SELECT item_id AS "itemId", available FROM outlet_item WHERE outlet_id = $1 AND deleted_at IS NULL', [counter.outlet_id]),
-        c.query('SELECT item_id AS "itemId", listed, price_paise::int AS "pricePaise" FROM counter_item WHERE counter_id = $1 AND deleted_at IS NULL', [ps.data.id]),
-      ]);
-      return { mode: counter.menu_mode, menu: resolveCounterMenu({ mode: counter.menu_mode, items: items.rows, prices: prices.rows, stock: stock.rows, rules: rules.rows }) };
+      const menu = await resolveForOutlet(c, counter.outlet_id, 'counter', { id: ps.data.id, mode: counter.menu_mode });
+      return { mode: counter.menu_mode, menu };
     });
     return out ?? notFound(reply);
   });

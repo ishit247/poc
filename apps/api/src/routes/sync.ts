@@ -15,7 +15,7 @@ const PULL_SQL = `
     FROM category WHERE version > $1
   UNION ALL
   SELECT 'item', id, version, deleted_at IS NOT NULL,
-         jsonb_build_object('categoryId', category_id, 'name', name, 'sortOrder', sort_order)
+         jsonb_build_object('categoryId', category_id, 'name', name, 'hsnCode', hsn_code, 'sortOrder', sort_order)
     FROM item WHERE version > $1
   UNION ALL
   SELECT 'item_price', id, version, deleted_at IS NOT NULL,
@@ -23,8 +23,16 @@ const PULL_SQL = `
     FROM item_price WHERE version > $1
   UNION ALL
   SELECT 'outlet_item', item_id, version, deleted_at IS NOT NULL,
-         jsonb_build_object('available', available)
+         jsonb_build_object('available', available, 'listed', listed)
     FROM outlet_item WHERE version > $1 AND outlet_id = $2
+  UNION ALL
+  SELECT 'outlet', id, version, false,
+         jsonb_build_object('menuMode', menu_mode, 'gstEnabled', gst_enabled, 'gstin', gstin)
+    FROM outlet WHERE version > $1 AND id = $2
+  UNION ALL
+  SELECT 'outlet_price', id, version, deleted_at IS NOT NULL,
+         jsonb_build_object('itemId', item_id, 'channel', channel, 'pricePaise', price_paise)
+    FROM outlet_price WHERE version > $1 AND outlet_id = $2
   UNION ALL
   SELECT 'counter', id, version, false,
          jsonb_build_object('menuMode', menu_mode)
@@ -38,7 +46,7 @@ const PULL_SQL = `
 
 export const syncRoutes: FastifyPluginAsync = async (app) => {
   // Scope: an enrolled device gets its tenant's catalogue, its own outlet's availability,
-  // and ONLY its own counter's menu rules.
+  // its own outlet's settings, menu rules and price overrides, and ONLY its own counter's menu rules.
   app.get('/sync/pull', { config: { scope: 'outlet', permission: 'device' } }, async (req, reply) => {
     const q = query.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: 'invalid request' });

@@ -318,6 +318,8 @@ below has `tenant_id` with RLS unless noted.
 
 **Reference (versioned for pull):** `category`, `item`, `item_price(item_id, channel, price_paise, gst_rate_bp)`, `item_channel_map(item_id, channel, external_id)`; each row has `version bigint` from a per-tenant sequence and `deleted_at` for tombstones.
 
+**Outlet-specific menus and pricing (decided):** resolution order, most specific first: counter override > outlet override > catalogue. `outlet.menu_mode` (`all` / `listed`), `outlet_item(outlet_id, item_id, available, listed nullable)` (`listed` is NULL = "no opinion" so a stock toggle never lists an item), and `outlet_price(outlet_id, item_id, channel, price_paise)` so each outlet can price counter and aggregator channels differently. A counter can only narrow what its outlet shows. `outlet.gst_enabled` gates GST (see Q3). One resolver, `resolveMenu()` in `packages/shared/src/menu.ts`, serves the tablet and the server.
+
 **Counter-specific menus (decided):** `counter.menu_mode` (`all` = whole catalogue minus hidden items; `listed` = only listed items) and `counter_item(counter_id, item_id, listed, price_paise nullable)`. `price_paise` overrides the *counter-channel* price at that counter only; the GST rate is always the item's. Also `outlet_item(outlet_id, item_id, available)` for the stock toggle. A device pulls only its own counter's rules. The resolution rules live once, in `packages/shared/src/menu.ts` (`resolveCounterMenu`), used by both the tablet and the server. Prices are **tax-exclusive**: `exclusiveLine()` in `packages/shared/src/money.ts`.
 
 **Trading:**
@@ -491,14 +493,14 @@ mismatches, sync health. CSV export. Today's figures are labelled provisional.
 
 1. **Zomato/Swiggy (needed before phase 9):** are the outlets listed on the platforms, delivering to hostel students, or is it an internal ordering channel? Any partner contact yet? Per-outlet onboarding or one integrator for all?
 2. Roughly how many outlets and counters in year one? (Sizes hosting; a single VM is plenty for dozens.)
-3. **GST (needed before phase 3):** GSTIN and tax lines on receipts, or none? Is the caterer registered; do school and caterer invoice each other separately?
+3. **GST — provision made, specifics deferred (user's decision):** the model carries `outlet.gst_enabled` + `outlet.gstin` (a GSTIN is required to enable, format-checked in the API and the database), `item.hsn_code` (optional) and a per-item `gst_rate_bp`. A GST-disabled outlet charges 0% whatever the item rate. Still to learn before the receipt is designed: exact receipt/invoice layout, whether the caterer or the school holds the registration, composition-scheme or not, and whether GSTIN checksum validation is wanted.
 4. **Hosting (needed before phase 11):** which provider/region, and who handles OS patching, TLS and backups storage?
 5. Does the caterer need consolidated reports across all its schools (assumed yes) and does each school's management need its own read-only view of its outlet?
 6. Receipts English-only or Hindi too? (needed before phase 5)
 7. Counter hardware: Android tablets, Windows PCs, or mixed? Existing printers?
 8. Do tenants pay you (subscription), and when must billing exist?
 9. How long may a counter run offline before locking (default 7 days)?
-10. *Resolved (partly):* menus are **not** date-specific. Each **counter** has its own menu and prices (see section 8), pricing is **tax-exclusive** (GST added on top, rounded once per line), and the GST rate stays with the item. Still open: whether aggregator prices differ from counter prices (the model allows it per channel).
+10. *Resolved:* menus are **not** date-specific. Menu and pricing are set **per outlet** (the user's "cashier-specific" means outlet), with optional narrowing and a price override per counter (section 8). **Aggregator prices differ** from counter prices, per channel and per outlet. Pricing is **tax-exclusive** (GST added on top, rounded once per line); the GST rate stays with the item.
 11. Is an accountant/read-only role needed?
 
 ## 18. Operations

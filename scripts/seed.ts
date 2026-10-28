@@ -32,6 +32,10 @@ for (const t of Object.values(SEED)) {
     const out = await client.query('INSERT INTO outlet (tenant_id, name) VALUES ($1, $2) RETURNING id', [t.id, o]);
     const outletId = out.rows[0].id;
     outletIds.push(outletId);
+    // GST provision (Q3): A1 and B1 are GST-enabled with a syntactically valid DEV GSTIN
+    // (checksum not verified); A2 is not registered, so it must charge 0%.
+    const gstin = { a1: '27ABCDE1234F1Z5', b1: '29PQRSX5678K1Z2' }[`${t.key}${i}`];
+    if (gstin) await client.query('UPDATE outlet SET gst_enabled = true, gstin = $2 WHERE id = $1', [outletId, gstin]);
     const counters = await client.query(
       "INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, 'C1'), ($1, $2, 'C2') RETURNING id", [t.id, outletId]);
     counterIds.push(counters.rows.map((r: { id: string }) => r.id));
@@ -79,10 +83,18 @@ for (const t of Object.values(SEED)) {
       if (name === 'Samosa') {
         await client.query("INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'zomato', $3, $4)", [t.id, it.rows[0].id, price + 500, gst]);
       }
-      for (const oid of outletIds) {
-        await client.query('INSERT INTO outlet_item (tenant_id, outlet_id, item_id, available) VALUES ($1, $2, $3, $4)', [t.id, oid, it.rows[0].id, name !== 'Cold Coffee']);
+      for (const [n, oid] of outletIds.entries()) {
+        // Outlet 2 does not sell Veg Sandwich (menu is per outlet); Cold Coffee is out of stock everywhere.
+        // listed stays NULL (no opinion) unless the manager chose: only this one is an explicit decision.
+        const listed = n === 1 && name === 'Veg Sandwich' ? false : null;
+        await client.query('INSERT INTO outlet_item (tenant_id, outlet_id, item_id, available, listed) VALUES ($1, $2, $3, $4, $5)', [t.id, oid, it.rows[0].id, name !== 'Cold Coffee', listed]);
       }
     }
+  }
+  // Outlet pricing: every outlet has its own Zomato price for Samosa; outlet 2 also sells Tea cheaper at the counter.
+  for (const [n, oid] of outletIds.entries()) {
+    await client.query("INSERT INTO outlet_price (tenant_id, outlet_id, item_id, channel, price_paise) VALUES ($1, $2, $3, 'zomato', $4)", [t.id, oid, itemIds['Samosa'], 2500 + n * 100]);
+    if (n === 1) await client.query("INSERT INTO outlet_price (tenant_id, outlet_id, item_id, channel, price_paise) VALUES ($1, $2, $3, 'counter', 900)", [t.id, oid, itemIds['Tea']]);
   }
   // Counter-specific menus. Counter 1: whole menu, Samosa cheaper here. Counter 2: drinks only.
   for (const [c1, c2] of counterIds) {

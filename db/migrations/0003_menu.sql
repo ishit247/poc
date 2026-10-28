@@ -78,6 +78,8 @@ CREATE TABLE item (
   tenant_id   uuid NOT NULL REFERENCES tenant(id),
   category_id uuid NOT NULL,
   name        text NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+  -- Provision for GST invoicing (Q3): HSN/SAC code, 4 to 8 digits. Optional until the receipt format is known.
+  hsn_code    text CHECK (hsn_code ~ '^[0-9]{4,8}$'),
   sort_order  int NOT NULL DEFAULT 0,
   version     bigint NOT NULL DEFAULT 0,
   updated_at  timestamptz NOT NULL DEFAULT now(),
@@ -103,12 +105,16 @@ CREATE TABLE item_price (
 CREATE UNIQUE INDEX item_price_live_uq ON item_price (item_id, channel) WHERE deleted_at IS NULL;
 SELECT app.make_versioned('item_price');
 
--- Per-outlet availability (the cashier "stock toggle"). Absent row = available.
+-- Per-outlet item row. `available` is the daily stock toggle (cashier or manager);
+-- `listed` is the manager's menu choice for this outlet and is NULL ("no opinion") until
+-- they make one: a stock toggle creates this row too and must not list an item in a
+-- 'listed' outlet. Absent row / NULL: shown in mode 'all', not shown in mode 'listed'.
 CREATE TABLE outlet_item (
   tenant_id  uuid NOT NULL REFERENCES tenant(id),
   outlet_id  uuid NOT NULL,
   item_id    uuid NOT NULL,
-  available  boolean NOT NULL,
+  available  boolean NOT NULL DEFAULT true,
+  listed     boolean,
   version    bigint NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
@@ -117,6 +123,38 @@ CREATE TABLE outlet_item (
   FOREIGN KEY (tenant_id, item_id)   REFERENCES item(tenant_id, id)
 );
 SELECT app.make_versioned('outlet_item');
+
+-- Outlet-specific menu and pricing. Resolution order, most specific first:
+--   counter override > outlet override > catalogue (item_price).
+-- An outlet's mode filters first; a counter can only narrow what its outlet shows.
+-- Outlet overrides are per channel, so aggregator prices can differ per outlet (Q10).
+ALTER TABLE outlet
+  ADD COLUMN menu_mode   text NOT NULL DEFAULT 'all' CHECK (menu_mode IN ('all', 'listed')),
+  -- GST provision (Q3): a disabled outlet charges no GST whatever the item rate; enabling needs a GSTIN.
+  ADD COLUMN gst_enabled boolean NOT NULL DEFAULT false,
+  ADD COLUMN version     bigint NOT NULL DEFAULT 0,
+  ADD COLUMN updated_at  timestamptz NOT NULL DEFAULT now(),
+  ADD CONSTRAINT outlet_gstin_format CHECK (gstin IS NULL OR gstin ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'),
+  ADD CONSTRAINT outlet_gst_needs_gstin CHECK (NOT gst_enabled OR gstin IS NOT NULL);
+SELECT app.add_versioning('outlet'); -- RLS already applied in 0001
+CREATE INDEX outlet_version_ix ON outlet (tenant_id, version);
+
+CREATE TABLE outlet_price (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   uuid NOT NULL REFERENCES tenant(id),
+  outlet_id   uuid NOT NULL,
+  item_id     uuid NOT NULL,
+  channel     text NOT NULL CHECK (channel IN ('counter', 'zomato', 'swiggy')),
+  price_paise bigint NOT NULL CHECK (price_paise BETWEEN 0 AND 100000000),
+  version     bigint NOT NULL DEFAULT 0,
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  deleted_at  timestamptz,
+  FOREIGN KEY (tenant_id, outlet_id) REFERENCES outlet(tenant_id, id),
+  FOREIGN KEY (tenant_id, item_id)   REFERENCES item(tenant_id, id)
+);
+CREATE UNIQUE INDEX outlet_price_live_uq ON outlet_price (outlet_id, item_id, channel) WHERE deleted_at IS NULL;
+SELECT app.make_versioned('outlet_price');
+CREATE INDEX outlet_price_version_ix ON outlet_price (outlet_id, version);
 
 -- Counter-specific menus. Default 'all': the counter shows the whole catalogue at
 -- the counter price. 'listed': only items with a listed counter_item row show.
