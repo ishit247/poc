@@ -37,16 +37,26 @@ BEGIN
 END
 $$;
 
--- Applies RLS, the version trigger, and withholds DELETE (soft delete only,
--- so every removal is a tombstone the devices can pull).
+-- Adds the version trigger and withholds DELETE (soft delete only, so every
+-- removal is a tombstone the devices can pull). For tables that already have RLS.
+CREATE FUNCTION app.add_versioning(tbl regclass) RETURNS void
+LANGUAGE plpgsql AS
+$$
+BEGIN
+  EXECUTE format(
+    'CREATE TRIGGER stamp_version BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION app.stamp_version()', tbl);
+  EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM pos_app', tbl);
+END
+$$;
+REVOKE EXECUTE ON FUNCTION app.add_versioning(regclass) FROM PUBLIC;
+
+-- New table: RLS plus versioning.
 CREATE FUNCTION app.make_versioned(tbl regclass) RETURNS void
 LANGUAGE plpgsql AS
 $$
 BEGIN
   PERFORM app.enable_tenant_rls(tbl);
-  EXECUTE format(
-    'CREATE TRIGGER stamp_version BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION app.stamp_version()', tbl);
-  EXECUTE format('REVOKE DELETE, TRUNCATE ON %s FROM pos_app', tbl);
+  PERFORM app.add_versioning(tbl);
 END
 $$;
 REVOKE EXECUTE ON FUNCTION app.make_versioned(regclass) FROM PUBLIC;
@@ -107,6 +117,33 @@ CREATE TABLE outlet_item (
   FOREIGN KEY (tenant_id, item_id)   REFERENCES item(tenant_id, id)
 );
 SELECT app.make_versioned('outlet_item');
+
+-- Counter-specific menus. Default 'all': the counter shows the whole catalogue at
+-- the counter price. 'listed': only items with a listed counter_item row show.
+-- counter_item.price_paise overrides the 'counter' channel price at that counter
+-- only; GST rate always stays with the item (item_price.gst_rate_bp).
+ALTER TABLE counter
+  ADD COLUMN menu_mode  text NOT NULL DEFAULT 'all' CHECK (menu_mode IN ('all', 'listed')),
+  ADD COLUMN version    bigint NOT NULL DEFAULT 0,
+  ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
+SELECT app.add_versioning('counter'); -- RLS already applied in 0001
+
+CREATE TABLE counter_item (
+  tenant_id   uuid NOT NULL REFERENCES tenant(id),
+  counter_id  uuid NOT NULL,
+  item_id     uuid NOT NULL,
+  listed      boolean NOT NULL DEFAULT true,
+  price_paise bigint CHECK (price_paise BETWEEN 0 AND 100000000),
+  version     bigint NOT NULL DEFAULT 0,
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  deleted_at  timestamptz,
+  PRIMARY KEY (counter_id, item_id),
+  FOREIGN KEY (tenant_id, counter_id) REFERENCES counter(tenant_id, id),
+  FOREIGN KEY (tenant_id, item_id)    REFERENCES item(tenant_id, id)
+);
+SELECT app.make_versioned('counter_item');
+CREATE INDEX counter_item_version_ix ON counter_item (counter_id, version);
+CREATE INDEX counter_version_ix ON counter (tenant_id, version);
 
 CREATE INDEX category_version_ix    ON category    (tenant_id, version);
 CREATE INDEX item_version_ix        ON item        (tenant_id, version);

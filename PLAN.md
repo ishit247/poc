@@ -318,6 +318,8 @@ below has `tenant_id` with RLS unless noted.
 
 **Reference (versioned for pull):** `category`, `item`, `item_price(item_id, channel, price_paise, gst_rate_bp)`, `item_channel_map(item_id, channel, external_id)`; each row has `version bigint` from a per-tenant sequence and `deleted_at` for tombstones.
 
+**Counter-specific menus (decided):** `counter.menu_mode` (`all` = whole catalogue minus hidden items; `listed` = only listed items) and `counter_item(counter_id, item_id, listed, price_paise nullable)`. `price_paise` overrides the *counter-channel* price at that counter only; the GST rate is always the item's. Also `outlet_item(outlet_id, item_id, available)` for the stock toggle. A device pulls only its own counter's rules. The resolution rules live once, in `packages/shared/src/menu.ts` (`resolveCounterMenu`), used by both the tablet and the server. Prices are **tax-exclusive**: `exclusiveLine()` in `packages/shared/src/money.ts`.
+
 **Trading:**
 - `business_day(outlet_id, date, closed_at, closed_by)`
 - `shift(outlet_id, device_id, user_id, opened_at, closed_at, opening_cash_paise, counted_cash_paise, expected_cash_paise, variance_paise)`
@@ -496,7 +498,7 @@ mismatches, sync health. CSV export. Today's figures are labelled provisional.
 7. Counter hardware: Android tablets, Windows PCs, or mixed? Existing printers?
 8. Do tenants pay you (subscription), and when must billing exist?
 9. How long may a counter run offline before locking (default 7 days)?
-10. Aggregator prices differ from counter prices? Daily-changing menus?
+10. *Resolved (partly):* menus are **not** date-specific. Each **counter** has its own menu and prices (see section 8), pricing is **tax-exclusive** (GST added on top, rounded once per line), and the GST rate stays with the item. Still open: whether aggregator prices differ from counter prices (the model allows it per channel).
 11. Is an accountant/read-only role needed?
 
 ## 18. Operations

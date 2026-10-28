@@ -5,6 +5,7 @@ import './scope.js';
 import { registerAuth } from './auth.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
+import { counterRoutes } from './routes/counters.js';
 import { menuRoutes } from './routes/menu.js';
 import { syncRoutes } from './routes/sync.js';
 
@@ -38,6 +39,7 @@ export function buildApp() {
   app.register(healthRoutes);
   app.register(authRoutes);
   app.register(menuRoutes);
+  app.register(counterRoutes);
   app.register(syncRoutes);
   return app;
 }

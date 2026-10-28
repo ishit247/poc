@@ -25,6 +25,23 @@ export function taxOn(amount: Paise, rateBp: number): Paise {
   return paise(Math.floor((amount * rateBp + 5000) / 10000));
 }
 
+export interface LineAmounts {
+  net: Paise; // unit price x qty, before GST
+  tax: Paise; // GST on the line total (tax-exclusive pricing)
+  total: Paise; // what the customer pays for the line
+}
+
+/**
+ * Tax-exclusive pricing: the price typed is before GST, GST is added on top.
+ * Tax is computed once on the LINE total (not per unit), so qty 3 is not three
+ * separately rounded taxes.
+ */
+export function exclusiveLine(unit: Paise, qty: number, gstRateBp: number): LineAmounts {
+  const net = mul(unit, qty);
+  const tax = taxOn(net, gstRateBp);
+  return { net, tax, total: add(net, tax) };
+}
+
 /** Rupees string for display only, e.g. 12550 -> "125.50". Never parse this back. */
 export function formatRupees(p: Paise): string {
   const neg = p < 0;

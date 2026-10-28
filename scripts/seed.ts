@@ -25,6 +25,8 @@ for (const t of Object.values(SEED)) {
   await client.query('INSERT INTO tenant (id, name) VALUES ($1, $2)', [t.id, t.name]);
   let i = 0;
   const outletIds: string[] = [];
+  const counterIds: string[][] = [];
+  const itemIds: Record<string, string> = {};
   for (const o of t.outlets) {
     i++;
     const out = await client.query('INSERT INTO outlet (tenant_id, name) VALUES ($1, $2) RETURNING id', [t.id, o]);
@@ -32,6 +34,7 @@ for (const t of Object.values(SEED)) {
     outletIds.push(outletId);
     const counters = await client.query(
       "INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, 'C1'), ($1, $2, 'C2') RETURNING id", [t.id, outletId]);
+    counterIds.push(counters.rows.map((r: { id: string }) => r.id));
     // Placeholder credential: this device cannot authenticate (no secret is known for it).
     await client.query(
       'INSERT INTO device (tenant_id, outlet_id, counter_id, credential_hash) VALUES ($1, $2, $3, $4)',
@@ -70,6 +73,7 @@ for (const t of Object.values(SEED)) {
     const c = await client.query('INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat, sort++]);
     for (const [name, price, gst] of items) {
       const it = await client.query('INSERT INTO item (tenant_id, category_id, name) VALUES ($1, $2, $3) RETURNING id', [t.id, c.rows[0].id, name]);
+      itemIds[name] = it.rows[0].id;
       await client.query("INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'counter', $3, $4)", [t.id, it.rows[0].id, price, gst]);
       // Aggregator price differs from the counter price (Q10 is open; the model allows it).
       if (name === 'Samosa') {
@@ -78,6 +82,14 @@ for (const t of Object.values(SEED)) {
       for (const oid of outletIds) {
         await client.query('INSERT INTO outlet_item (tenant_id, outlet_id, item_id, available) VALUES ($1, $2, $3, $4)', [t.id, oid, it.rows[0].id, name !== 'Cold Coffee']);
       }
+    }
+  }
+  // Counter-specific menus. Counter 1: whole menu, Samosa cheaper here. Counter 2: drinks only.
+  for (const [c1, c2] of counterIds) {
+    await client.query('INSERT INTO counter_item (tenant_id, counter_id, item_id, listed, price_paise) VALUES ($1, $2, $3, true, 1200)', [t.id, c1, itemIds['Samosa']]);
+    await client.query("UPDATE counter SET menu_mode = 'listed' WHERE id = $1", [c2]);
+    for (const drink of ['Tea', 'Cold Coffee']) {
+      await client.query('INSERT INTO counter_item (tenant_id, counter_id, item_id, listed) VALUES ($1, $2, $3, true)', [t.id, c2, itemIds[drink]]);
     }
   }
   await client.query('COMMIT');

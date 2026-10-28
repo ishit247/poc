@@ -25,18 +25,27 @@ const PULL_SQL = `
   SELECT 'outlet_item', item_id, version, deleted_at IS NOT NULL,
          jsonb_build_object('available', available)
     FROM outlet_item WHERE version > $1 AND outlet_id = $2
+  UNION ALL
+  SELECT 'counter', id, version, false,
+         jsonb_build_object('menuMode', menu_mode)
+    FROM counter WHERE version > $1 AND id = $3
+  UNION ALL
+  SELECT 'counter_item', item_id, version, deleted_at IS NOT NULL,
+         jsonb_build_object('listed', listed, 'pricePaise', price_paise)
+    FROM counter_item WHERE version > $1 AND counter_id = $3
   ORDER BY version
   LIMIT ${PAGE + 1}`;
 
 export const syncRoutes: FastifyPluginAsync = async (app) => {
-  // Scope: an enrolled device gets its tenant's catalogue and ONLY its own outlet's availability.
+  // Scope: an enrolled device gets its tenant's catalogue, its own outlet's availability,
+  // and ONLY its own counter's menu rules.
   app.get('/sync/pull', { config: { scope: 'outlet', permission: 'device' } }, async (req, reply) => {
     const q = query.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: 'invalid request' });
     const p = req.principal!;
     if (p.kind !== 'device') return reply.code(403).send({ error: 'forbidden' });
 
-    const rows = await withTenant(p.tenantId, async (c) => (await c.query(PULL_SQL, [q.data.cursor, p.outletId])).rows);
+    const rows = await withTenant(p.tenantId, async (c) => (await c.query(PULL_SQL, [q.data.cursor, p.outletId, p.counterId])).rows);
     const hasMore = rows.length > PAGE;
     const page = hasMore ? rows.slice(0, PAGE) : rows;
     const last = page[page.length - 1];
