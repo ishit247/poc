@@ -9,13 +9,16 @@ export type ScopeRule =
   | 'shift-owner' // cashier: only records of the shift they own
   | 'platform'; // super-admin console, outside tenant scope
 
+export type Role = 'manager' | 'cashier' | 'waiter';
+
 export type Permission =
-  | 'manager' // signed-in manager session
-  | 'staff' // signed-in manager or cashier session
+  | 'manager' // manager only
+  | 'till' // takes payment: cashier or manager
+  | 'staff' // takes orders: waiter, cashier or manager
   | 'device'; // enrolled device credential
 
 export type Principal =
-  | { kind: 'user'; tenantId: string; userId: string; role: 'manager' | 'cashier'; outletIds: string[]; sessionId: string }
+  | { kind: 'user'; tenantId: string; userId: string; role: Role; outletIds: string[]; sessionId: string }
   | { kind: 'device'; tenantId: string; deviceId: string; outletId: string; counterId: string };
 
 declare module 'fastify' {

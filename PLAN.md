@@ -146,19 +146,29 @@ platform
 
 ## 5. Users and permissions
 
-| Capability | Cashier | Manager | Platform admin |
-|---|---|---|---|
-| Log in with PIN on an enrolled device | yes | yes | — (separate login) |
-| Open/close own shift | yes | yes | no |
-| Create sale, take payment, print receipt | yes | yes | no |
-| Reprint receipt (marked DUPLICATE) | yes | yes | no |
-| Void an *open* sale | yes | yes | no |
-| Void a *paid* sale / refund | no | yes, with reason | no |
-| Accept / reject / ready online order | yes | yes | no |
-| Edit menu, prices | stock toggle only | yes | no |
-| All reports for the outlet, close day | no | yes | no |
-| Enrol/revoke devices, manage users, provider settings | no | yes | no |
-| Create tenants/outlets, impersonate for support | no | no | yes (audited) |
+| Capability | Waiter | Cashier | Manager | Platform admin |
+|---|---|---|---|---|
+| Log in with PIN on an enrolled device | yes | yes | yes | — (separate login) |
+| Open/close own shift | no | yes | yes | no |
+| Create / edit an *open order* (own orders only for a waiter) | yes | yes | yes | no |
+| Take payment, print receipt | **no** | yes | yes | no |
+| Reprint receipt (marked DUPLICATE) | no | yes | yes | no |
+| Void an *open* sale | own open orders | yes | yes | no |
+| Void a *paid* sale / refund | no | no | yes, with reason | no |
+| Accept / reject / ready online order | no | yes | yes | no |
+| Edit menu, prices | no | stock toggle only | yes | no |
+| All reports for the outlet, close day | no | no | yes | no |
+| Enrol/revoke devices, manage users, provider settings | no | no | yes | no |
+| Create tenants/outlets, impersonate for support | no | no | no | yes (audited) |
+
+**Waiter (decided):** takes orders; a cashier takes the payment. A cashier can do
+both. A waiter signs in with a PIN on the shared counter device by default; a
+separate waiter handheld is *optional* and not built (it would be a new device
+kind bound to an outlet, not a counter). Web login is for managers only. In code
+the permissions are `staff` (waiter, cashier, manager), `till` (cashier, manager)
+and `manager`; the matrix is tested in `apps/api/test/permissions.test.ts`. The
+scope rule "a waiter touches only their own open orders" is added with the order
+tables in phase 3.
 
 Every route that takes an id checks both *permission* (what) and *scope* (whose
 record: same tenant, same outlet, and for a cashier the shift they own). Each

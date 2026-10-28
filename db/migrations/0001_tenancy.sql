@@ -63,15 +63,15 @@ CREATE TABLE app_user (
   tenant_id     uuid NOT NULL REFERENCES tenant(id),
   name          text NOT NULL,
   pin_verifier  text NOT NULL,
-  role          text NOT NULL CHECK (role IN ('cashier', 'manager')),
+  role          text NOT NULL CHECK (role IN ('waiter', 'cashier', 'manager')),
   active        boolean NOT NULL DEFAULT true,
-  -- Web login is for managers only; cashiers sign in with a PIN on a device.
+  -- Web login is for managers only; cashiers and waiters sign in with a PIN on a device.
   email         text,
   password_hash text,
   failed_logins int NOT NULL DEFAULT 0,
   locked_until  timestamptz,
   UNIQUE (tenant_id, id),
-  CHECK (role = 'cashier' OR (email IS NOT NULL AND password_hash IS NOT NULL))
+  CHECK (role <> 'manager' OR (email IS NOT NULL AND password_hash IS NOT NULL))
 );
 CREATE UNIQUE INDEX app_user_email_uq ON app_user (tenant_id, lower(email));
 

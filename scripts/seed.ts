@@ -6,6 +6,7 @@ import { hashPassword } from '../apps/api/src/security/password.ts';
 import { newSecret, sha256 } from '../apps/api/src/security/crypto.ts';
 
 export const DEV_PASSWORD = 'dev-password-123';
+export const DEV_PIN = '482913'; // dev only
 
 const SEED = {
   A: { id: '00000000-0000-4000-8000-00000000000a', name: 'Tenant A Caterers', key: 'a', outlets: ['School 1 Canteen', 'School 2 Canteen'] },
@@ -16,6 +17,7 @@ const url = process.env.OWNER_DATABASE_URL ?? 'postgres://pos_owner:pos_owner@lo
 const client = new pg.Client({ connectionString: url });
 await client.connect();
 const passwordHash = await hashPassword(DEV_PASSWORD);
+const pinHash = await hashPassword(DEV_PIN); // same slow hash as passwords; verifier format for PINs
 
 for (const t of Object.values(SEED)) {
   await client.query('BEGIN');
@@ -38,6 +40,13 @@ for (const t of Object.values(SEED)) {
        VALUES ($1, $2, 'seed-unset', 'manager', $3, $4) RETURNING id`,
       [t.id, `${o} manager`, `${t.key}${i}@example.test`, passwordHash]);
     await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, u.rows[0].id, outletId]);
+    // Cashier and waiter: PIN only, no web login (no email / password).
+    for (const role of ['cashier', 'waiter'] as const) {
+      const s = await client.query(
+        "INSERT INTO app_user (tenant_id, name, pin_verifier, role) VALUES ($1, $2, $3, $4) RETURNING id",
+        [t.id, `${o} ${role}`, pinHash, role]);
+      await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, s.rows[0].id, outletId]);
+    }
     // Rows in every table so isolation tests are not vacuous: a revoked session, a used code, an audit row.
     await client.query(
       "INSERT INTO session (tenant_id, user_id, token_hash, expires_at, revoked_at) VALUES ($1, $2, $3, now(), now())",

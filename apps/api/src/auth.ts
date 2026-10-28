@@ -52,9 +52,10 @@ async function authenticate(req: FastifyRequest): Promise<Principal | null> {
   });
 }
 
-function allowed(permission: Permission, p: Principal): boolean {
+export function allowed(permission: Permission, p: Principal): boolean {
   switch (permission) {
     case 'manager': return p.kind === 'user' && p.role === 'manager';
+    case 'till': return p.kind === 'user' && (p.role === 'manager' || p.role === 'cashier');
     case 'staff': return p.kind === 'user';
     case 'device': return p.kind === 'device';
   }
