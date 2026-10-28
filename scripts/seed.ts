@@ -1,0 +1,55 @@
+// Dev seed: two tenants (A, B) so isolation tests are meaningful. DEV ONLY:
+// the shared password below must never reach a real environment.
+// Runs as pos_owner; RLS is FORCEd, so each tenant is stamped like the app does.
+import pg from 'pg';
+import { hashPassword } from '../apps/api/src/security/password.ts';
+import { newSecret, sha256 } from '../apps/api/src/security/crypto.ts';
+
+export const DEV_PASSWORD = 'dev-password-123';
+
+const SEED = {
+  A: { id: '00000000-0000-4000-8000-00000000000a', name: 'Tenant A Caterers', key: 'a', outlets: ['School 1 Canteen', 'School 2 Canteen'] },
+  B: { id: '00000000-0000-4000-8000-00000000000b', name: 'Tenant B School', key: 'b', outlets: ['Main Canteen'] },
+};
+
+const url = process.env.OWNER_DATABASE_URL ?? 'postgres://pos_owner:pos_owner@localhost:55432/pos';
+const client = new pg.Client({ connectionString: url });
+await client.connect();
+const passwordHash = await hashPassword(DEV_PASSWORD);
+
+for (const t of Object.values(SEED)) {
+  await client.query('BEGIN');
+  await client.query("SELECT set_config('app.tenant_id', $1, true)", [t.id]);
+  await client.query('INSERT INTO tenant (id, name) VALUES ($1, $2)', [t.id, t.name]);
+  let i = 0;
+  for (const o of t.outlets) {
+    i++;
+    const out = await client.query('INSERT INTO outlet (tenant_id, name) VALUES ($1, $2) RETURNING id', [t.id, o]);
+    const outletId = out.rows[0].id;
+    const counters = await client.query(
+      "INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, 'C1'), ($1, $2, 'C2') RETURNING id", [t.id, outletId]);
+    // Placeholder credential: this device cannot authenticate (no secret is known for it).
+    await client.query(
+      'INSERT INTO device (tenant_id, outlet_id, counter_id, credential_hash) VALUES ($1, $2, $3, $4)',
+      [t.id, outletId, counters.rows[0].id, sha256(newSecret())]);
+    // One manager per outlet, assigned to that outlet only: a1@example.test, a2@..., b1@...
+    const u = await client.query(
+      `INSERT INTO app_user (tenant_id, name, pin_verifier, role, email, password_hash)
+       VALUES ($1, $2, 'seed-unset', 'manager', $3, $4) RETURNING id`,
+      [t.id, `${o} manager`, `${t.key}${i}@example.test`, passwordHash]);
+    await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, u.rows[0].id, outletId]);
+    // Rows in every table so isolation tests are not vacuous: a revoked session, a used code, an audit row.
+    await client.query(
+      "INSERT INTO session (tenant_id, user_id, token_hash, expires_at, revoked_at) VALUES ($1, $2, $3, now(), now())",
+      [t.id, u.rows[0].id, sha256(newSecret())]);
+    await client.query(
+      "INSERT INTO enrolment_code (tenant_id, outlet_id, counter_id, code_hash, created_by, expires_at, used_at) VALUES ($1, $2, $3, $4, $5, now(), now())",
+      [t.id, outletId, counters.rows[0].id, sha256(newSecret()), u.rows[0].id]);
+    await client.query(
+      "INSERT INTO audit (tenant_id, actor_kind, action, entity, entity_id) VALUES ($1, 'system', 'seed', 'outlet', $2)",
+      [t.id, outletId]);
+  }
+  await client.query('COMMIT');
+}
+await client.end();
+console.log('seeded tenants A and B');

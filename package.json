@@ -1,0 +1,20 @@
+{
+  "name": "cafeteria-pos",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test && node --test db/test/rls.test.mjs",
+    "db:up": "docker compose up -d --wait postgres",
+    "up:fresh": "node scripts/up-fresh.mjs"
+  },
+  "devDependencies": {
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15"
+  }
+}
