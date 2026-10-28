@@ -59,12 +59,50 @@ test('tenant A cannot read or modify tenant B rows, on every table', async () =>
     await as(A, async (c) => {
       const seen = await c.query(`SELECT count(*)::int n FROM ${t.relname} WHERE ${col} = $1`, [B]);
       assert.equal(seen.rows[0].n, 0, `${t.relname}: A can read B`);
-      if (t.relname !== 'audit') {
+      // Only attempt writes the app role is privileged to make; the rest are covered by the privilege tests.
+      const priv = async (p) => (await c.query('SELECT has_table_privilege(current_user, $1, $2) ok', [t.relname, p])).rows[0].ok;
+      if (await priv('DELETE')) {
         const del = await c.query(`DELETE FROM ${t.relname} WHERE ${col} = $1`, [B]);
         assert.equal(del.rowCount, 0, `${t.relname}: A can delete B`);
       }
+      if (await priv('UPDATE')) {
+        const upd = await c.query(`UPDATE ${t.relname} SET ${col} = ${col} WHERE ${col} = $1`, [B]);
+        assert.equal(upd.rowCount, 0, `${t.relname}: A can update B`);
+      }
     });
   }
+});
+
+test('versioned tables are soft-delete only; the version counter is not writable by the app role', async () => {
+  for (const t of ['category', 'item', 'item_price', 'outlet_item']) {
+    await as(A, async (c) => {
+      await assert.rejects(c.query(`DELETE FROM ${t}`), /permission denied/, `${t}: app role can hard-delete`);
+    });
+  }
+  for (const stmt of [
+    'UPDATE tenant_version SET v = 0',
+    'DELETE FROM tenant_version',
+    `INSERT INTO tenant_version (tenant_id, v) VALUES ('${A}', 0)`,
+  ]) {
+    await as(A, async (c) => {
+      await assert.rejects(c.query(stmt), /permission denied/, stmt);
+    });
+  }
+});
+
+test('version is assigned by the database, strictly increasing, and cannot be chosen by the client', async () => {
+  await as(A, async (c) => {
+    const first = (await c.query(
+      "INSERT INTO category (tenant_id, name, version) VALUES ($1, 'v-test-1', 999999) RETURNING version::int v", [A])).rows[0].v;
+    const second = (await c.query(
+      "INSERT INTO category (tenant_id, name) VALUES ($1, 'v-test-2') RETURNING version::int v", [A])).rows[0].v;
+    assert.notEqual(first, 999999, 'client-chosen version was accepted');
+    assert.equal(second, first + 1);
+    const upd = (await c.query("UPDATE category SET name = 'v-test-1b', version = 5 WHERE name = 'v-test-1' RETURNING version::int v")).rows[0].v;
+    assert.equal(upd, second + 1);
+    await assert.rejects(
+      c.query(`UPDATE category SET tenant_id = '${B}' WHERE name = 'v-test-2'`), /row-level security|immutable/);
+  });
 });
 
 test('tenant A cannot insert rows stamped for tenant B', async () => {

@@ -24,10 +24,12 @@ for (const t of Object.values(SEED)) {
   await client.query("SELECT set_config('app.tenant_id', $1, true)", [t.id]);
   await client.query('INSERT INTO tenant (id, name) VALUES ($1, $2)', [t.id, t.name]);
   let i = 0;
+  const outletIds: string[] = [];
   for (const o of t.outlets) {
     i++;
     const out = await client.query('INSERT INTO outlet (tenant_id, name) VALUES ($1, $2) RETURNING id', [t.id, o]);
     const outletId = out.rows[0].id;
+    outletIds.push(outletId);
     const counters = await client.query(
       "INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, 'C1'), ($1, $2, 'C2') RETURNING id", [t.id, outletId]);
     // Placeholder credential: this device cannot authenticate (no secret is known for it).
@@ -57,6 +59,26 @@ for (const t of Object.values(SEED)) {
     await client.query(
       "INSERT INTO audit (tenant_id, actor_kind, action, entity, entity_id) VALUES ($1, 'system', 'seed', 'outlet', $2)",
       [t.id, outletId]);
+  }
+  // Menu: tenant-wide catalogue; prices per channel (paise); availability per outlet.
+  const menu = {
+    Snacks: [['Samosa', 1500, 500], ['Veg Sandwich', 4000, 500]],
+    Drinks: [['Tea', 1000, 500], ['Cold Coffee', 6000, 1800]],
+  } as const;
+  let sort = 0;
+  for (const [cat, items] of Object.entries(menu)) {
+    const c = await client.query('INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat, sort++]);
+    for (const [name, price, gst] of items) {
+      const it = await client.query('INSERT INTO item (tenant_id, category_id, name) VALUES ($1, $2, $3) RETURNING id', [t.id, c.rows[0].id, name]);
+      await client.query("INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'counter', $3, $4)", [t.id, it.rows[0].id, price, gst]);
+      // Aggregator price differs from the counter price (Q10 is open; the model allows it).
+      if (name === 'Samosa') {
+        await client.query("INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'zomato', $3, $4)", [t.id, it.rows[0].id, price + 500, gst]);
+      }
+      for (const oid of outletIds) {
+        await client.query('INSERT INTO outlet_item (tenant_id, outlet_id, item_id, available) VALUES ($1, $2, $3, $4)', [t.id, oid, it.rows[0].id, name !== 'Cold Coffee']);
+      }
+    }
   }
   await client.query('COMMIT');
 }

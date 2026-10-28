@@ -38,6 +38,11 @@ Seed logins (dev only): `a1@example.test`, `a2@example.test` (tenant A, one outl
 - **Permission is not scope.** Every route declares `config.scope`; every non-public route
   also declares `config.permission`. `onRoute` rejects routes without them. An id-taking
   route must also check *whose* record it is, inside the query.
+- **Reference data that devices pull** (menu, prices, availability) is created with
+  `app.make_versioned()`: RLS, a trigger that assigns `version` from a per-tenant locked
+  counter (so versions commit in order and a pull cursor cannot skip a row), and no
+  `DELETE` for the app role (soft delete = tombstone). The pull reads all tables in one
+  statement so they share a snapshot. Never add a plain sequence for this.
 - **GRANT never withholds; REVOKE does.** `audit` is insert/select only (tested).
 - **Audit writes use a SAVEPOINT** (`apps/api/src/audit.ts`).
 - **Money is integer paise**, never floats (`packages/shared/src/money.ts`).
