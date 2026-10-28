@@ -229,6 +229,10 @@ browsers cannot sell. Revocation takes effect at the device's next successful
 contact, and the device also self-locks after **N days offline** (default 7,
 configurable) until it syncs — bounding the damage of a lost tablet.
 
+**Device management (built):** a manager mints a single-use enrolment code (15 minutes, optional label) for a counter at an outlet they run; the tablet redeems it for a credential that is stored only as a hash. Managers can list, relabel and revoke their outlets' devices and cancel an unused code; all of it is scoped to their own outlets and audited. Devices report `last_seen_at`; `app_version` is filled in by sync (phase 4).
+
+**Staff accounts (built):** managers create cashiers and waiters (not other managers, which is a platform action) for outlets they run, reset PINs, rename and deactivate them. A person is manageable only if *every* outlet they work at is one the manager runs. PINs are 6 to 8 digits, refusing repeats, runs and short repeating blocks (`pinProblem` in `packages/shared`), stored as an scrypt verifier, and never written to the audit trail.
+
 ### 7.3 Offline sign-in
 The pulled snapshot includes, for this outlet's users only, a salted slow-hash
 PIN verifier and role. The device checks the PIN locally. Failed attempts are

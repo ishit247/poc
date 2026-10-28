@@ -12,7 +12,8 @@ const ENROLMENT_MINUTES = 15;
 
 const uuid = z.string().uuid();
 const loginBody = z.object({ tenantId: uuid, email: z.string().email().max(254), password: z.string().min(1).max(256) }).strict();
-const codeBody = z.object({ outletId: uuid, counterId: uuid }).strict();
+export const deviceLabel = z.string().trim().min(1).max(60);
+const codeBody = z.object({ outletId: uuid, counterId: uuid, label: deviceLabel.optional() }).strict();
 const enrolBody = z.object({ code: z.string().max(200) }).strict();
 const idParams = z.object({ id: uuid });
 
@@ -91,13 +92,31 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       const id = (await c.query('SELECT gen_random_uuid() AS id')).rows[0].id as string;
       const secret = newEnrolmentSecret();
       const r = await c.query(
-        `INSERT INTO enrolment_code (id, tenant_id, outlet_id, counter_id, code_hash, created_by, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6, now() + make_interval(mins => $7)) RETURNING expires_at`,
-        [id, p.tenantId, outletId, counterId, sha256(secret), p.userId, ENROLMENT_MINUTES]);
+        `INSERT INTO enrolment_code (id, tenant_id, outlet_id, counter_id, code_hash, label, created_by, expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7, now() + make_interval(mins => $8)) RETURNING expires_at`,
+        [id, p.tenantId, outletId, counterId, sha256(secret), body.data.label ?? null, p.userId, ENROLMENT_MINUTES]);
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'enrolment_code.create', entity: 'enrolment_code', entityId: id, detail: { outletId, counterId } });
       return { code: `${p.tenantId}.${id}.${secret}`, expiresAt: r.rows[0].expires_at as Date };
     });
     return out ?? notFound(reply);
+  });
+
+  // Cancel an unused code (e.g. shown on the wrong screen). Scope is in the WHERE: only codes for the manager's outlets.
+  app.delete('/enrolment-codes/:id', { config: { scope: 'outlet', permission: 'manager', ...strict(30) } }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    if (!params.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user') return reply.code(403).send({ error: 'forbidden' });
+    const done = await withTenant(p.tenantId, async (c) => {
+      const r = await c.query(
+        `UPDATE enrolment_code SET expires_at = now()
+          WHERE id = $1 AND outlet_id = ANY($2::uuid[]) AND used_at IS NULL AND expires_at > now() RETURNING id`,
+        [params.data.id, p.outletIds]);
+      if (r.rowCount === 0) return false;
+      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'enrolment_code.cancel', entity: 'enrolment_code', entityId: params.data.id });
+      return true;
+    });
+    return done ? { ok: true } : notFound(reply);
   });
 
   app.post('/enrol', { config: { scope: 'public', ...strict(10) } }, async (req, reply) => {
@@ -112,14 +131,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       const claim = await c.query(
         `UPDATE enrolment_code SET used_at = now()
           WHERE id = $1 AND code_hash = $2 AND used_at IS NULL AND expires_at > now()
-          RETURNING outlet_id, counter_id`, [codeId.toLowerCase(), sha256(secret)]);
+          RETURNING outlet_id, counter_id, label`, [codeId.toLowerCase(), sha256(secret)]);
       const code = claim.rows[0];
       if (!code) return null;
       const deviceId = (await c.query('SELECT gen_random_uuid() AS id')).rows[0].id as string;
       const credSecret = newSecret();
       await c.query(
-        'INSERT INTO device (id, tenant_id, outlet_id, counter_id, credential_hash) VALUES ($1,$2,$3,$4,$5)',
-        [deviceId, tenantId.toLowerCase(), code.outlet_id, code.counter_id, sha256(credSecret)]);
+        'INSERT INTO device (id, tenant_id, outlet_id, counter_id, credential_hash, label) VALUES ($1,$2,$3,$4,$5,$6)',
+        [deviceId, tenantId.toLowerCase(), code.outlet_id, code.counter_id, sha256(credSecret), code.label]);
       await audit(c, { tenantId: tenantId.toLowerCase(), actorKind: 'device', actorId: deviceId, action: 'device.enrol', entity: 'device', entityId: deviceId });
       return { deviceId, credential: `${tenantId.toLowerCase()}.${deviceId}.${credSecret}` };
     });

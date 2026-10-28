@@ -49,6 +49,7 @@ CREATE TABLE device (
   outlet_id       uuid NOT NULL,
   counter_id      uuid NOT NULL,
   credential_hash text NOT NULL,
+  label           text CHECK (label IS NULL OR length(label) BETWEEN 1 AND 60),
   enrolled_at     timestamptz NOT NULL DEFAULT now(),
   last_seen_at    timestamptz,
   revoked_at      timestamptz,

@@ -3,6 +3,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import './scope.js';
 import { registerAuth } from './auth.js';
+import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { counterRoutes } from './routes/counters.js';
@@ -42,6 +43,7 @@ export function buildApp() {
   app.register(menuRoutes);
   app.register(counterRoutes);
   app.register(outletRoutes);
+  app.register(adminRoutes);
   app.register(syncRoutes);
   return app;
 }

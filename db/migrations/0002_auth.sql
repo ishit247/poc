@@ -19,6 +19,7 @@ CREATE TABLE enrolment_code (
   outlet_id  uuid NOT NULL,
   counter_id uuid NOT NULL,
   code_hash  text NOT NULL,
+  label      text CHECK (label IS NULL OR length(label) BETWEEN 1 AND 60), -- copied to the device on redemption
   created_by uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
