@@ -9,14 +9,18 @@ test.after(() => pool.end());
 
 test('every registered route declares a scope', async () => {
   const app = buildApp();
-  const seen: string[] = [];
+  const seen: { id: string; scope?: string; permission?: string }[] = [];
   app.addHook('onRoute', (r) => {
-    seen.push(`${r.method} ${r.url} ${r.config?.scope}`);
+    seen.push({ id: `${r.method} ${r.url}`, scope: r.config?.scope, permission: r.config?.permission });
   });
   await app.ready();
-  const routes = app.printRoutes({ commonPrefix: false });
-  assert.match(routes, /health/);
-  assert.ok(!seen.some((s) => s.endsWith('undefined')));
+  assert.ok(seen.length >= 6, `expected the full route table, saw ${seen.length}`);
+  for (const r of seen) {
+    assert.ok(r.scope, `${r.id}: no scope`);
+    if (r.scope !== 'public') assert.ok(r.permission, `${r.id}: non-public route has no permission`);
+  }
+  // Routes taking an :id must not be public: an id is exactly where "whose" matters.
+  for (const r of seen.filter((x) => x.id.includes(':'))) assert.notEqual(r.scope, 'public', `${r.id}: id route is public`);
 });
 
 test('a route without a scope declaration is rejected at registration', async () => {
