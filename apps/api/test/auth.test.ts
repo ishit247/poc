@@ -46,6 +46,22 @@ test('login: success, and failure is identical for wrong password and unknown us
   assert.equal(wrong.body, otherTenant.body);
 });
 
+test('/me lists only the manager\'s own outlets, with each outlet\'s today', async () => {
+  const app = buildApp();
+  const assigned = await withTenant(A, async (c) => (await c.query(
+    `SELECT uo.outlet_id FROM user_outlet uo JOIN app_user u ON u.id = uo.user_id
+      WHERE lower(u.email) = 'a1@example.test' AND uo.deleted_at IS NULL`)).rows.map((x) => x.outlet_id as string).sort());
+  const theirs = await outletsAndCounter(B, 'b1@example.test');
+  const r = await app.inject({ method: 'GET', url: '/me', headers: bearer(await token(app, A, 'a1@example.test')) });
+  assert.equal(r.statusCode, 200);
+  const body = r.json();
+  assert.ok(assigned.length > 0);
+  assert.deepEqual(body.outlets.map((o: { id: string }) => o.id).sort(), assigned);
+  assert.ok(!body.outlets.some((o: { id: string }) => o.id === theirs.outlet_id));
+  assert.match(body.outlets[0].today, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal((await app.inject({ method: 'GET', url: '/me' })).statusCode, 401);
+});
+
 test('login: locks after 5 failures, even for the correct password', async () => {
   const app = buildApp();
   for (let i = 0; i < 5; i++) assert.equal((await login(app, A, 'a2@example.test', `bad-password-${i}x`)).statusCode, 401);

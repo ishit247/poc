@@ -10,6 +10,7 @@ import { Orders } from './Orders.tsx';
 import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
 import { Branding } from './Branding.tsx';
+import { DayClose, ManagerLogin } from './Manager.tsx';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -64,6 +65,8 @@ function Counter({ device }: { device: DeviceInfo }) {
   const [menu, setMenu] = useState<MenuView | null>(null);
   const [actor, setActor] = useState<Actor | null>(null);
   const [tab, setTab] = useState<'sell' | 'orders' | 'shift'>('sell');
+  // null = not in manager tools; '' = signing in; otherwise the session token. Memory only, never stored.
+  const [mgr, setMgr] = useState<string | null>(null);
   const shift = useLive(() => currentShift().then((s) => s ?? null), undefined as LocalShift | null | undefined);
   const [online, setOnline] = useState(navigator.onLine);
   const [syncError, setSyncError] = useState('');
@@ -119,8 +122,13 @@ function Counter({ device }: { device: DeviceInfo }) {
       </header>
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
-      {!actor ? (
-        <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
+      {mgr !== null && !actor ? (
+        mgr ? <DayClose token={mgr} onDone={() => setMgr(null)} /> : <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />
+      ) : !actor ? (
+        <>
+          <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
+          <p className="center"><button data-testid="mgr-open" onClick={() => setMgr('')}>Manager: close the day</button></p>
+        </>
       ) : actor.role === 'cashier' && shift === null && tab !== 'shift' ? (
         // A cashier with no open drawer cannot take money: send them to open one first.
         <Shift device={device} actor={actor} shift={undefined} onSync={sync} />

@@ -126,6 +126,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  // The manager screen needs to know which outlets are theirs and what "today" is in each one's timezone.
+  app.get('/me', { config: { scope: 'outlet', permission: 'manager' } }, async (req) => {
+    const p = req.principal!;
+    if (p.kind !== 'user') return {};
+    return withTenant(p.tenantId, async (c) => {
+      const u = (await c.query('SELECT name FROM app_user WHERE id = $1', [p.userId])).rows[0];
+      const outlets = await c.query(
+        `SELECT id, name, timezone, (now() AT TIME ZONE timezone)::date::text AS today
+           FROM outlet WHERE id = ANY($1::uuid[]) ORDER BY name`, [p.outletIds]);
+      return { name: u?.name as string, role: p.role, outlets: outlets.rows as { id: string; name: string; timezone: string; today: string }[] };
+    });
+  });
+
   // --- device enrolment ----------------------------------------------------
   app.post('/enrolment-codes', { config: { scope: 'outlet', permission: 'manager', ...strict(20) } }, async (req, reply) => {
     const body = codeBody.safeParse(req.body);
