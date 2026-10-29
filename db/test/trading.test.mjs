@@ -101,6 +101,7 @@ test('a paid sale cannot be edited, deleted or have its lines/payments changed (
     await c.query('SET CONSTRAINTS ALL IMMEDIATE');
 
     await fails(c, 'UPDATE sale SET total_paise = 1, subtotal_paise = 1 WHERE id = $1', [s], /cannot be edited/);
+    await fails(c, 'UPDATE sale SET round_off_paise = 5, total_paise = total_paise + 5 WHERE id = $1', [s], /cannot be edited/);
     await fails(c, 'UPDATE sale SET receipt_seq = 21 WHERE id = $1', [s], /cannot be edited/);
     await fails(c, "UPDATE sale SET status = 'open' WHERE id = $1", [s], /cannot go from paid to open/);
     await fails(c, 'UPDATE sale SET created_by = (SELECT id FROM app_user WHERE role = \'waiter\' LIMIT 1) WHERE id = $1', [s], /identity is immutable/);
@@ -142,6 +143,13 @@ test('sale arithmetic: total = subtotal + tax, and money is never negative', asy
       [A, x.outlet, x.device, x.cashier], /check constraint/);
     await fails(c, `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, menu_version,
                     subtotal_paise, tax_paise, total_paise, created_at_device) VALUES (gen_random_uuid(), $1,$2,'2026-03-01',$3,$4,1,-1,51,50,now())`,
+      [A, x.outlet, x.device, x.cashier], /check constraint/);
+    // Round-off is part of the arithmetic: 1000 + 50 - 50 = 1000 is accepted, 1000 + 50 - 50 = 1050 is not.
+    await c.query(`INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, menu_version,
+                    subtotal_paise, tax_paise, round_off_paise, total_paise, created_at_device) VALUES (gen_random_uuid(), $1,$2,'2026-03-01',$3,$4,1,1000,50,-50,1000,now())`,
+      [A, x.outlet, x.device, x.cashier]);
+    await fails(c, `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, menu_version,
+                    subtotal_paise, tax_paise, round_off_paise, total_paise, created_at_device) VALUES (gen_random_uuid(), $1,$2,'2026-03-01',$3,$4,1,1000,50,-50,1050,now())`,
       [A, x.outlet, x.device, x.cashier], /check constraint/);
   });
 });

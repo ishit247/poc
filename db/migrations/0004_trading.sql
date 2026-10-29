@@ -2,6 +2,19 @@
 -- Rows arrive from devices by sync push (phase 4); the ids are client-generated UUIDs.
 -- Sync ledger (sync_event) is added with the push endpoint in phase 4.
 
+-- Manager-set trading rules, one row per tenant, delivered to tablets by pull. Defaults here must
+-- match DEFAULT_SETTINGS in packages/shared/src/settings.ts. A tenant with no row uses the defaults.
+CREATE TABLE tenant_setting (
+  tenant_id     uuid PRIMARY KEY REFERENCES tenant(id),
+  max_line_qty  int  NOT NULL DEFAULT 99 CHECK (max_line_qty BETWEEN 1 AND 999),
+  gst_rounding  text NOT NULL DEFAULT 'half_up' CHECK (gst_rounding IN ('half_up', 'up', 'down')),
+  bill_round_to int  NOT NULL DEFAULT 0 CHECK (bill_round_to IN (0, 10, 50, 100)),
+  offline_days  int  NOT NULL DEFAULT 7 CHECK (offline_days BETWEEN 1 AND 60),
+  version       bigint NOT NULL DEFAULT 0,
+  updated_at    timestamptz NOT NULL DEFAULT now()
+);
+SELECT app.make_versioned('tenant_setting');
+
 CREATE TABLE business_day (
   id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenant(id),
@@ -54,13 +67,14 @@ CREATE TABLE sale (
   menu_version    bigint NOT NULL,
   subtotal_paise  bigint NOT NULL CHECK (subtotal_paise >= 0),
   tax_paise       bigint NOT NULL CHECK (tax_paise >= 0),
+  round_off_paise bigint NOT NULL DEFAULT 0,   -- signed bill round-off (tenant_setting.bill_round_to)
   total_paise     bigint NOT NULL CHECK (total_paise > 0),
   created_at_device timestamptz NOT NULL,
   received_at     timestamptz NOT NULL DEFAULT now(),
   void_reason     text,
   flags           text[] NOT NULL DEFAULT '{}',
   UNIQUE (tenant_id, id),
-  CHECK (total_paise = subtotal_paise + tax_paise),
+  CHECK (total_paise = subtotal_paise + tax_paise + round_off_paise),
   -- The receipt number is assigned at payment (PLAN 9), so only paid/refunded sales carry one.
   CHECK ((status IN ('paid', 'refunded')) = (receipt_no IS NOT NULL AND receipt_seq IS NOT NULL)
          OR status = 'void'),
@@ -123,8 +137,8 @@ BEGIN
      OR NEW.device_id <> OLD.device_id OR NEW.created_by <> OLD.created_by THEN
     RAISE EXCEPTION 'sale identity is immutable';
   END IF;
-  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.tax_paise, NEW.total_paise, NEW.receipt_no, NEW.receipt_seq, NEW.business_date)
-       IS DISTINCT FROM (OLD.subtotal_paise, OLD.tax_paise, OLD.total_paise, OLD.receipt_no, OLD.receipt_seq, OLD.business_date) THEN
+  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.tax_paise, NEW.round_off_paise, NEW.total_paise, NEW.receipt_no, NEW.receipt_seq, NEW.business_date)
+       IS DISTINCT FROM (OLD.subtotal_paise, OLD.tax_paise, OLD.round_off_paise, OLD.total_paise, OLD.receipt_no, OLD.receipt_seq, OLD.business_date) THEN
     RAISE EXCEPTION 'a % sale cannot be edited', OLD.status;
   END IF;
   IF NEW.status <> OLD.status AND NOT (

@@ -24,6 +24,25 @@ leaves a guard removed in the source).
   predicate and scope `own-orders`; a test enumerates every such route.
 - `app_version` is read from the `x-app-version` header on every device request.
 
+## Done (step 2, shared logic, plus manager settings)
+
+- `packages/shared`: `cart.ts`, `payment.ts`, `receipt.ts`, `events.ts` (schemaVersion 1),
+  `pin-offline.ts` (noble scrypt, same verifier format as the server, local lockout with
+  injected clock), `settings.ts`. Baseline now: shared 33, DB 14, API 64.
+- **Manager settings** (per tenant, user's decision): `tenant_setting` in 0004 (versioned,
+  one row per tenant, seeded for both: A defaults; B cap 20, GST round down, round bill to
+  the rupee). Fields: `maxLineQty` (1-999, default 99), `gstRounding` (half_up|up|down),
+  `billRoundTo` (0|10|50|100 paise, nearest, half up, never rounds a bill to zero),
+  `offlineDays` (Q9, 1-60, default 7). `GET/PUT /settings` (manager, scope tenant);
+  tablets receive it in pull as type `tenant_setting` (id = tenant id); no row = defaults.
+- `sale.round_off_paise` (signed): total = subtotal + tax + round_off. `line_total_paise`
+  is the pre-GST net. Cart `totals(cart, settings)` returns `roundOff`; payments must sum to
+  the rounded total. The cap is not yet enforced server-side (phase 4 ingest must check
+  `qty <= maxLineQty` and recompute totals with the tenant's settings).
+- Mutation-checked: all new shared/route/pull/CHECK guards caught. Two `sale_guard`
+  round-off mutants survive as equivalent (the CHECK ties round-off to total/tax/subtotal,
+  which the guard already freezes). No manager UI for settings exists yet (API only).
+
 ## Remaining in phase 3
 
 2. **Shared logic** in `packages/shared`: cart (uses `resolveMenu` and `exclusiveLine`),

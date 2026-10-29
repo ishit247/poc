@@ -10,6 +10,7 @@ import { counterRoutes } from './routes/counters.js';
 import { menuRoutes } from './routes/menu.js';
 import { orderRoutes } from './routes/orders.js';
 import { outletRoutes } from './routes/outlets.js';
+import { settingsRoutes } from './routes/settings.js';
 import { syncRoutes } from './routes/sync.js';
 
 export function buildApp() {
@@ -45,6 +46,7 @@ export function buildApp() {
   app.register(counterRoutes);
   app.register(orderRoutes);
   app.register(outletRoutes);
+  app.register(settingsRoutes);
   app.register(adminRoutes);
   app.register(syncRoutes);
   return app;

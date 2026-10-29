@@ -16,13 +16,29 @@ export function mul(unit: Paise, qty: number): Paise {
   return paise(unit * qty);
 }
 
+/** How a line's GST is rounded to a whole paisa. A manager setting (tenant_setting.gst_rounding). */
+export type GstRounding = 'half_up' | 'up' | 'down';
+
 /**
  * GST on a tax-exclusive amount, rate in basis points (500 = 5%).
- * Rounds half up, once, on the line total: the single named rounding in the system.
+ * Rounded once, on the line total, in the chosen mode (default half up).
  */
-export function taxOn(amount: Paise, rateBp: number): Paise {
+export function taxOn(amount: Paise, rateBp: number, mode: GstRounding = 'half_up'): Paise {
   if (!Number.isSafeInteger(rateBp) || rateBp < 0) throw new RangeError(`bad rate: ${rateBp}`);
-  return paise(Math.floor((amount * rateBp + 5000) / 10000));
+  const exact = amount * rateBp; // in units of 1/10000 paisa
+  const bias = mode === 'half_up' ? 5000 : mode === 'up' ? 9999 : 0;
+  return paise(Math.floor((exact + bias) / 10000));
+}
+
+/**
+ * Bill round-off: the total rounded half up to a multiple of `step` paise (0 = off).
+ * Returns the signed adjustment to add to the total. Never rounds a bill down to zero.
+ */
+export function roundOffFor(total: Paise, step: number): Paise {
+  if (!Number.isSafeInteger(step) || step < 0) throw new RangeError(`bad round-off step: ${step}`);
+  if (step === 0) return paise(0);
+  const rounded = Math.floor((total + step / 2) / step) * step;
+  return paise(rounded === 0 ? 0 : rounded - total);
 }
 
 export interface LineAmounts {
@@ -36,9 +52,9 @@ export interface LineAmounts {
  * Tax is computed once on the LINE total (not per unit), so qty 3 is not three
  * separately rounded taxes.
  */
-export function exclusiveLine(unit: Paise, qty: number, gstRateBp: number): LineAmounts {
+export function exclusiveLine(unit: Paise, qty: number, gstRateBp: number, rounding: GstRounding = 'half_up'): LineAmounts {
   const net = mul(unit, qty);
-  const tax = taxOn(net, gstRateBp);
+  const tax = taxOn(net, gstRateBp, rounding);
   return { net, tax, total: add(net, tax) };
 }
 

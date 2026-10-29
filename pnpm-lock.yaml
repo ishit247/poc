@@ -76,6 +76,9 @@ importers:
 
   packages/shared:
     dependencies:
+      '@noble/hashes':
+        specifier: ^2.4.0
+        version: 2.4.0
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -278,6 +281,10 @@ packages:
   '@lukeed/ms@2.0.2':
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
+
+  '@noble/hashes@2.4.0':
+    resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
+    engines: {node: '>= 20.19.0'}
 
   '@oxc-project/types@0.155.0':
     resolution: {integrity: sha512-SeE8JPwW1xs1tHeNycjUtUBdhorRa8o4jlvjwk49R7/Z291i+4DQa7JJIgOm/TaYQZx+QrPQbVJ/9c8dMIZN8Q==}
@@ -1059,6 +1066,8 @@ snapshots:
       toad-cache: 3.7.4
 
   '@lukeed/ms@2.0.2': {}
+
+  '@noble/hashes@2.4.0': {}
 
   '@oxc-project/types@0.155.0': {}
 

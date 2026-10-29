@@ -23,6 +23,10 @@ for (const t of Object.values(SEED)) {
   await client.query('BEGIN');
   await client.query("SELECT set_config('app.tenant_id', $1, true)", [t.id]);
   await client.query('INSERT INTO tenant (id, name) VALUES ($1, $2)', [t.id, t.name]);
+  // Trading settings differ per tenant so a leak between them would show: A uses defaults, B rounds to the rupee.
+  await client.query(
+    'INSERT INTO tenant_setting (tenant_id, max_line_qty, gst_rounding, bill_round_to, offline_days) VALUES ($1, $2, $3, $4, 7)',
+    [t.id, t.key === 'a' ? 99 : 20, t.key === 'a' ? 'half_up' : 'down', t.key === 'a' ? 0 : 100]);
   let i = 0;
   const outletIds: string[] = [];
   const counterIds: string[][] = [];

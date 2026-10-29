@@ -185,6 +185,7 @@ test('pull pages without gaps or duplicates across the page boundary', async () 
     SELECT version::int FROM category UNION ALL SELECT version::int FROM item UNION ALL SELECT version::int FROM item_price
     UNION ALL SELECT version::int FROM outlet_item WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM outlet WHERE id = $1
+    UNION ALL SELECT version::int FROM tenant_setting
     UNION ALL SELECT version::int FROM outlet_price WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM counter WHERE id = $2
     UNION ALL SELECT version::int FROM counter_item WHERE counter_id = $2

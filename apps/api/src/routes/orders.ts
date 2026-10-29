@@ -47,7 +47,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     const out = await withTenant(p.tenantId, async (c) => {
       const s = await c.query(
         `SELECT sale.id, sale.status, sale.channel, sale.receipt_no AS "receiptNo", sale.subtotal_paise AS "subtotalPaise",
-                sale.tax_paise AS "taxPaise", sale.total_paise AS "totalPaise", sale.created_by AS "createdBy",
+                sale.tax_paise AS "taxPaise", sale.round_off_paise AS "roundOffPaise", sale.total_paise AS "totalPaise", sale.created_by AS "createdBy",
                 sale.created_at_device AS "createdAt"
            FROM sale WHERE sale.id = $4 AND ${ORDER_SCOPE}`, [...scopeParams(p), ps.data.id]);
       if (!s.rows[0]) return null;

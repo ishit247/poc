@@ -34,6 +34,11 @@ const PULL_SQL = `
          jsonb_build_object('itemId', item_id, 'channel', channel, 'pricePaise', price_paise)
     FROM outlet_price WHERE version > $1 AND outlet_id = $2
   UNION ALL
+  SELECT 'tenant_setting', tenant_id, version, false,
+         jsonb_build_object('maxLineQty', max_line_qty, 'gstRounding', gst_rounding,
+                            'billRoundTo', bill_round_to, 'offlineDays', offline_days)
+    FROM tenant_setting WHERE version > $1
+  UNION ALL
   SELECT 'counter', id, version, false,
          jsonb_build_object('menuMode', menu_mode)
     FROM counter WHERE version > $1 AND id = $3
