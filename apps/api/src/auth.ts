@@ -5,7 +5,7 @@
 // Any malformed, unknown, expired, revoked or mismatching credential yields the
 // same 401, so nothing is learned from the failure.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { withTenant } from './db.js';
+import { tenantForHost, withTenant } from './db.js';
 import { safeEqualHex, sha256 } from './security/crypto.js';
 import type { Permission, Principal } from './scope.js';
 
@@ -72,9 +72,13 @@ export function allowed(permission: Permission, p: Principal): boolean {
 export function registerAuth(app: FastifyInstance) {
   app.addHook('onRequest', async (req, reply) => {
     const cfg = req.routeOptions.config;
+    req.hostTenantId = await tenantForHost(req.headers.host);
     if (cfg.scope === 'public') return;
     const principal = await authenticate(req);
     if (!principal) return reply.code(401).send({ error: 'unauthorized' });
+    // A credential from one tenant presented on another tenant's address is refused (RLS would stop the
+    // data anyway; this keeps the address and the account in agreement). A bare/unknown host is not judged.
+    if (req.hostTenantId && req.hostTenantId !== principal.tenantId) return reply.code(401).send({ error: 'unauthorized' });
     // Deny by default: a route with no permission (cannot happen past onRoute) is refused.
     if (!cfg.permission || !allowed(cfg.permission, principal)) return reply.code(403).send({ error: 'forbidden' });
     req.principal = principal;

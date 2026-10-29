@@ -4,7 +4,7 @@
 
 Read `CLAUDE.md`, then `docs/handover-phase3.md` (state, decisions, gotchas), then this file.
 Everything below is committed. Baseline on a fresh database (`pnpm run up:fresh`):
-API 64, shared 33, DB 14 (`node --test db/test/*.test.mjs`), counter 11. 38/38 mutants caught
+API 73, shared 33, DB 14 (`node --test db/test/*.test.mjs`), counter 13. 38/38 mutants caught
 (`node scripts/mutation-checks.mjs`, about 30 minutes; do not kill it mid-run, it
 leaves a guard removed in the source).
 
@@ -63,6 +63,35 @@ leaves a guard removed in the source).
   (survives reload), waiter vs cashier, split and cash payment, cap and round-off from manager
   settings, receipts 1..N, killing the tab mid-payment 10 times (invariants held), back online.
   The script lives only in the session scratchpad; it is not in the repo.
+
+## Done (tenant subdomain and logo, requested after step 4; PLAN D12)
+
+- **Subdomain:** `tenant.subdomain` (0001; unique, DNS-label format, reserved names refused) is
+  set by the operator (seed today; no operator CLI yet). `BASE_DOMAIN` env (default `localhost`,
+  so dev uses `tenant-a.localhost`, `tenant-b.localhost`). `tenantForHost()` in `apps/api/src/db.ts`
+  stamps `app.host_subdomain`; the `tenant` row policy lets that stamp SEE one row and write nothing.
+  `POST /login` no longer takes a tenant id: the tenant is the one whose address the request
+  arrived on (unknown, bare or other host = the generic 401). `/enrol` refuses a code on another
+  tenant's address. An authenticated request whose host names a different tenant is refused;
+  a bare/unknown host is NOT judged for authenticated routes (RLS already confines the data).
+  Tests send `host` via `apps/api/test/hosts.ts`.
+- **Logo:** `tenant_logo` (0004; bytes in Postgres, live row or cleared tombstone, versioned).
+  `PUT/DELETE /settings/logo` (manager; image bytes as the body, the bytes are sniffed and must
+  match the declared type; 256 KB cap). Public by address: `GET /branding` (name, logo hash) and
+  `GET /branding/logo` (inert image: nosniff, `default-src 'none'; sandbox`, ETag/304). Pull carries
+  only `{sha256, contentType}` (type `tenant_logo`, tombstone on removal); the tablet fetches the
+  bytes, checks the hash, caches in IndexedDB (`logo` table) and shows them in the header, on the
+  receipt and (online) on the enrol screen. `scripts/png.ts` builds test PNGs.
+- Tests: API 73 (new `tenancy-host.test.ts`: 9), counter 13, DB 14, shared 33. Browser check
+  44/44 on `tenant-a.localhost:4173` incl. logo offline after cold reload, replace, remove.
+  Mutation-checked; equivalent survivors: the `!tenantId` guard in login (RLS finds nothing for a
+  null tenant anyway), the explicit size check in the upload route (the route `bodyLimit` answers
+  413 first), `!r.ok` in `syncLogo` (an error body fails the hash check).
+- Not done / unverified: no manager UI for logo or settings; no operator tool to create tenants or
+  change a subdomain; wildcard DNS and TLS (`*.yourdomain`) are a deployment matter (Q4, phase 11);
+  real `*.yourdomain` hosts never exercised, only `*.localhost`; PNG/JPEG/WebP are validated by
+  header bytes only, not decoded, and dimensions are not limited; the bare host is allowed on
+  authenticated routes; the vite proxy forwards Host unchanged (do not set `changeOrigin`).
 
 ## Unverified (say so; do not claim otherwise)
 

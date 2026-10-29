@@ -19,6 +19,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE pos_owner IN SCHEMA public
 CREATE TABLE tenant (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name       text NOT NULL,
+  -- The tenant's web address: <subdomain>.<base domain>. Assigned by the operator when the tenant is
+  -- created, never by a manager (a rename would break bookmarks and enrolled tablets, and names can be squatted).
+  subdomain  text NOT NULL UNIQUE
+             CHECK (subdomain ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+                    AND subdomain NOT IN ('www', 'api', 'app', 'admin', 'mail', 'static', 'assets')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -131,5 +136,9 @@ SELECT app.enable_tenant_rls('audit');
 
 ALTER TABLE tenant ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant FORCE ROW LEVEL SECURITY;
+-- A request arrives on <subdomain>.<base domain> before we know the tenant. The API stamps the
+-- subdomain (app.host_subdomain, per transaction) and may then SEE that one row, and only see it:
+-- WITH CHECK keeps writes tied to the tenant stamp, so the lookup stamp can never modify anything.
 CREATE POLICY tenant_isolation ON tenant
-  USING (id = app.current_tenant_id()) WITH CHECK (id = app.current_tenant_id());
+  USING (id = app.current_tenant_id() OR subdomain = nullif(current_setting('app.host_subdomain', true), ''))
+  WITH CHECK (id = app.current_tenant_id());

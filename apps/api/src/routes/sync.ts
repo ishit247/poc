@@ -39,6 +39,12 @@ const PULL_SQL = `
                             'billRoundTo', bill_round_to, 'offlineDays', offline_days)
     FROM tenant_setting WHERE version > $1
   UNION ALL
+  -- The logo's bytes are not in pull: only its hash and type, so a tablet fetches /branding/logo when the hash changes.
+  SELECT 'tenant_logo', tenant_id, version, deleted_at IS NOT NULL,
+         CASE WHEN deleted_at IS NOT NULL THEN '{}'::jsonb
+              ELSE jsonb_build_object('sha256', sha256, 'contentType', content_type) END
+    FROM tenant_logo WHERE version > $1
+  UNION ALL
   SELECT 'counter', id, version, false,
          jsonb_build_object('menuMode', menu_mode)
     FROM counter WHERE version > $1 AND id = $3

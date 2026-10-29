@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { hostFor } from './hosts.js';
 import assert from 'node:assert/strict';
 import { allowed } from '../src/auth.js';
 import { buildApp } from '../src/app.js';
@@ -35,7 +36,7 @@ test('only managers can use web login: a waiter or cashier with credentials set 
     const email = `${role}-web@example.test`;
     await withTenant(A, (c) =>
       c.query("UPDATE app_user SET email = $1, password_hash = $2 WHERE role = $3 AND name LIKE 'School 1%'", [email, hash, role]));
-    const r = await app.inject({ method: 'POST', url: '/login', payload: { tenantId: A, email, password: 'dev-password-123' } });
+    const r = await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(A) }, payload: { email, password: 'dev-password-123' } });
     assert.equal(r.statusCode, 401, `${role} must not get a web session`);
     await withTenant(A, (c) => c.query("UPDATE app_user SET email = NULL, password_hash = NULL WHERE role = $1 AND name LIKE 'School 1%'", [role]));
   }

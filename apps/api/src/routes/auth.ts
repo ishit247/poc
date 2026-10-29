@@ -14,7 +14,7 @@ const SESSION_HOURS = 12;
 const ENROLMENT_MINUTES = 15;
 
 const uuid = z.string().uuid();
-const loginBody = z.object({ tenantId: uuid, email: z.string().email().max(254), password: z.string().min(1).max(256) }).strict();
+const loginBody = z.object({ email: z.string().email().max(254), password: z.string().min(1).max(256) }).strict();
 export const deviceLabel = z.string().trim().min(1).max(60);
 const codeBody = z.object({ outletId: uuid, counterId: uuid, label: deviceLabel.optional() }).strict();
 const pinSignin = z.object({ userId: uuid, pin: z.string().regex(/^\d{6,8}$/) }).strict();
@@ -32,7 +32,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post('/login', { config: { scope: 'public', ...strict(10) } }, async (req, reply) => {
     const body = loginBody.safeParse(req.body);
     if (!body.success) return bad(reply);
-    const { tenantId, email, password } = body.data;
+    const { email, password } = body.data;
+    // The tenant is the one whose address this request arrived on. No such tenant: the same answer as a wrong password.
+    const tenantId = req.hostTenantId;
+    if (!tenantId) return unauthorized(reply);
 
     const result = await withTenant(tenantId, async (c) => {
       const r = await c.query(
@@ -172,6 +175,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const m = /^([0-9a-f-]{36})\.([0-9a-f-]{36})\.([A-Z2-9_]{16})$/i.exec(body.data.code);
     if (!m || !uuid.safeParse(m[1]).success || !uuid.safeParse(m[2]).success) return unauthorized(reply);
     const [, tenantId, codeId, secret] = m as unknown as [string, string, string, string];
+    // A code only works on its own tenant's address.
+    if (req.hostTenantId && req.hostTenantId !== tenantId.toLowerCase()) return unauthorized(reply);
 
     const out = await withTenant(tenantId.toLowerCase(), async (c) => {
       // Single atomic claim: concurrent redemptions of one code cannot both succeed.

@@ -15,6 +15,23 @@ CREATE TABLE tenant_setting (
 );
 SELECT app.make_versioned('tenant_setting');
 
+-- The tenant's logo: one row per tenant, bytes in Postgres (small, and it backs up with everything else).
+-- PNG, JPEG or WebP only, never SVG (scripts). Removal is a tombstone with the bytes cleared, so tablets
+-- learn of it through pull; the bytes themselves are fetched from /branding/logo, not carried in pull.
+CREATE TABLE tenant_logo (
+  tenant_id    uuid PRIMARY KEY REFERENCES tenant(id),
+  content_type text CHECK (content_type IN ('image/png', 'image/jpeg', 'image/webp')),
+  bytes        bytea CHECK (length(bytes) BETWEEN 1 AND 262144),
+  sha256       text CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  version      bigint NOT NULL DEFAULT 0,
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  deleted_at   timestamptz,
+  -- Live: all three present. Tombstone: all three cleared.
+  CHECK ((deleted_at IS NULL AND content_type IS NOT NULL AND bytes IS NOT NULL AND sha256 IS NOT NULL)
+      OR (deleted_at IS NOT NULL AND content_type IS NULL AND bytes IS NULL AND sha256 IS NULL))
+);
+SELECT app.make_versioned('tenant_logo');
+
 CREATE TABLE business_day (
   id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenant(id),

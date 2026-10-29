@@ -29,5 +29,7 @@ declare module 'fastify' {
   }
   interface FastifyRequest {
     principal?: Principal;
+    /** The tenant named by the request's Host (<subdomain>.<base domain>), or null for a bare/unknown host. */
+    hostTenantId?: string | null;
   }
 }

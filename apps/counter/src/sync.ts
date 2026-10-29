@@ -2,6 +2,7 @@
 // cursor are written in ONE transaction, so a crash can never leave a cursor that is
 // ahead of the data (which would skip rows for good).
 import { db, getMeta, type DeviceInfo } from './db.ts';
+import { syncLogo } from './logo.ts';
 
 interface Change { type: string; id: string; version: number; deleted: boolean; data: Record<string, any> }
 
@@ -24,7 +25,10 @@ export async function pull(device: DeviceInfo): Promise<number> {
     });
     applied += j.changes.length;
     cursor = j.cursor;
-    if (!j.hasMore) return applied;
+    if (!j.hasMore) {
+      await syncLogo().catch(() => {}); // the logo is cosmetic: never let it fail a pull
+      return applied;
+    }
   }
   throw new Error('pull did not terminate');
 }

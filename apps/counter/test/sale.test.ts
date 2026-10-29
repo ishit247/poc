@@ -161,3 +161,70 @@ test('pull: a page and its cursor commit together, so a failure cannot leave a c
   globalThis.fetch = realFetch;
   assert.equal(await db.entities.count(), 0);
 });
+
+test('logo: stored only if it matches the hash pull promised; refetched only when the hash changes; cleared on removal', async () => {
+  const { syncLogo } = await import('../src/logo.ts');
+  await Promise.all([db.entities.clear(), db.logo.clear()]);
+  const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const hex = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
+  const sha = await hex(bytes);
+  let served: Uint8Array = bytes;
+  let calls = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { calls++; return new Response(served as BodyInit, { status: 200 }); }) as typeof fetch;
+  try {
+    // no logo row: nothing is fetched, and any cached logo is dropped
+    await db.logo.put({ sha: 'old', type: 'image/png', bytes: new ArrayBuffer(1) });
+    await syncLogo();
+    assert.equal(await db.logo.count(), 0);
+    assert.equal(calls, 0);
+
+    // a swapped or corrupted response is refused
+    await db.entities.put({ type: 'tenant_logo', id: 't', data: { sha256: sha, contentType: 'image/png' } });
+    served = new Uint8Array([9, 9, 9]);
+    await syncLogo();
+    assert.equal(await db.logo.count(), 0);
+
+    // the right bytes are stored, once
+    served = bytes;
+    await syncLogo();
+    assert.equal((await db.logo.get(sha))?.type, 'image/png');
+    const before = calls;
+    await syncLogo();
+    assert.equal(calls, before, 'a cached logo is not fetched again');
+
+    // a new hash replaces the old one
+    const next = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 5, 6]);
+    const sha2 = await hex(next);
+    await db.entities.put({ type: 'tenant_logo', id: 't', data: { sha256: sha2, contentType: 'image/png' } });
+    served = next;
+    await syncLogo();
+    assert.deepEqual((await db.logo.toArray()).map((l) => l.sha), [sha2]);
+
+    // removal (tombstone deleted the row) clears the cache
+    await db.entities.clear();
+    await syncLogo();
+    assert.equal(await db.logo.count(), 0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('pull still succeeds when the logo cannot be fetched (cosmetic, never fatal)', async () => {
+  (globalThis as any).__APP_VERSION__ = 'test';
+  const { pull } = await import('../src/sync.ts');
+  await Promise.all([db.entities.clear(), db.meta.clear(), db.logo.clear()]);
+  const page = { cursor: 3, hasMore: false, changes: [{ type: 'tenant_logo', id: 't', version: 3, deleted: false, data: { sha256: 'a'.repeat(64), contentType: 'image/png' } }] };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    if (String(url).includes('/branding/logo')) throw new TypeError('network down');
+    return new Response(JSON.stringify(page), { status: 200 });
+  }) as typeof fetch;
+  try {
+    assert.equal(await pull(device), 1);
+    assert.equal((await db.meta.get('cursor'))?.value, 3, 'the cursor still advanced');
+    assert.equal(await db.logo.count(), 0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

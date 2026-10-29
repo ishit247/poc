@@ -7,6 +7,8 @@ import type { Actor } from './sale.ts';
 import { PinScreen } from './PinScreen.tsx';
 import { Sell } from './Sell.tsx';
 import { Orders } from './Orders.tsx';
+import { useLogoUrl } from './logo.ts';
+import { Branding } from './Branding.tsx';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -47,6 +49,7 @@ function EnrolScreen({ onDone }: { onDone: (d: DeviceInfo) => void }) {
   };
   return (
     <main className="center">
+      <Branding />
       <h1>Set up this counter</h1>
       <p>Ask your manager for an enrolment code and type it here. This tablet must be online for this step.</p>
       <input data-testid="enrol-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Enrolment code" autoCapitalize="off" autoComplete="off" />
@@ -63,6 +66,7 @@ function Counter({ device }: { device: DeviceInfo }) {
   const [online, setOnline] = useState(navigator.onLine);
   const [syncError, setSyncError] = useState('');
   const pending = useLive(() => db.outbox.count(), 0);
+  const logoUrl = useLogoUrl();
   const lastPull = useLive(async () => (await getMeta('lastPull')) ?? '', '');
 
   const refresh = useCallback(async () => setMenu(await loadMenu()), []);
@@ -93,6 +97,7 @@ function Counter({ device }: { device: DeviceInfo }) {
   return (
     <div className="shell">
       <header>
+        {logoUrl && <img data-testid="logo" className="logo" src={logoUrl} alt="" />}
         <strong>{device.outletName}</strong> <span className="muted">· counter {device.counterCode}</span>
         <span className="spacer" />
         <span data-testid="sync-status" className={online ? 'ok' : 'warn'}>{online ? '● Online' : '● Offline'}</span>

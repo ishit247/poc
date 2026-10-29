@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { hostFor } from './hosts.js';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.js';
 import { pool, withTenant } from '../src/db.js';
@@ -13,7 +14,7 @@ const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
 const dev = (c: string, extra: Record<string, string> = {}) => ({ authorization: `Device ${c}`, ...extra });
 
 async function managerToken(app: App, tenant: string, email: string) {
-  const r = await app.inject({ method: 'POST', url: '/login', payload: { tenantId: tenant, email, password: 'dev-password-123' } });
+  const r = await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(tenant) }, payload: { email, password: 'dev-password-123' } });
   assert.equal(r.statusCode, 200);
   return r.json().token as string;
 }

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { hostFor } from './hosts.js';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.js';
 import { pool, withTenant } from '../src/db.js';
@@ -14,7 +15,7 @@ const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
 const send = (app: App, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' | 'GET', url: string, t: string, payload?: unknown) =>
   app.inject({ method, url, headers: bearer(t), ...(payload === undefined ? {} : { payload: payload as object }) });
 async function token(app: App, tenantId: string, email: string) {
-  const r = await app.inject({ method: 'POST', url: '/login', payload: { tenantId, email, password: PW } });
+  const r = await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(tenantId) }, payload: { email, password: PW } });
   assert.equal(r.statusCode, 200);
   return r.json().token as string;
 }

@@ -40,6 +40,9 @@ export interface LocalSale {
 /** An event waiting to sync. `seq` is the device order the server will replay. */
 export interface OutboxRow { seq?: number; eventId: string; createdAt: string; payload: OutboxEvent }
 
+/** The tenant's logo, cached so the header and receipt show it with no network. Keyed by content hash. */
+export interface LogoRow { sha: string; type: string; bytes: ArrayBuffer }
+
 export type MetaValue =
   | { key: 'device'; value: DeviceInfo }
   | { key: 'cursor'; value: number }
@@ -52,6 +55,7 @@ class CounterDb extends Dexie {
   pinState!: Table<{ userId: string; state: PinAttemptState }, string>;
   sales!: Table<LocalSale, string>;
   outbox!: Table<OutboxRow, number>;
+  logo!: Table<LogoRow, string>;
 
   constructor() {
     super('counter');
@@ -61,6 +65,7 @@ class CounterDb extends Dexie {
       pinState: 'userId',
       sales: 'id, status, createdBy',
       outbox: '++seq, eventId',
+      logo: 'sha',
     });
   }
 }

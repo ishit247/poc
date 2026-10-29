@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { hostFor } from './hosts.js';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.js';
 import { pool, withTenant } from '../src/db.js';
@@ -16,7 +17,7 @@ const getMenu = async (app: App, t: string, counterId: string) =>
   app.inject({ method: 'GET', url: `/counters/${counterId}/menu`, headers: bearer(t) });
 
 async function token(app: App, tenantId: string, email: string) {
-  const r = await app.inject({ method: 'POST', url: '/login', payload: { tenantId, email, password: PW } });
+  const r = await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(tenantId) }, payload: { email, password: PW } });
   assert.equal(r.statusCode, 200);
   return r.json().token as string;
 }

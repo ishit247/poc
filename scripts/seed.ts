@@ -1,7 +1,9 @@
 // Dev seed: two tenants (A, B) so isolation tests are meaningful. DEV ONLY:
 // the shared password below must never reach a real environment.
 // Runs as pos_owner; RLS is FORCEd, so each tenant is stamped like the app does.
+import { createHash } from 'node:crypto';
 import pg from 'pg';
+import { solidPng } from './png.ts';
 import { hashPassword } from '../apps/api/src/security/password.ts';
 import { newSecret, sha256 } from '../apps/api/src/security/crypto.ts';
 
@@ -9,8 +11,8 @@ export const DEV_PASSWORD = 'dev-password-123';
 export const DEV_PIN = '482913'; // dev only
 
 const SEED = {
-  A: { id: '00000000-0000-4000-8000-00000000000a', name: 'Tenant A Caterers', key: 'a', outlets: ['School 1 Canteen', 'School 2 Canteen'] },
-  B: { id: '00000000-0000-4000-8000-00000000000b', name: 'Tenant B School', key: 'b', outlets: ['Main Canteen'] },
+  A: { id: '00000000-0000-4000-8000-00000000000a', name: 'Tenant A Caterers', subdomain: 'tenant-a', logo: [31, 78, 61], key: 'a', outlets: ['School 1 Canteen', 'School 2 Canteen'] },
+  B: { id: '00000000-0000-4000-8000-00000000000b', name: 'Tenant B School', subdomain: 'tenant-b', logo: [160, 60, 40], key: 'b', outlets: ['Main Canteen'] },
 };
 
 const url = process.env.OWNER_DATABASE_URL ?? 'postgres://pos_owner:pos_owner@localhost:55432/pos';
@@ -22,7 +24,12 @@ const pinHash = await hashPassword(DEV_PIN); // same slow hash as passwords; ver
 for (const t of Object.values(SEED)) {
   await client.query('BEGIN');
   await client.query("SELECT set_config('app.tenant_id', $1, true)", [t.id]);
-  await client.query('INSERT INTO tenant (id, name) VALUES ($1, $2)', [t.id, t.name]);
+  await client.query('INSERT INTO tenant (id, name, subdomain) VALUES ($1, $2, $3)', [t.id, t.name, t.subdomain]);
+  // Distinct logos per tenant, so a mix-up between tenants shows.
+  const png = solidPng(...(t.logo as [number, number, number]));
+  await client.query(
+    "INSERT INTO tenant_logo (tenant_id, content_type, bytes, sha256) VALUES ($1, 'image/png', $2, $3)",
+    [t.id, png, createHash('sha256').update(png).digest('hex')]);
   // Trading settings differ per tenant so a leak between them would show: A uses defaults, B rounds to the rupee.
   await client.query(
     'INSERT INTO tenant_setting (tenant_id, max_line_qty, gst_rounding, bill_round_to, offline_days) VALUES ($1, $2, $3, $4, 7)',

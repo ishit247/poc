@@ -1,13 +1,16 @@
 import { formatRupees, paise } from '@pos/shared';
 import type { DeviceInfo, LocalSale } from './db.ts';
+import { useLogoUrl } from './logo.ts';
 
 const rs = (n: number) => formatRupees(paise(n));
 
 /** On-screen only. Printing and the final receipt layout come in phase 5. */
 export function Receipt({ sale, device, onClose }: { sale: LocalSale; device: DeviceInfo; onClose: () => void }) {
+  const logoUrl = useLogoUrl();
   return (
     <main className="center">
       <div className="receipt" data-testid="receipt">
+        {logoUrl && <img data-testid="receipt-logo" className="receipt-logo" src={logoUrl} alt="" />}
         <h2>{device.outletName}</h2>
         {sale.receiptNo ? <p>Receipt <b data-testid="receipt-no">{sale.receiptNo}</b></p> : <p><b data-testid="saved">Order saved</b>. A cashier will take payment.</p>}
         <p className="muted">{new Date(sale.createdAt).toLocaleString()} · {sale.createdByName}</p>

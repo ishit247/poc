@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { hostFor } from './hosts.js';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.js';
 import { pool, withTenant } from '../src/db.js';
@@ -15,7 +16,7 @@ const send = (app: App, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string
   app.inject({ method, url, headers: bearer(t), ...(payload === undefined ? {} : { payload: payload as object }) });
 
 async function token(app: App, tenantId: string, email: string) {
-  const r = await app.inject({ method: 'POST', url: '/login', payload: { tenantId, email, password: PW } });
+  const r = await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(tenantId) }, payload: { email, password: PW } });
   assert.equal(r.statusCode, 200);
   return r.json().token as string;
 }
@@ -186,6 +187,7 @@ test('pull pages without gaps or duplicates across the page boundary', async () 
     UNION ALL SELECT version::int FROM outlet_item WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM outlet WHERE id = $1
     UNION ALL SELECT version::int FROM tenant_setting
+    UNION ALL SELECT version::int FROM tenant_logo
     UNION ALL SELECT version::int FROM outlet_price WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM counter WHERE id = $2
     UNION ALL SELECT version::int FROM counter_item WHERE counter_id = $2

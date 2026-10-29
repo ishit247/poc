@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.js';
 import { pool, withTenant } from '../src/db.js';
+import { hostFor } from './hosts.js';
 
 const A = '00000000-0000-4000-8000-00000000000a';
 const B = '00000000-0000-4000-8000-00000000000b';
@@ -13,7 +14,7 @@ const post = (app: App, url: string, payload: unknown, headers: Record<string, s
   app.inject({ method: 'POST', url, payload: payload as object, headers });
 
 async function login(app: App, tenantId: string, email: string, password = PW) {
-  return post(app, '/login', { tenantId, email, password });
+  return post(app, '/login', { email, password }, { host: hostFor(tenantId) });
 }
 async function token(app: App, tenantId: string, email: string) {
   const r = await login(app, tenantId, email);
@@ -56,14 +57,14 @@ test('login: locks after 5 failures, even for the correct password', async () =>
 test('login is rate limited per client', async () => {
   const app = buildApp();
   const codes: number[] = [];
-  for (let i = 0; i < 12; i++) codes.push((await post(app, '/login', { tenantId: B, email: 'nobody@example.test', password: 'x' })).statusCode);
+  for (let i = 0; i < 12; i++) codes.push((await post(app, '/login', { email: 'nobody@example.test', password: 'x' }, { host: hostFor(B) })).statusCode);
   assert.ok(codes.includes(429), `expected a 429 in ${codes.join(',')}`);
 });
 
 test('login rejects malformed bodies and unknown fields', async () => {
   const app = buildApp();
-  assert.equal((await post(app, '/login', { tenantId: 'nope', email: 'x', password: 'y' })).statusCode, 400);
-  assert.equal((await post(app, '/login', { tenantId: A, email: 'a1@example.test', password: PW, admin: true })).statusCode, 400);
+  assert.equal((await post(app, '/login', { email: 1, password: 'y' }, { host: hostFor(A) })).statusCode, 400);
+  assert.equal((await post(app, '/login', { tenantId: A, email: 'a1@example.test', password: PW }, { host: hostFor(A) })).statusCode, 400);
 });
 
 test('protected routes: no/garbage/forged credentials all give 401; wrong kind gives 403', async () => {

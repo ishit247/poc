@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { hostFor } from './hosts.js';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.js';
 import { pool, withTenant } from '../src/db.js';
@@ -12,7 +13,7 @@ type App = ReturnType<typeof buildApp>;
 const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
 
 async function managerToken(app: App, tenant: string, email: string) {
-  return (await app.inject({ method: 'POST', url: '/login', payload: { tenantId: tenant, email, password: 'dev-password-123' } })).json().token as string;
+  return (await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(tenant) }, payload: { email, password: 'dev-password-123' } })).json().token as string;
 }
 async function world(app: App, tenant: string, email: string, outletName: string) {
   const mgr = await managerToken(app, tenant, email);
