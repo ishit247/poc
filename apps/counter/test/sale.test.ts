@@ -34,6 +34,20 @@ test('no open shift: no payment, and nothing is saved or numbered', async () => 
   assert.deepEqual(await state(), before);
 });
 
+test('closing the shift voids the orders nobody paid, and leaves paid ones alone', async () => {
+  const abandoned = await createSale({ ...base, actor: waiter });
+  const paid = await createSale({ ...base, actor: cashier, tenders: cash(2100) });
+  await closeShift({ device, actor: cashier, countedCashPaise: 2100 });
+  assert.equal((await db.sales.get(abandoned.id))!.status, 'void');
+  assert.equal((await db.sales.get(paid.id))!.status, 'paid');
+  const events = (await db.outbox.toArray()).map((r) => r.payload);
+  const voided = events.filter((e) => e.type === 'sale.voided');
+  assert.deepEqual(voided.map((e) => e.type === 'sale.voided' && e.saleId), [abandoned.id]);
+  // Voids go out before the close, so the server sees them in order.
+  assert.ok(events.findIndex((e) => e.type === 'sale.voided') < events.findIndex((e) => e.type === 'shift.closed'));
+  assert.deepEqual(await visibleOpenOrders(waiter), [], 'a voided order is no longer offered for payment');
+});
+
 test('only the cashier who owns the open shift takes payment into it', async () => {
   const other_cashier: Actor = { id: '55555555-5555-4555-8555-555555555555', name: 'Cash2', role: 'cashier' };
   const open = await createSale({ ...base, actor: waiter });

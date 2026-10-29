@@ -88,7 +88,18 @@ export const ShiftClosed = z.object({
   at: z.string().datetime({ offset: true }),
 });
 
-export const OutboxEvent = z.discriminatedUnion('type', [SaleCreated, PaymentTaken, PrintReprinted, ShiftOpened, ShiftClosed]);
+// An order that was never paid, cancelled by the tablet that holds it. Only unpaid orders can be voided
+// this way; a paid sale is never undone by a tablet (refunds and manager voids are a separate matter).
+export const SaleVoided = z.object({
+  type: z.literal('sale.voided'),
+  schemaVersion: z.literal(EVENT_SCHEMA_VERSION),
+  saleId: uuid,
+  reason: z.enum(['abandoned_at_shift_close']),
+  at: z.string().datetime({ offset: true }),
+});
+
+export const OutboxEvent = z.discriminatedUnion('type', [SaleCreated, PaymentTaken, PrintReprinted, ShiftOpened, ShiftClosed, SaleVoided]);
+export type SaleVoided = z.infer<typeof SaleVoided>;
 export type ShiftOpened = z.infer<typeof ShiftOpened>;
 export type ShiftClosed = z.infer<typeof ShiftClosed>;
 export type SaleCreated = z.infer<typeof SaleCreated>;

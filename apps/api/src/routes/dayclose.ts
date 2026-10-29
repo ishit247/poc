@@ -4,6 +4,7 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import type pg from 'pg';
 import { z } from 'zod';
 import { withTenant } from '../db.js';
+import { expectedCash } from '@pos/shared';
 import { audit } from '../audit.js';
 
 const params = z.object({ id: z.string().uuid() });
@@ -126,6 +127,32 @@ export const dayCloseRoutes: FastifyPluginAsync = async (app) => {
         lateAdjustments: await lateAdjustments(c, ps.data.id, q.data.date),
         receiptGaps: await receiptGaps(c, ps.data.id, q.data.date),
       };
+    });
+  });
+
+  // A drawer nobody can close (lost tablet, cashier gone home) would hold the day open for ever.
+  // The manager counts the cash and closes it for them; the variance is worked out as for any shift.
+  app.post('/outlets/:id/shifts/:shiftId/force-close', { config: cfg }, async (req, reply) => {
+    const ps = z.object({ id: z.string().uuid(), shiftId: z.string().uuid() }).safeParse(req.params);
+    const b = z.object({ countedCashPaise: z.number().int().min(0).max(100_000_000) }).strict().safeParse(req.body);
+    if (!ps.success || !b.success) return reply.code(400).send({ error: 'invalid request' });
+    const p = req.principal!;
+    if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);
+    return withTenant(p.tenantId, async (c) => {
+      // Lock the row so a tablet's own close, arriving at the same moment, cannot also win.
+      const s = (await c.query('SELECT opening_cash_paise::int AS opening, closed_at FROM shift WHERE id = $1 AND outlet_id = $2 FOR UPDATE', [ps.data.shiftId, ps.data.id])).rows[0];
+      if (!s) return notFound(reply);
+      if (s.closed_at) return reply.code(409).send({ error: 'already closed' });
+      const pays = await c.query(
+        `SELECT pay.method, pay.amount_paise::int AS "amountPaise" FROM payment pay JOIN sale sl ON sl.id = pay.sale_id WHERE sl.shift_id = $1`, [ps.data.shiftId]);
+      const expected = expectedCash(s.opening, pays.rows);
+      const counted = b.data.countedCashPaise;
+      await c.query(
+        `UPDATE shift SET closed_at = now(), closed_by = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint WHERE id = $1`,
+        [ps.data.shiftId, p.userId, counted, expected]);
+      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'shift.force_close', entity: 'shift', entityId: ps.data.shiftId,
+        detail: { outletId: ps.data.id, countedCashPaise: counted, expectedCashPaise: expected, variancePaise: counted - expected } });
+      return { ok: true, expectedCashPaise: expected, variancePaise: counted - expected };
     });
   });
 

@@ -48,7 +48,8 @@ allowed; UPI counted as drawer cash; foreign-device shift accepted. Not run thro
 
 ## Not done / unverified (say so)
 
-- **No UI for day close** (manager screen: blockers, per-device "last heard", totals, close button). API only.
+- Day close UI exists in `apps/counter/src/manager/` (all manager screens live there): blockers, force-close, per-device
+  "last heard", totals, close button. **Not yet checked in a real browser.**
 - **No real-browser check** of the Shift screen, nor of phases 4 and 5 (still owed, do them together at tablet size).
 - Late adjustments key on `sync_event.received_at`; a day closed out of order (an earlier date after a later one) may
   list or miss adjustments. Closing in date order is assumed.

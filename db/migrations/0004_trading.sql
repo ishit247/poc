@@ -62,10 +62,17 @@ CREATE TABLE shift (
   counted_cash_paise  bigint CHECK (counted_cash_paise >= 0),
   expected_cash_paise bigint,
   variance_paise      bigint,
+  -- Set only when a manager closed the shift for the cashier (a lost tablet, a cashier who went home).
+  closed_by           uuid,
+  -- Versioned so a tablet can pull the closing of its own shift when a manager did it (PLAN 7.4).
+  version             bigint NOT NULL DEFAULT 0,
+  updated_at          timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, id),
   FOREIGN KEY (tenant_id, outlet_id) REFERENCES outlet(tenant_id, id),
   FOREIGN KEY (tenant_id, device_id) REFERENCES device(tenant_id, id),
   FOREIGN KEY (tenant_id, user_id)   REFERENCES app_user(tenant_id, id),
+  FOREIGN KEY (tenant_id, closed_by) REFERENCES app_user(tenant_id, id),
+  CHECK (closed_by IS NULL OR closed_at IS NOT NULL),
   -- A closed shift carries its whole count; an open one carries none of it.
   CHECK ((closed_at IS NULL) = (counted_cash_paise IS NULL)),
   CHECK ((closed_at IS NULL) = (expected_cash_paise IS NULL)),
@@ -74,7 +81,7 @@ CREATE TABLE shift (
 -- One drawer per tablet at a time.
 CREATE UNIQUE INDEX shift_one_open_per_device ON shift (device_id) WHERE closed_at IS NULL;
 SELECT app.enable_tenant_rls('shift');
-REVOKE DELETE, TRUNCATE ON shift FROM pos_app;
+SELECT app.add_versioning('shift'); -- stamps version on every write, and withholds DELETE and TRUNCATE
 
 CREATE TABLE sale (
   id              uuid PRIMARY KEY,

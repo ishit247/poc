@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { formatRupees, paise, parseRupees, renderShiftSlip, type ShiftSlipView } from '@pos/shared';
 import { db, type DeviceInfo, type LocalShift } from './db.ts';
 import type { Actor } from './sale.ts';
@@ -17,6 +17,11 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [slip, setSlip] = useState<ShiftSlipView | null>(null);
+  // The latest drawer a manager closed for someone on this tablet, so the next cashier is not left wondering why it vanished.
+  const [forced, setForced] = useState<LocalShift | null>(null);
+  useEffect(() => {
+    void db.shifts.toArray().then((all) => setForced(all.filter((s) => s.closedByManager).sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''))[0] ?? null));
+  }, [shift]);
 
   const run = async (go: () => Promise<void>) => {
     setError('');
@@ -41,6 +46,11 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
     return (
       <main className="center">
         <h2>Open shift</h2>
+        {forced?.closedByManager && (
+          <p data-testid="forced-notice" className="warn">
+            A manager closed {forced.userName}'s drawer at {new Date(forced.closedAt!).toLocaleTimeString()}: they counted ₹{formatRupees(paise(forced.countedCashPaise!))}, expected ₹{formatRupees(paise(forced.closedByManager.expectedCashPaise))}.
+          </p>
+        )}
         <p>Count the cash in the drawer and enter it as the opening float.</p>
         <input data-testid="opening-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="Opening cash ₹" />
         <button data-testid="open-shift" className="primary" disabled={busy || !cash.trim()}

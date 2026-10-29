@@ -20,7 +20,7 @@ export interface Entity { type: string; id: string; data: Record<string, any> }
 
 export interface LocalSale {
   id: string;
-  status: 'open' | 'paid';
+  status: 'open' | 'paid' | 'void';
   createdBy: string;
   createdByName: string;
   channel: 'counter';
@@ -48,6 +48,8 @@ export interface LocalShift {
   openingCashPaise: number;
   closedAt: string | null;
   countedCashPaise: number | null;
+  /** Set when a manager closed this drawer from the server. Their count stands; these are the server's figures. */
+  closedByManager?: { expectedCashPaise: number; variancePaise: number };
 }
 
 /** An event waiting to sync. `seq` is the device order the server will replay. */

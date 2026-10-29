@@ -20,9 +20,18 @@ export async function pull(device: DeviceInfo): Promise<number> {
     });
     if (!r.ok) throw new Error(`pull failed: ${r.status}`);
     const j = (await r.json()) as { cursor: number; hasMore: boolean; changes: Change[] };
-    await db.transaction('rw', db.entities, db.meta, async () => {
+    await db.transaction('rw', db.entities, db.meta, db.shifts, async () => {
       for (const c of j.changes) {
-        if (c.deleted) await db.entities.delete([c.type, c.id]);
+        if (c.type === 'shift') {
+          // A manager closed this tablet's drawer. If we still think it is open, close it with their count.
+          const s = await db.shifts.get(c.id);
+          if (s && !s.closedAt) {
+            await db.shifts.put({ ...s, closedAt: c.data.closedAt, countedCashPaise: c.data.countedCashPaise,
+              closedByManager: { expectedCashPaise: c.data.expectedCashPaise, variancePaise: c.data.variancePaise } });
+          } else if (s && !s.closedByManager) {
+            await db.shifts.put({ ...s, closedByManager: { expectedCashPaise: c.data.expectedCashPaise, variancePaise: c.data.variancePaise } });
+          }
+        } else if (c.deleted) await db.entities.delete([c.type, c.id]);
         else await db.entities.put({ type: c.type, id: c.id, data: c.data });
       }
       await db.meta.put({ key: 'cursor', value: j.cursor });
@@ -64,6 +73,8 @@ export async function push(device: DeviceInfo): Promise<PushSummary> {
         const seq = bySeq.get(res.eventId);
         if (seq === undefined) continue;
         if (res.status === 'applied' || res.status === 'duplicate') { await db.outbox.delete(seq); summary.done++; }
+        // A manager already closed this drawer: nothing is wrong, and pull brings their figures. Not a parked failure.
+        else if (res.status === 'rejected' && res.reason === 'shift_force_closed') { await db.outbox.delete(seq); summary.done++; }
         else if (res.status === 'rejected') { await db.outbox.update(seq, { rejected: res.reason ?? 'rejected' }); summary.parked++; }
         else summary.deferred++;
       }

@@ -1,63 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { formatRupees, paise } from '@pos/shared';
-
-// Manager tools are online-only and never stored on the tablet: the session token lives in memory and
-// is gone on reload. Day close needs the server's view of every tablet, so there is nothing to do offline.
-
-interface Me { name: string; outlets: { id: string; name: string; timezone: string; today: string }[] }
-interface Totals {
-  paidSales: number; grossPaise: number; taxPaise: number; cashPaise: number; upiPaise: number; onlineGrossPaise: number;
-  voids: number; voidTotalPaise: number; refunds: number; refundTotalPaise: number; varianceTotalPaise: number;
-  shifts: { id: string; cashier: string; counter: string; float: number; counted: number; expected: number; variance: number }[];
-  lateAdjustments?: { id: string; businessDate: string; receiptNo: string; status: string; totalPaise: number }[];
-  receiptGaps?: { deviceId: string; counter: string; missing: number[] }[];
-}
-interface Device { id: string; label: string | null; counter: string; lastSeenAt: string | null; outboxPending: number | null; blocking: boolean }
-interface Blockers { openShifts: { id: string; cashier: string; openedAt: string }[]; openSales: number; devices: Device[] }
-interface Preview {
-  date: string; closed: boolean; closedAt?: string; provisional?: boolean;
-  blockers?: Blockers; totals: Totals | null; lateAdjustments: NonNullable<Totals['lateAdjustments']>; receiptGaps?: NonNullable<Totals['receiptGaps']>;
-}
-
-const rs = (n: number) => formatRupees(paise(n));
-const api = async (path: string, token: string, init: RequestInit = {}) => {
-  const r = await fetch(`/api${path}`, { ...init, headers: { authorization: `Bearer ${token}`, ...(init.body ? { 'content-type': 'application/json' } : {}) } });
-  const body = await r.json().catch(() => ({}));
-  return { status: r.status, body };
-};
-
-export function ManagerLogin({ onToken, onCancel }: { onToken: (t: string) => void; onCancel: () => void }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const go = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }) });
-      if (r.status === 429) throw new Error('Too many attempts. Wait a minute and try again.');
-      if (!r.ok) throw new Error('Email or password is not right.');
-      onToken((await r.json()).token);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not reach the server. Manager sign-in needs a connection.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <main className="center">
-      <h1>Manager sign-in</h1>
-      <input data-testid="mgr-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" autoCapitalize="off" autoComplete="username" />
-      <input data-testid="mgr-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" autoComplete="current-password" />
-      <div>
-        <button data-testid="mgr-cancel" onClick={onCancel}>Back</button>{' '}
-        <button data-testid="mgr-login" className="primary" disabled={busy || !email || !password} onClick={go}>{busy ? 'Signing in…' : 'Sign in'}</button>
-      </div>
-      {error && <p className="error" role="alert">{error}</p>}
-    </main>
-  );
-}
+import { api, rs, type Me, type Preview } from './api.ts';
+import { ForceClose } from './ForceClose.tsx';
 
 export function DayClose({ token, onDone }: { token: string; onDone: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -134,7 +77,14 @@ export function DayClose({ token, onDone }: { token: string; onDone: () => void 
         <section data-testid="mgr-blockers">
           <h2>Before you can close</h2>
           {b.openShifts.length === 0 && b.openSales === 0 && b.devices.every((d) => !d.blocking) && <p className="ok">Nothing is holding this day open.</p>}
-          {b.openShifts.map((s) => <p key={s.id} className="warn">{s.cashier} still has a drawer open (since {new Date(s.openedAt).toLocaleTimeString()}).</p>)}
+          {b.openShifts.map((s) => (
+            <ForceClose key={s.id} shift={s} onClose={async (counted) => {
+              const r = await api(`/outlets/${outletId}/shifts/${s.id}/force-close`, token, { method: 'POST', body: JSON.stringify({ countedCashPaise: counted }) });
+              if (r.status === 409) setError('That drawer was already closed.');
+              else if (r.status !== 200) setError('Could not close that drawer.');
+              await load();
+            }} />
+          ))}
           {b.openSales > 0 && <p className="warn">{b.openSales} open order{b.openSales === 1 ? '' : 's'} not yet paid or voided.</p>}
           {b.devices.map((d) => (
             <p key={d.id} className={d.blocking ? 'warn' : 'muted'} data-testid={`mgr-device-${d.counter}`}>

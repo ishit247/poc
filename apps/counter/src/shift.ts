@@ -29,6 +29,11 @@ export async function closeShift(args: { device: DeviceInfo; actor: Actor; count
     const shift = await currentShift();
     if (!shift) throw new Error('There is no open shift to close.');
     if (shift.userId !== args.actor.id) throw new Error(`This shift belongs to ${shift.userName}.`);
+    // Orders still unpaid when the drawer closes are abandoned (PLAN 9). Voided before the close so the server sees them in order.
+    for (const s of await db.sales.filter((x) => x.status === 'open').toArray()) {
+      await queue({ type: 'sale.voided', schemaVersion: EVENT_SCHEMA_VERSION, saleId: s.id, reason: 'abandoned_at_shift_close', at });
+      await db.sales.put({ ...s, status: 'void' });
+    }
     await queue({ type: 'shift.closed', schemaVersion: EVENT_SCHEMA_VERSION, shiftId: shift.id, countedCashPaise: args.countedCashPaise, at });
     await db.shifts.put({ ...shift, closedAt: at, countedCashPaise: args.countedCashPaise });
     return slipFor({ ...shift, closedAt: at, countedCashPaise: args.countedCashPaise }, args.device);

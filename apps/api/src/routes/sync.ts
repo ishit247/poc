@@ -63,6 +63,12 @@ const PULL_SQL = `
               ELSE jsonb_build_object('name', u.name, 'role', u.role, 'pinVerifier', u.pin_verifier) END
     FROM user_outlet uo JOIN app_user u ON u.id = uo.user_id
    WHERE uo.outlet_id = $2 AND u.role IN ('cashier', 'waiter') AND GREATEST(u.version, uo.version) > $1
+  UNION ALL
+  -- THIS tablet's own shifts, and only those a manager closed for it: the tablet already knows about any it closed itself.
+  SELECT 'shift', id, version, false,
+         jsonb_build_object('closedAt', closed_at, 'countedCashPaise', counted_cash_paise::int,
+                            'expectedCashPaise', expected_cash_paise::int, 'variancePaise', variance_paise::int)
+    FROM shift WHERE version > $1 AND device_id = $4 AND closed_by IS NOT NULL
   ORDER BY version
   LIMIT ${PAGE + 1}`;
 
@@ -108,7 +114,7 @@ export const syncRoutes: FastifyPluginAsync = async (app) => {
     const p = req.principal!;
     if (p.kind !== 'device') return reply.code(403).send({ error: 'forbidden' });
 
-    const rows = await withTenant(p.tenantId, async (c) => (await c.query(PULL_SQL, [q.data.cursor, p.outletId, p.counterId])).rows);
+    const rows = await withTenant(p.tenantId, async (c) => (await c.query(PULL_SQL, [q.data.cursor, p.outletId, p.counterId, p.deviceId])).rows);
     const hasMore = rows.length > PAGE;
     const page = hasMore ? rows.slice(0, PAGE) : rows;
     const last = page[page.length - 1];

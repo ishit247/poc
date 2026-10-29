@@ -10,7 +10,7 @@ import { Orders } from './Orders.tsx';
 import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
 import { Branding } from './Branding.tsx';
-import { DayClose, ManagerLogin } from './Manager.tsx';
+import { DayClose, ManagerLogin } from './manager/index.ts';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);

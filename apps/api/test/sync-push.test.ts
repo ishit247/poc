@@ -539,6 +539,74 @@ test('day close is blocked by an open shift, an open sale and unsent events; the
   assert.equal(row.n, 1);
 });
 
+test('a manager can force-close a stuck shift; scope, double close and the tablet\'s later close are all handled', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  const shiftId = crypto.randomUUID();
+  const opened = t.open(shiftId); // built first: events are applied in device order
+  const s = t.sale({ date, shiftId });
+  await t.push([opened, s.created, s.paid]);
+  const force = (body: object, token = t.mgr, outlet = t.outletId, shift = shiftId) =>
+    t.app.inject({ method: 'POST', url: `/outlets/${outlet}/shifts/${shift}/force-close`, headers: bearer(token), payload: body });
+
+  // Scope: another tenant's manager, a tablet, and an outlet that is not the shift's own.
+  const b = await Tablet.enrol(buildApp(), B, 'b1@example.test', 'Main Canteen');
+  assert.equal((await force({ countedCashPaise: 1 }, b.mgr)).statusCode, 404, 'other tenant');
+  assert.equal((await t.app.inject({ method: 'POST', url: `/outlets/${t.outletId}/shifts/${shiftId}/force-close`, headers: { authorization: `Device ${t.cred}` }, payload: { countedCashPaise: 1 } })).statusCode, 403, 'a tablet');
+  const other = await withTenant(A, async (c) => (await c.query(
+    "SELECT uo.outlet_id AS id FROM user_outlet uo JOIN app_user u ON u.id = uo.user_id WHERE u.email = 'a1@example.test' AND uo.outlet_id <> $1 LIMIT 1", [t.outletId])).rows[0].id as string);
+  assert.equal((await force({ countedCashPaise: 1 }, t.mgr, other)).statusCode, 404, "an outlet the shift is not at");
+  const a2 = (await t.app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(A) }, payload: { email: 'a2@example.test', password: 'dev-password-123' } })).json().token as string;
+  assert.equal((await force({ countedCashPaise: 1 }, a2)).statusCode, 404, 'a manager of another outlet in the same tenant');
+  assert.equal((await force({ countedCashPaise: -5 })).statusCode, 400);
+  assert.equal((await shiftState(shiftId)).closed, false, 'refused attempts changed nothing');
+
+  const r = await force({ countedCashPaise: 50_000 + s.total - 100 });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.deepEqual([r.json().expectedCashPaise, r.json().variancePaise], [50_000 + s.total, -100]);
+  const row = await shiftState(shiftId);
+  assert.deepEqual([row.closed, row.variance, row.closedBy !== null], [true, -100, true]);
+  assert.equal((await force({ countedCashPaise: 1 })).statusCode, 409, 'a second force-close');
+  const audited = await withTenant(A, async (c) => (await c.query("SELECT count(*)::int n FROM audit WHERE action = 'shift.force_close' AND entity_id = $1", [shiftId])).rows[0].n);
+  assert.equal(audited, 1);
+
+  // The tablet, back online, tries to close the same drawer: refused, and the manager's count stands.
+  const later = await t.push([t.close(shiftId, 1)]);
+  assert.deepEqual(later.map((x: any) => x.reason), ['shift_force_closed']);
+  assert.equal((await shiftState(shiftId)).variance, -100);
+
+  const dc = await dayClose(t, { date });
+  assert.equal(dc.statusCode, 200, 'the shift no longer holds the day open: ' + dc.body);
+});
+const shiftState = (id: string) => withTenant(A, async (c) => (await c.query(
+  'SELECT closed_at IS NOT NULL closed, variance_paise::int variance, closed_by AS "closedBy" FROM shift WHERE id = $1', [id])).rows[0]);
+
+test('sale.voided: an unpaid order is voided once; a paid or foreign one is not; day close no longer waits on it', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  const shiftId = crypto.randomUUID();
+  const opened = t.open(shiftId);
+  const abandoned = t.sale({ date, shiftId });
+  const paid = t.sale({ date, shiftId, saleId: crypto.randomUUID(), seq: 1 });
+  await t.push([opened, abandoned.created, paid.created, paid.paid]);
+  const voidEv = (saleId: string) => t.event({ type: 'sale.voided', schemaVersion: 1, saleId, reason: 'abandoned_at_shift_close', at: new Date().toISOString() });
+  const saleState = (id: string) => withTenant(A, async (c) => (await c.query('SELECT status, void_reason FROM sale WHERE id = $1', [id])).rows[0]);
+
+  const res = await t.push([voidEv(abandoned.saleId), voidEv(paid.saleId), voidEv(abandoned.saleId)]);
+  assert.deepEqual(res.map((r) => [r.status, r.reason]), [['applied', undefined], ['rejected', 'not_open'], ['rejected', 'already_void']]);
+  assert.deepEqual(await saleState(abandoned.saleId), { status: 'void', void_reason: 'abandoned_at_shift_close' });
+  assert.equal((await saleState(paid.saleId)).status, 'paid', 'a payment that got there first stands');
+
+  // Another tablet cannot void this tablet's order.
+  const o = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const foreign = await o.push([o.event({ type: 'sale.voided', schemaVersion: 1, saleId: paid.saleId, reason: 'abandoned_at_shift_close', at: new Date().toISOString() })]);
+  assert.equal(foreign[0]!.reason, 'wrong_device');
+  // A reason outside the list is not a void.
+  assert.equal((await t.push([t.event({ type: 'sale.voided', schemaVersion: 1, saleId: abandoned.saleId, reason: 'because', at: new Date().toISOString() })]))[0]!.reason, 'invalid_payload');
+  const audited = await withTenant(A, async (c) => (await c.query("SELECT count(*)::int n FROM audit WHERE action = 'sale.voided' AND entity_id = $1", [abandoned.saleId])).rows[0].n);
+  assert.equal(audited, 1);
+});
+
 test('an open shift alone blocks the close, and UPI is totalled apart from cash', async () => {
   const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
   const date = await today(t.outletId);
