@@ -13,7 +13,7 @@
 import type pg from 'pg';
 import {
   EVENT_SCHEMA_VERSION, OutboxEvent, exclusiveLine, paise, roundOffFor,
-  type GstRounding, type PaymentTaken, type SaleCreated, type TradingSettings,
+  type GstRounding, type PaymentTaken, type PrintReprinted, type SaleCreated, type TradingSettings,
 } from '@pos/shared';
 import { audit } from './audit.js';
 import { withTenant } from './db.js';
@@ -56,7 +56,7 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
 
   const head = e.payload as { type?: unknown; schemaVersion?: unknown } | null;
   const type = typeof head?.type === 'string' ? head.type : '';
-  if (type !== 'sale.created' && type !== 'payment.taken') throw new RejectUnrecorded('unknown_event_type');
+  if (type !== 'sale.created' && type !== 'payment.taken' && type !== 'print.reprinted') throw new RejectUnrecorded('unknown_event_type');
   if (head?.schemaVersion !== EVENT_SCHEMA_VERSION) throw new RejectUnrecorded('unsupported_schema_version');
 
   let reason: string | null = null;
@@ -68,7 +68,8 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
     if (p.revokedAt && new Date(e.createdAt) > p.revokedAt) throw new Reject('after_revocation');
     const ev = parsed.data;
     if (ev.type === 'sale.created') await applySale(c, p, e, ev, settings);
-    else await applyPayment(c, p, ev);
+    else if (ev.type === 'payment.taken') await applyPayment(c, p, ev);
+    else await applyReprint(c, p, ev);
     await c.query('RELEASE SAVEPOINT ev');
   } catch (err) {
     await c.query('ROLLBACK TO SAVEPOINT ev');
@@ -167,16 +168,32 @@ async function applySale(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, ev: 
   }
 }
 
-async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTaken): Promise<void> {
-  const sale = (await c.query('SELECT device_id, status, total_paise FROM sale WHERE id = $1 FOR UPDATE', [ev.saleId])).rows[0];
+/** The sale an event is about, locked. Not here yet: wait for it, unless it was turned away (then waiting is forever). */
+async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string) {
+  const sale = (await c.query('SELECT device_id, status, total_paise, receipt_no FROM sale WHERE id = $1 FOR UPDATE', [saleId])).rows[0];
   if (!sale) {
-    // Its sale was turned away: waiting would be forever.
     const refused = await c.query(
-      `SELECT 1 FROM sync_event WHERE device_id = $1 AND entity_id = $2 AND type = 'sale.created' AND outcome = 'rejected'`, [p.deviceId, ev.saleId]);
+      `SELECT 1 FROM sync_event WHERE device_id = $1 AND entity_id = $2 AND type = 'sale.created' AND outcome = 'rejected'`, [p.deviceId, saleId]);
     if (refused.rowCount) throw new Reject('sale_rejected');
     throw new Defer();
   }
   if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');
+  return sale;
+}
+
+/** Only a paid sale has a receipt to print again. The audit entry is the trail a manager reads. */
+async function applyReprint(c: pg.PoolClient, p: DevicePrincipal, ev: PrintReprinted): Promise<void> {
+  const sale = await saleOf(c, p, ev.saleId);
+  if (sale.status !== 'paid' && sale.status !== 'refunded') throw new Reject('not_paid');
+  const who = await c.query(
+    `SELECT 1 FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id
+      WHERE u.id = $1 AND uo.outlet_id = $2 AND u.role IN ('cashier', 'waiter')`, [ev.reprintedBy, p.outletId]);
+  if (!who.rowCount) throw new Reject('unknown_user');
+  await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: ev.reprintedBy, action: 'sale.reprinted', entity: 'sale', entityId: ev.saleId, detail: { receiptNo: sale.receipt_no, at: ev.at, deviceId: p.deviceId } });
+}
+
+async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTaken): Promise<void> {
+  const sale = await saleOf(c, p, ev.saleId);
   if (sale.status === 'void') throw new Reject('sale_void');
   if (sale.status !== 'open') throw new Reject('already_paid');
 

@@ -56,7 +56,18 @@ export const PaymentTaken = z.object({
     .min(1),
 });
 
-export const OutboxEvent = z.discriminatedUnion('type', [SaleCreated, PaymentTaken]);
+// A copy of a paid receipt was printed again. Reprints are a classic way to hide a cash sale or
+// to hand out duplicate bills, so each one is recorded with who and when.
+export const PrintReprinted = z.object({
+  type: z.literal('print.reprinted'),
+  schemaVersion: z.literal(EVENT_SCHEMA_VERSION),
+  saleId: uuid,
+  reprintedBy: uuid,
+  at: z.string().datetime({ offset: true }),
+});
+
+export const OutboxEvent = z.discriminatedUnion('type', [SaleCreated, PaymentTaken, PrintReprinted]);
 export type SaleCreated = z.infer<typeof SaleCreated>;
 export type PaymentTaken = z.infer<typeof PaymentTaken>;
+export type PrintReprinted = z.infer<typeof PrintReprinted>;
 export type OutboxEvent = z.infer<typeof OutboxEvent>;

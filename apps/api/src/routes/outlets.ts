@@ -18,6 +18,11 @@ const gstBody = z.object({
   enabled: z.boolean(),
   gstin: z.string().regex(GSTIN).nullable().default(null),
 }).strict().refine((b) => !b.enabled || b.gstin !== null, { message: 'GSTIN required to enable GST' });
+// Receipt header and footer. Printable text only: no control characters (they would reach the printer).
+const receiptInfoBody = z.object({
+  address: z.string().trim().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/).nullable(),
+  fssaiNo: z.string().regex(/^[0-9]{14}$/).nullable(),
+}).strict();
 const menuQuery = z.object({ channel: channel.default('counter') }).strict();
 
 const bad = (reply: FastifyReply) => reply.code(400).send({ error: 'invalid request' });
@@ -51,6 +56,19 @@ export const outletRoutes: FastifyPluginAsync = async (app) => {
     await withTenant(p.tenantId, async (c) => {
       await c.query('UPDATE outlet SET gst_enabled = $2, gstin = $3 WHERE id = $1', [ps.data.id, b.data.enabled, b.data.gstin]);
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'outlet.gst', entity: 'outlet', entityId: ps.data.id, detail: b.data });
+    });
+    return { ok: true };
+  });
+
+  app.put('/outlets/:id/receipt-info', { config: cfg }, async (req, reply) => {
+    const ps = outletParams.safeParse(req.params);
+    const b = receiptInfoBody.safeParse(req.body);
+    if (!ps.success || !b.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);
+    await withTenant(p.tenantId, async (c) => {
+      await c.query('UPDATE outlet SET address = $2, fssai_no = $3 WHERE id = $1', [ps.data.id, b.data.address, b.data.fssaiNo]);
+      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'outlet.receipt_info', entity: 'outlet', entityId: ps.data.id, detail: b.data });
     });
     return { ok: true };
   });

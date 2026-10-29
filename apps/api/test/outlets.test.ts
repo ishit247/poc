@@ -141,6 +141,31 @@ test('GST provision: enabling needs a well-formed GSTIN; disabling charges 0%; D
   }
 });
 
+test('receipt info (address, FSSAI): validated, scoped to the manager\'s outlet, audited, pulled', async () => {
+  const app = buildApp();
+  const t1 = await token(app, A, 'a1@example.test');
+  const t2 = await token(app, A, 'a2@example.test');
+  const o2 = await placeOf(A, 'a2@example.test');
+  const put = (tok: string, body: unknown) => send(app, 'PUT', `/outlets/${o2.outletId}/receipt-info`, tok, body);
+  const row = () => withTenant(A, async (c) => (await c.query('SELECT address, fssai_no FROM outlet WHERE id = $1', [o2.outletId])).rows[0]);
+  try {
+    for (const body of [
+      {}, { address: 'x' }, { address: '', fssaiNo: null }, { address: 'x'.repeat(201), fssaiNo: null }, { address: 'a\nb', fssaiNo: null },
+      { address: 'x\u0007', fssaiNo: null }, { address: 'x', fssaiNo: '123' }, { address: 'x', fssaiNo: '1151603400079a' }, { address: 'x', fssaiNo: null, extra: 1 },
+    ]) assert.equal((await put(t2, body)).statusCode, 400, JSON.stringify(body));
+    assert.equal((await put(t1, { address: 'hijack', fssaiNo: null })).statusCode, 404, 'another outlet\'s manager');
+    assert.deepEqual(await row(), { address: null, fssai_no: null });
+
+    assert.equal((await put(t2, { address: '  7 Mill Rd, Pune  ', fssaiNo: '11516034000799' })).statusCode, 200);
+    assert.deepEqual(await row(), { address: '7 Mill Rd, Pune', fssai_no: '11516034000799' }, 'trimmed');
+    const audited = await withTenant(A, async (c) => (await c.query("SELECT count(*)::int n FROM audit WHERE action = 'outlet.receipt_info' AND entity_id = $1", [o2.outletId])).rows[0].n);
+    assert.ok(audited >= 1);
+    await assert.rejects(withTenant(A, (c) => c.query("UPDATE outlet SET fssai_no = 'abc' WHERE id = $1", [o2.outletId])), /fssai_no_check|check constraint/);
+  } finally {
+    await put(t2, { address: null, fssaiNo: null });
+  }
+});
+
 test('HSN code on items: validated, stored, returned and pulled', async () => {
   const app = buildApp();
   const t = await token(app, A, 'a1@example.test');

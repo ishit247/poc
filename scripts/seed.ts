@@ -50,6 +50,11 @@ for (const t of Object.values(SEED)) {
     // (checksum not verified); A2 is not registered, so it must charge 0%.
     const gstin = { a1: '27ABCDE1234F1Z5', b1: '29PQRSX5678K1Z2' }[`${t.key}${i}`];
     if (gstin) await client.query('UPDATE outlet SET gst_enabled = true, gstin = $2 WHERE id = $1', [outletId, gstin]);
+    // Receipt header/footer details (dev values). The second A outlet has neither, so a receipt without them is exercised.
+    if (`${t.key}${i}` !== 'a2') {
+      await client.query('UPDATE outlet SET address = $2, fssai_no = $3 WHERE id = $1',
+        [outletId, `${o}, 12 Station Road, Pune 411001`, t.key === 'a' ? '11516034000797' : '11516034000798']);
+    }
     const counters = await client.query(
       "INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, 'C1'), ($1, $2, 'C2') RETURNING id", [t.id, outletId]);
     counterIds.push(counters.rows.map((r: { id: string }) => r.id));

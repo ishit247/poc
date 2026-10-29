@@ -108,9 +108,43 @@ const MUTANTS = [
     ['tablet-deletes-before-answer', "const r = await fetch('/api/sync/push', {", "await db.outbox.clear();\n    const r = await fetch('/api/sync/push', {"],
     ['tablet-ignores-http-error', "if (!r.ok) throw new Error(`push failed: ${r.status}`);", ''],
   ].map(([id, from, to]) => M(id, 'apps/counter/src/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'] })),
+  // --- phase 5: receipts and reprints
+  ...[
+    ['receipt-odd-paisa-lost', 'cgstPaise: tax - Math.floor(tax / 2)', 'cgstPaise: Math.floor(tax / 2)'],
+    ['receipt-tax-per-line-not-per-rate', 'byRate.set(l.gstRateBp, (byRate.get(l.gstRateBp) ?? 0) + l.taxPaise)', 'byRate.set(l.gstRateBp, l.taxPaise)'],
+    ['receipt-always-tax-invoice', "centered(v.gstEnabled ? 'Tax Invoice' : 'Bill of Supply');", "centered('Tax Invoice');"],
+    ['receipt-gstin-when-not-registered', 'if (v.gstEnabled && v.gstin) centered', 'if (v.gstin) centered'],
+    ['receipt-no-reprint-mark', "if (v.reprint) centered('*** RE-PRINT ***');", ''],
+    ['receipt-round-off-sign', "v.roundOffPaise < 0 ? '-' : '+'", "'+'"],
+    ['receipt-long-word-dropped', 'out.push(line + word.slice(0, room));', 'out.push(line);'],
+    ['receipt-fssai-missing', "if (v.fssaiNo) out.push(center(`FSSAI: ${v.fssaiNo}`, width));", ''],
+    ['receipt-words-crore', "name === 'Crore' ? wholeInWords(q) : below1000(q)", 'below1000(q)'],
+    ['receipt-words-paise', "return rupees === 0 ? `${below1000(ps)} Paise Only` : `${r} and ${below1000(ps)} Paise Only`;", 'return `${r} Only`;'],
+    ['receipt-timezone-ignored', 'timeZone, day:', "timeZone: 'UTC', day:"],
+  ].map(([id, from, to]) => M(id, 'packages/shared/src/receipt-text.ts', from, to, { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/receipt-text.test.ts'] })),
+  ...[
+    ['reprint-unpaid-ok', "if (sale.status !== 'paid' && sale.status !== 'refunded') throw new Reject('not_paid');", ''],
+    ['reprint-other-device', "if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');\n  return sale;", 'return sale;'],
+    ['reprint-no-audit-trail', "action: 'sale.reprinted'", "action: 'sale.noop'"],
+    ['reprint-unknown-user-ok', "[ev.reprintedBy, p.outletId]);\n  if (!who.rowCount) throw new Reject('unknown_user');", '[ev.reprintedBy, p.outletId]);'],
+    ['reprint-type-not-accepted', "type !== 'payment.taken' && type !== 'print.reprinted'", "type !== 'payment.taken'"],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('sync-push.test.ts'))),
+  ...[
+    ['receipt-info-scope', "const b = receiptInfoBody.safeParse(req.body);\n    if (!ps.success || !b.success) return bad(reply);\n    const p = req.principal!;\n    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);", "const b = receiptInfoBody.safeParse(req.body);\n    if (!ps.success || !b.success) return bad(reply);\n    const p = req.principal!;\n    if (p.kind !== 'user') return notFound(reply);"],
+    ['receipt-info-control-chars', '.regex(/^[^\\u0000-\\u001f\\u007f]+$/)', ''],
+    ['receipt-info-fssai-format', 'fssaiNo: z.string().regex(/^[0-9]{14}$/).nullable()', 'fssaiNo: z.string().nullable()'],
+    ['receipt-info-not-trimmed', 'address: z.string().trim().min(1)', 'address: z.string().min(1)'],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/outlets.ts', from, to, API_TESTS('outlets.test.ts'))),
+  M('receipt-info-fssai-db-check', 'db/migrations/0003_menu.sql', "CHECK (fssai_no IS NULL OR fssai_no ~ '^[0-9]{14}$')", '', API_TESTS('outlets.test.ts')),
+  M('receipt-info-not-pulled', SYNC, ", 'address', address, 'fssaiNo', fssai_no)", ')', API_TESTS('sync-push.test.ts')),
+  ...[
+    ['tablet-waiter-reprints', "if (args.actor.role !== 'cashier') throw new Error('only a cashier reprints a receipt');", ''],
+    ['tablet-reprint-unpaid', "if (!sale || sale.status !== 'paid') throw new Error('only a paid sale has a receipt to reprint');", ''],
+    ['tablet-recent-includes-open', "where('status').equals('paid')", "where('status').anyOf('paid', 'open')"],
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/receipt.test.ts'] })),
 ];
 
-const run = (cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
+const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
 const want = new Set(process.argv.slice(2));
 const todo = MUTANTS.filter((m) => !want.size || want.has(m.id));
 let original = null;

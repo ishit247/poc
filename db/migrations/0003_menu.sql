@@ -137,6 +137,9 @@ ALTER TABLE outlet
   ADD COLUMN menu_mode   text NOT NULL DEFAULT 'all' CHECK (menu_mode IN ('all', 'listed')),
   -- GST provision (Q3): a disabled outlet charges no GST whatever the item rate; enabling needs a GSTIN.
   ADD COLUMN gst_enabled boolean NOT NULL DEFAULT false,
+  -- Printed on the receipt header and footer (phase 5). Single line each is not required for the address.
+  ADD COLUMN address     text CHECK (address IS NULL OR length(address) BETWEEN 1 AND 200),
+  ADD COLUMN fssai_no    text CHECK (fssai_no IS NULL OR fssai_no ~ '^[0-9]{14}$'),
   ADD COLUMN version     bigint NOT NULL DEFAULT 0,
   ADD COLUMN updated_at  timestamptz NOT NULL DEFAULT now(),
   ADD CONSTRAINT outlet_gstin_format CHECK (gstin IS NULL OR gstin ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'),

@@ -285,6 +285,43 @@ test('one tablet cannot pay another tablet\'s sale', async () => {
   assert.equal((await t1.saleRow(s.saleId)).status, 'open');
 });
 
+test('the tablet receives the outlet\'s address and FSSAI number in pull', async () => {
+  const app = buildApp();
+  const t = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');
+  let cursor = 0, outlet: any;
+  for (let page = 0; page < 50 && !outlet; page++) { // the outlet row may not be on the first page
+    const j = (await app.inject({ method: 'GET', url: `/sync/pull?cursor=${cursor}`, headers: { authorization: `Device ${t.cred}` } })).json();
+    outlet = j.changes.find((c: any) => c.type === 'outlet');
+    cursor = j.cursor;
+    if (!j.hasMore) break;
+  }
+  assert.ok(outlet, 'the outlet row is in the pull');
+  assert.equal(outlet.data.address, 'School 1 Canteen, 12 Station Road, Pune 411001');
+  assert.equal(outlet.data.fssaiNo, '11516034000797');
+});
+
+test('a reprint of a paid receipt is recorded with who and when; of anything else it is refused or waits', async () => {
+  const app = buildApp();
+  const t1 = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');
+  const t2 = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');
+  const reprint = (t: Tablet, saleId: string, by = t.cashierId) =>
+    t.event({ type: 'print.reprinted', schemaVersion: 1, saleId, reprintedBy: by, at: new Date().toISOString() });
+  const s = t1.sale();
+  await t1.push([s.created]);
+  assert.equal((await t1.push([reprint(t1, s.saleId)]))[0]!.reason, 'not_paid', 'an unpaid order has no receipt');
+  await t1.push([s.paid]);
+  assert.deepEqual(statuses(await t1.push([reprint(t1, s.saleId)])), ['applied']);
+  const trail = () => withTenant(A, async (c) => (await c.query(
+    "SELECT actor_id, detail->>'receiptNo' receipt FROM audit WHERE action = 'sale.reprinted' AND entity_id = $1", [s.saleId])).rows);
+  assert.deepEqual(await trail(), [{ actor_id: t1.cashierId, receipt: 'C1-20260301-1' }]);
+  const again = reprint(t1, s.saleId);
+  await t1.push([again]); await t1.push([again]); // a retry does not add a second trail entry
+  assert.equal((await trail()).length, 2);
+  assert.equal((await t1.push([reprint(t1, s.saleId, crypto.randomUUID())]))[0]!.reason, 'unknown_user');
+  assert.equal((await t2.push([reprint(t2, s.saleId)]))[0]!.reason, 'wrong_device');
+  assert.equal((await t1.push([reprint(t1, crypto.randomUUID())]))[0]!.status, 'deferred');
+});
+
 test('an order saved before midnight and paid after takes the payment\'s date for its receipt', async () => {
   const app = buildApp();
   const t = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');

@@ -4,6 +4,7 @@ export * from './pin.ts';
 export * from './cart.ts';
 export * from './payment.ts';
 export * from './receipt.ts';
+export * from './receipt-text.ts';
 export * from './events.ts';
 export * from './pin-offline.ts';
 export * from './settings.ts';

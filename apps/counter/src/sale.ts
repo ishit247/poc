@@ -67,6 +67,22 @@ export async function payOrder(args: { device: DeviceInfo; actor: Actor; saleId:
   });
 }
 
+/** Paid receipts, newest first, for reprinting. */
+export async function recentReceipts(limit = 20): Promise<LocalSale[]> {
+  const paid = await db.sales.where('status').equals('paid').toArray();
+  return paid.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
+}
+
+/** A cashier prints a paid receipt again. The event is the audit trail; it is queued with the same care as a sale. */
+export async function recordReprint(args: { actor: Actor; saleId: string; now?: Date }): Promise<void> {
+  if (args.actor.role !== 'cashier') throw new Error('only a cashier reprints a receipt');
+  await db.transaction('rw', db.sales, db.outbox, async () => {
+    const sale = await db.sales.get(args.saleId);
+    if (!sale || sale.status !== 'paid') throw new Error('only a paid sale has a receipt to reprint');
+    await queue({ type: 'print.reprinted', schemaVersion: EVENT_SCHEMA_VERSION, saleId: sale.id, reprintedBy: args.actor.id, at: (args.now ?? new Date()).toISOString() });
+  });
+}
+
 /** Orders this person may see: a cashier sees every open order here, a waiter only their own. */
 export async function visibleOpenOrders(actor: Actor): Promise<LocalSale[]> {
   const open = await db.sales.where('status').equals('open').toArray();

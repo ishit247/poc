@@ -29,7 +29,7 @@ const PULL_SQL = `
     FROM outlet_item WHERE version > $1 AND outlet_id = $2
   UNION ALL
   SELECT 'outlet', id, version, false,
-         jsonb_build_object('menuMode', menu_mode, 'gstEnabled', gst_enabled, 'gstin', gstin)
+         jsonb_build_object('menuMode', menu_mode, 'gstEnabled', gst_enabled, 'gstin', gstin, 'address', address, 'fssaiNo', fssai_no)
     FROM outlet WHERE version > $1 AND id = $2
   UNION ALL
   SELECT 'outlet_price', id, version, deleted_at IS NOT NULL,
