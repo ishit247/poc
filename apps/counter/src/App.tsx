@@ -1,20 +1,122 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { liveQuery } from 'dexie';
+import { db, getMeta, type DeviceInfo } from './db.ts';
+import { enrol, pull } from './sync.ts';
+import { loadMenu, type MenuView } from './menu.ts';
+import type { Actor } from './sale.ts';
+import { PinScreen } from './PinScreen.tsx';
+import { Sell } from './Sell.tsx';
+import { Orders } from './Orders.tsx';
 
-// Shell only. The offline sale screen, local DB and outbox are phase 3.
+function useLive<T>(query: () => Promise<T>, initial: T): T {
+  const [v, setV] = useState(initial);
+  useEffect(() => {
+    const sub = liveQuery(query).subscribe({ next: setV, error: (e) => console.error(e) });
+    return () => sub.unsubscribe();
+  }, []);
+  return v;
+}
+
 export function App() {
-  const [api, setApi] = useState<'checking' | 'up' | 'down'>('checking');
+  const [device, setDevice] = useState<DeviceInfo | null | undefined>(undefined);
+  useEffect(() => {
+    void navigator.storage?.persist?.(); // ask the browser not to evict the sales database
+    void getMeta('device').then((d) => setDevice(d ?? null));
+  }, []);
+  if (device === undefined) return <main className="center">Loading…</main>;
+  if (!device) return <EnrolScreen onDone={setDevice} />;
+  return <Counter device={device} />;
+}
+
+function EnrolScreen({ onDone }: { onDone: (d: DeviceInfo) => void }) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const d = await enrol(code);
+      await pull(d);
+      onDone(d);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not enrol.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main className="center">
+      <h1>Set up this counter</h1>
+      <p>Ask your manager for an enrolment code and type it here. This tablet must be online for this step.</p>
+      <input data-testid="enrol-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Enrolment code" autoCapitalize="off" autoComplete="off" />
+      <button data-testid="enrol-go" className="primary" disabled={busy || !code.trim()} onClick={go}>{busy ? 'Setting up…' : 'Set up'}</button>
+      {error && <p className="error" role="alert">{error}</p>}
+    </main>
+  );
+}
+
+function Counter({ device }: { device: DeviceInfo }) {
+  const [menu, setMenu] = useState<MenuView | null>(null);
+  const [actor, setActor] = useState<Actor | null>(null);
+  const [tab, setTab] = useState<'sell' | 'orders'>('sell');
+  const [online, setOnline] = useState(navigator.onLine);
+  const [syncError, setSyncError] = useState('');
+  const pending = useLive(() => db.outbox.count(), 0);
+  const lastPull = useLive(async () => (await getMeta('lastPull')) ?? '', '');
+
+  const refresh = useCallback(async () => setMenu(await loadMenu()), []);
+  const sync = useCallback(async () => {
+    try {
+      await pull(device);
+      setSyncError('');
+      setOnline(true);
+    } catch {
+      setSyncError('Could not reach the server.');
+      setOnline(false);
+    }
+    await refresh();
+  }, [device, refresh]);
 
   useEffect(() => {
-    fetch('/api/health')
-      .then((r) => (r.ok ? 'up' : 'down'))
-      .catch(() => 'down')
-      .then((s) => setApi(s as 'up' | 'down'));
-  }, []);
+    void refresh();
+    void sync();
+    const on = () => { setOnline(true); void sync(); };
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    const timer = setInterval(() => { if (navigator.onLine) void sync(); }, 60_000);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); clearInterval(timer); };
+  }, [sync, refresh]);
 
+  if (!menu) return <main className="center">Loading…</main>;
   return (
-    <main style={{ fontFamily: 'system-ui', padding: 24 }}>
-      <h1>Cafeteria counter</h1>
-      <p>Server: {api}</p>
-    </main>
+    <div className="shell">
+      <header>
+        <strong>{device.outletName}</strong> <span className="muted">· counter {device.counterCode}</span>
+        <span className="spacer" />
+        <span data-testid="sync-status" className={online ? 'ok' : 'warn'}>{online ? '● Online' : '● Offline'}</span>
+        <span data-testid="pending" className="muted" title="Sales waiting to reach the server">{pending} waiting</span>
+        <button data-testid="sync-now" onClick={sync}>Sync</button>
+        {actor && (
+          <>
+            <span data-testid="who">{actor.name}</span>
+            <button data-testid="sign-out" onClick={() => setActor(null)}>Sign out</button>
+          </>
+        )}
+      </header>
+      {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
+      {!actor ? (
+        <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
+      ) : (
+        <>
+          <nav>
+            <button data-testid="tab-sell" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
+            <button data-testid="tab-orders" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Open orders</button>
+          </nav>
+          {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : <Orders device={device} actor={actor} />}
+        </>
+      )}
+    </div>
   );
 }

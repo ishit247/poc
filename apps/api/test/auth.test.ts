@@ -121,7 +121,8 @@ test('enrolment: manager creates code, device redeems once, credential works, re
 
   const who = await app.inject({ method: 'GET', url: '/device/whoami', headers: { authorization: `Device ${credential}` } });
   assert.equal(who.statusCode, 200);
-  assert.deepEqual(who.json(), { deviceId, outletId: outlet_id, counterId: counter_id });
+  assert.deepEqual(who.json(), { deviceId, outletId: outlet_id, counterId: counter_id, counterCode: who.json().counterCode, outletName: who.json().outletName, timezone: 'Asia/Kolkata' });
+  assert.match(who.json().counterCode, /^C[12]$/);
 
   // Stored only as a hash.
   const stored = await withTenant(A, (c) => c.query('SELECT credential_hash FROM device WHERE id = $1', [deviceId]));

@@ -209,8 +209,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return done ? { ok: true } : notFound(reply);
   });
 
+  // The tablet caches this at enrolment: the counter code prefixes receipt numbers, the timezone
+  // decides the business date. Both are read from the device's own outlet and counter.
   app.get('/device/whoami', { config: { scope: 'outlet', permission: 'device' } }, async (req) => {
     const p = req.principal!;
-    return p.kind === 'device' ? { deviceId: p.deviceId, outletId: p.outletId, counterId: p.counterId } : {};
+    if (p.kind !== 'device') return {};
+    const row = (await withTenant(p.tenantId, (c) => c.query(
+      `SELECT c.code AS "counterCode", o.name AS "outletName", o.timezone
+         FROM counter c JOIN outlet o ON o.id = c.outlet_id WHERE c.id = $1 AND o.id = $2`, [p.counterId, p.outletId]))).rows[0];
+    return { deviceId: p.deviceId, outletId: p.outletId, counterId: p.counterId, ...row };
   });
 };

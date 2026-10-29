@@ -51,5 +51,6 @@ export function totals(cart: Cart, s: TotalSettings = DEFAULT_SETTINGS): CartTot
 }
 
 function checkQty(qty: number, cap: number): void {
-  if (!Number.isSafeInteger(qty) || qty < 1 || qty > cap) throw new RangeError(`bad quantity: ${qty} (limit ${cap})`);
+  if (!Number.isSafeInteger(qty) || qty < 1) throw new RangeError(`bad quantity: ${qty}`);
+  if (qty > cap) throw new RangeError(`At most ${cap} of one item per order.`);
 }

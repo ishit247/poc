@@ -92,7 +92,7 @@ test('events: valid payloads parse, wrong version or shape does not', () => {
   assert.ok(!OutboxEvent.safeParse({ ...sale, totalPaise: 10.5 }).success);
   assert.ok(!OutboxEvent.safeParse({ ...sale, totalPaise: 1051 }).success); // does not add up
   assert.ok(OutboxEvent.safeParse({ ...sale, roundOffPaise: -50, totalPaise: 1000 }).success);
-  const pay = { type: 'payment.taken', schemaVersion: 1, saleId: id, receiptNo: 'C1-20261029-1', receiptSeq: 1,
+  const pay = { type: 'payment.taken', schemaVersion: 1, saleId: id, businessDate: '2026-10-29', receiptNo: 'C1-20261029-1', receiptSeq: 1,
     payments: [{ method: 'upi', amountPaise: 1050, tenderedPaise: null, changePaise: 0, upiRef: null }] };
   assert.ok(OutboxEvent.safeParse(pay).success);
   assert.ok(!OutboxEvent.safeParse({ ...pay, payments: [] }).success);

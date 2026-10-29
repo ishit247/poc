@@ -38,6 +38,9 @@ export const PaymentTaken = z.object({
   type: z.literal('payment.taken'),
   schemaVersion: z.literal(EVENT_SCHEMA_VERSION),
   saleId: uuid,
+  // The date the receipt number was issued on. The sale takes this as its business date at payment,
+  // so (device, business date, receipt seq) stays unique even if the order was saved the day before.
+  businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   receiptNo: z.string().min(1),
   receiptSeq: z.number().int().positive(),
   payments: z

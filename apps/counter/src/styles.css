@@ -1,0 +1,60 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; font-size: 18px; color: #1b1b1b; background: #f4f5f3; touch-action: manipulation; }
+button, input { font: inherit; }
+button { min-height: 48px; min-width: 48px; padding: 8px 14px; border: 1px solid #b9beb6; border-radius: 8px; background: #fff; cursor: pointer; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: #1f4e3d; color: #fff; border-color: #1f4e3d; }
+button.active { background: #dfeee6; border-color: #1f4e3d; font-weight: 600; }
+input { min-height: 48px; padding: 6px 10px; border: 1px solid #b9beb6; border-radius: 8px; width: 100%; max-width: 360px; }
+.muted { color: #666; }
+.error { color: #a31515; }
+.ok { color: #1a7f37; }
+.warn { color: #b25e00; font-weight: 600; }
+.center { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px; text-align: center; }
+.shell { display: flex; flex-direction: column; height: 100vh; }
+header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: #fff; border-bottom: 1px solid #d5d8d2; }
+header button { min-height: 40px; }
+.spacer { flex: 1; }
+.banner { background: #fff4e0; padding: 6px 14px; border-bottom: 1px solid #ecd9b0; }
+nav { display: flex; gap: 8px; padding: 8px 14px; }
+.tiles { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.tile { width: 200px; min-height: 90px; display: flex; flex-direction: column; justify-content: center; }
+.tile small { color: #666; }
+.dots { font-size: 32px; letter-spacing: 6px; min-height: 44px; }
+.pad { display: grid; grid-template-columns: repeat(3, 84px); gap: 10px; }
+.pad button { min-height: 64px; font-size: 24px; }
+
+.sell { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 340px; gap: 12px; padding: 0 14px 12px; }
+.menu { min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.cats { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 8px; }
+.grid { overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-content: start; }
+.item { min-height: 84px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; }
+.item small { color: #555; }
+.cart { background: #fff; border: 1px solid #d5d8d2; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; min-height: 0; }
+.cart h2 { margin: 0 0 6px; font-size: 20px; }
+.cart ul { list-style: none; margin: 0; padding: 0; flex: 1; overflow: auto; }
+.cart li { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid #eee; }
+.qty { display: inline-flex; align-items: center; gap: 6px; }
+.qty button { min-height: 40px; min-width: 40px; padding: 0; }
+.amt { min-width: 64px; text-align: right; }
+.sums { display: grid; grid-template-columns: 1fr auto; margin: 8px 0; gap: 2px 8px; }
+.sums dt, .sums dd { margin: 0; }
+.sums dd { text-align: right; }
+.sums .total { font-weight: 700; font-size: 22px; }
+.actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+.overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.dialog { background: #fff; border-radius: 12px; padding: 20px; width: 460px; max-width: 94vw; display: flex; flex-direction: column; gap: 12px; }
+.dialog h2 { margin: 0; }
+.dialog label { display: flex; flex-direction: column; gap: 4px; }
+.modes { display: flex; gap: 8px; }
+.modes button { flex: 1; }
+.change { font-size: 22px; font-weight: 600; margin: 0; }
+
+.receipt { background: #fff; border: 1px dashed #999; border-radius: 6px; padding: 16px 20px; width: 360px; text-align: left; }
+.receipt h2 { margin: 0 0 6px; text-align: center; }
+.receipt ul { list-style: none; padding: 0; margin: 8px 0; }
+.receipt li { display: flex; justify-content: space-between; }
+.orders { padding: 0 14px; overflow: auto; }
+.orders ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.orders li { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #fff; border: 1px solid #d5d8d2; border-radius: 10px; padding: 10px 14px; }

@@ -1,10 +1,10 @@
 <meta charset="utf-8">
 
-# Phase 3 progress: step 1 done, steps 2-4 remain
+# Phase 3 progress: steps 1-4 done
 
 Read `CLAUDE.md`, then `docs/handover-phase3.md` (state, decisions, gotchas), then this file.
 Everything below is committed. Baseline on a fresh database (`pnpm run up:fresh`):
-API 61, shared 19, DB 14 (`node --test db/test/*.test.mjs`). 38/38 mutants caught
+API 64, shared 33, DB 14 (`node --test db/test/*.test.mjs`), counter 11. 38/38 mutants caught
 (`node scripts/mutation-checks.mjs`, about 30 minutes; do not kill it mid-run, it
 leaves a guard removed in the source).
 
@@ -43,22 +43,41 @@ leaves a guard removed in the source).
   round-off mutants survive as equivalent (the CHECK ties round-off to total/tax/subtotal,
   which the guard already freezes). No manager UI for settings exists yet (API only).
 
-## Remaining in phase 3
+## Done (steps 3 and 4, counter app and its verification)
 
-2. **Shared logic** in `packages/shared`: cart (uses `resolveMenu` and `exclusiveLine`),
-   payment validation (cash, UPI, split; change on cash only), receipt numbering
-   `<counter>-<yyyymmdd>-<n>` assigned at payment, event schemas for `sale.created` and
-   `payment.taken` with a schema version, and the offline PIN verifier with local
-   lockout (injected clock). Offline verifier: scrypt in the browser via
-   `@noble/hashes`, same verifier format as the server (`scrypt$N$r$p$salt$hash`).
-3. **Counter app** (`apps/counter`, currently a shell): PWA and service worker,
-   persistent-storage request, Dexie local DB (menu snapshot, users, cursor, outbox,
-   receipt counter, open orders), PIN pad, sell, pay, sync bar. The sale, its outbox
-   entry and the receipt counter are written in ONE IndexedDB transaction. Pull works;
-   push stays stubbed (phase 4).
-4. **Verification**: real-browser check at 1024x768 (Playwright), including offline and
-   online toggling and killing the tab mid-sale; mutation-check each new guard;
-   report offline storage and printing as unverified on hardware.
+- `apps/counter/src`: `db.ts` (Dexie: meta, entities, pinState, sales, outbox), `sync.ts`
+  (enrol, pull; a page and its cursor commit in one transaction), `menu.ts` (resolveMenu over
+  pulled rows), `sale.ts` (sale + outbox events + receipt counter in ONE transaction; cashier
+  only takes payment; waiter sees own open orders), `auth.ts` (offline PIN; failure written
+  BEFORE the slow check), UI (`App`, `PinScreen`, `Sell`, `PayDialog`, `Receipt`, `Orders`),
+  `public/sw.js` (app-shell cache, production build only), `manifest.webmanifest`.
+- `GET /device/whoami` now also returns `counterCode`, `outletName`, `timezone` (cached at enrolment).
+- `payment.taken` carries `businessDate`: an order saved before midnight and paid after takes
+  the receipt's date as its business date, so (device, date, seq) stays unique. The server's
+  `sale_guard` already allows `business_date` to change on open->paid; phase 4 ingest must set it.
+- Tests: counter 11 (`pnpm --dir apps/counter run test`, fake-indexeddb: forced mid-sale
+  failure leaves nothing, payOrder atomicity, pull atomicity, scope, PIN order of writes).
+  12 of 12 counter mutants caught (after adding two tests for gaps the first run found).
+- Real browser (Edge via playwright-core, 1024x768, production build, vite preview): 34/34
+  checks. Covers enrol, offline cold reload from the service worker, offline PIN and lockout
+  (survives reload), waiter vs cashier, split and cash payment, cap and round-off from manager
+  settings, receipts 1..N, killing the tab mid-payment 10 times (invariants held), back online.
+  The script lives only in the session scratchpad; it is not in the repo.
+
+## Unverified (say so; do not claim otherwise)
+
+- Offline storage durability and `navigator.storage.persist()` outcome on real tablets
+  (headless Edge only). Printing (phase 5). Android Chrome. The service worker was exercised
+  only in the production build; no icons in the manifest, so "install" prompts may not appear.
+- The Pay-button hiding and the settings UI are covered by the browser run only, not mutated.
+- No manager UI for settings; no push (phase 4); the server does not yet enforce `maxLineQty`
+  or recompute totals from tenant settings on ingest.
+
+## Remaining
+
+Phase 3 is complete apart from the above. Next is phase 4 (sync push and ingest): read
+PLAN.md section 19. Phase 4 must also: accept `sale.created` and `payment.taken`, set
+`sale.business_date` from `payment.taken`, enforce the cap and recompute totals, add `sync_event`.
 
 Decided this session (do not re-ask): Q9 days offline = 7, as a per-tenant setting
 stored now and enforced in phase 4; tablets assumed Android Chrome or Windows
