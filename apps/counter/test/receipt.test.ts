@@ -6,6 +6,7 @@ import { addItem, paise, renderReceipt, RECEIPT_WIDTH, DEFAULT_SETTINGS, OutboxE
 import { db, type DeviceInfo } from '../src/db.ts';
 import { createSale, recentReceipts, recordReprint, type Actor } from '../src/sale.ts';
 import { toReceiptView, type OutletInfo } from '../src/receipt.ts';
+import { seedShift } from './helpers.ts';
 
 const device: DeviceInfo = { credential: 'x.y.z', deviceId: 'd', tenantId: 't', outletId: 'o', counterId: 'c', counterCode: 'C1', outletName: 'Test Canteen', timezone: 'Asia/Kolkata' };
 const cashier: Actor = { id: '11111111-1111-4111-8111-111111111111', name: 'Cash', role: 'cashier' };
@@ -15,7 +16,7 @@ const cash = (n: number): Tender[] => [{ method: 'cash', amountPaise: paise(n), 
 const outlet: OutletInfo = { gstEnabled: true, gstin: '27ABCDE1234F1Z5', address: '1 Test Road', fssaiNo: '11516034000797' };
 const base = { device, cart: addItem([], tea, 2), settings: DEFAULT_SETTINGS, menuVersion: 1 };
 
-beforeEach(async () => { await Promise.all([db.sales.clear(), db.outbox.clear(), db.meta.clear()]); });
+beforeEach(async () => { await Promise.all([db.sales.clear(), db.outbox.clear(), db.meta.clear()]); await seedShift(cashier); });
 
 test('a paid sale becomes a receipt that fits the paper; an unpaid order has none', async () => {
   const paid = await createSale({ ...base, actor: cashier, tenders: cash(2100) });

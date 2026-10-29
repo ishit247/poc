@@ -4,7 +4,9 @@
 import 'fake-indexeddb/auto';
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { addItem, paise, type MenuEntry, type Tender, DEFAULT_SETTINGS } from '@pos/shared';
+import { addItem, paise, renderShiftSlip, type MenuEntry, type Tender, DEFAULT_SETTINGS } from '@pos/shared';
+import { closeShift, openShift } from '../src/shift.ts';
+import { seedShift } from './helpers.ts';
 import { db, type DeviceInfo } from '../src/db.ts';
 import { createSale, payOrder, visibleOpenOrders, businessDate, type Actor } from '../src/sale.ts';
 import { signInWithPin } from '../src/auth.ts';
@@ -22,6 +24,41 @@ const state = async () => ({ sales: await db.sales.count(), outbox: await db.out
 
 beforeEach(async () => {
   await Promise.all([db.sales.clear(), db.outbox.clear(), db.meta.clear(), db.pinState.clear()]);
+  await seedShift(cashier);
+});
+
+test('no open shift: no payment, and nothing is saved or numbered', async () => {
+  await db.shifts.clear();
+  const before = await state();
+  await assert.rejects(createSale({ ...base, actor: cashier, tenders: cash(2100) }), /Open a shift/);
+  assert.deepEqual(await state(), before);
+});
+
+test('only the cashier who owns the open shift takes payment into it', async () => {
+  const other_cashier: Actor = { id: '55555555-5555-4555-8555-555555555555', name: 'Cash2', role: 'cashier' };
+  const open = await createSale({ ...base, actor: waiter });
+  await assert.rejects(payOrder({ ...base, actor: other_cashier, saleId: open.id, tenders: cash(2100) }), /belongs to Cash/);
+  assert.equal((await db.sales.get(open.id))!.status, 'open');
+});
+
+test('a shift: payments carry its id, the slip shows the variance, and a second open is refused', async () => {
+  await db.shifts.clear();
+  const s = await openShift({ actor: cashier, openingCashPaise: 50_000 });
+  await assert.rejects(openShift({ actor: cashier, openingCashPaise: 0 }), /already open/);
+  await assert.rejects(openShift({ actor: waiter, openingCashPaise: 0 }), /Only a cashier/);
+  const paid = await createSale({ ...base, actor: cashier, tenders: cash(2100) });
+  assert.equal(paid.shiftId, s.id);
+  const pay = (await db.outbox.toArray()).map((r) => r.payload).find((p) => p.type === 'payment.taken');
+  assert.equal(pay?.type === 'payment.taken' && pay.shiftId, s.id);
+
+  await assert.rejects(closeShift({ device, actor: waiter, countedCashPaise: 0 }), /belongs to Cash/);
+  const slip = await closeShift({ device, actor: cashier, countedCashPaise: 52_100 }); // 500.00 + 21.00 expected: exactly right
+  assert.equal(slip.variancePaise, 0);
+  assert.equal(slip.cashSalesPaise, 2100);
+  assert.equal(slip.salesCount, 1);
+  assert.ok(renderShiftSlip(slip).every((l) => l.length <= 32));
+  await assert.rejects(closeShift({ device, actor: cashier, countedCashPaise: 0 }), /no open shift/);
+  await assert.rejects(createSale({ ...base, actor: cashier, tenders: cash(2100) }), /Open a shift/);
 });
 
 test('a paid sale writes the sale, both events and the receipt counter together', async () => {

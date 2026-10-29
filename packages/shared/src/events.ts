@@ -38,6 +38,8 @@ export const PaymentTaken = z.object({
   type: z.literal('payment.taken'),
   schemaVersion: z.literal(EVENT_SCHEMA_VERSION),
   saleId: uuid,
+  // The cashier's open shift, whose drawer this money went into. Absent only on events from before shifts existed.
+  shiftId: uuid.optional(),
   // The date the receipt number was issued on. The sale takes this as its business date at payment,
   // so (device, business date, receipt seq) stays unique even if the order was saved the day before.
   businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -66,7 +68,29 @@ export const PrintReprinted = z.object({
   at: z.string().datetime({ offset: true }),
 });
 
-export const OutboxEvent = z.discriminatedUnion('type', [SaleCreated, PaymentTaken, PrintReprinted]);
+// A cashier starts a till session on this device with a counted float.
+export const ShiftOpened = z.object({
+  type: z.literal('shift.opened'),
+  schemaVersion: z.literal(EVENT_SCHEMA_VERSION),
+  shiftId: uuid,
+  userId: uuid,
+  openingCashPaise: paiseInt,
+  at: z.string().datetime({ offset: true }),
+});
+
+// The cashier's blind count of the drawer. Expected cash and variance are the SERVER's to work out
+// from the payments it holds, so the tablet never sends (or shows beforehand) the figure to match.
+export const ShiftClosed = z.object({
+  type: z.literal('shift.closed'),
+  schemaVersion: z.literal(EVENT_SCHEMA_VERSION),
+  shiftId: uuid,
+  countedCashPaise: paiseInt,
+  at: z.string().datetime({ offset: true }),
+});
+
+export const OutboxEvent = z.discriminatedUnion('type', [SaleCreated, PaymentTaken, PrintReprinted, ShiftOpened, ShiftClosed]);
+export type ShiftOpened = z.infer<typeof ShiftOpened>;
+export type ShiftClosed = z.infer<typeof ShiftClosed>;
 export type SaleCreated = z.infer<typeof SaleCreated>;
 export type PaymentTaken = z.infer<typeof PaymentTaken>;
 export type PrintReprinted = z.infer<typeof PrintReprinted>;

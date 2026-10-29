@@ -2,7 +2,7 @@
 // IndexedDB transaction, so there is no state where a receipt number was spent without the
 // sale, or a sale exists that the server will never hear about.
 import { nextReceipt, OutboxEvent, totals, validatePayments, EVENT_SCHEMA_VERSION, paise, type Cart, type Tender, type TradingSettings } from '@pos/shared';
-import { db, getMeta, type DeviceInfo, type LocalSale } from './db.ts';
+import { currentShift, db, getMeta, type DeviceInfo, type LocalSale } from './db.ts';
 
 export interface Actor { id: string; name: string; role: 'cashier' | 'waiter' }
 
@@ -17,18 +17,26 @@ const saleCreated = (s: LocalSale): OutboxEvent => ({
   subtotalPaise: s.subtotalPaise, taxPaise: s.taxPaise, roundOffPaise: s.roundOffPaise, totalPaise: s.totalPaise,
 });
 
-async function queue(event: OutboxEvent): Promise<void> {
+export async function queue(event: OutboxEvent): Promise<void> {
   // parse() is the gate: a malformed event throws here and rolls the whole transaction back.
   await db.outbox.add({ eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), payload: OutboxEvent.parse(event) });
 }
 
-async function takePayment(device: DeviceInfo, sale: LocalSale, tenders: Tender[], today: string): Promise<LocalSale> {
+/** Money goes into the drawer of an open shift, and only its owner may put it there. Call inside the transaction. */
+async function drawerFor(actor: Actor): Promise<string> {
+  const shift = await currentShift();
+  if (!shift) throw new Error('Open a shift before taking payment.');
+  if (shift.userId !== actor.id) throw new Error(`The open shift belongs to ${shift.userName}. Close it before taking payment as someone else.`);
+  return shift.id;
+}
+
+async function takePayment(device: DeviceInfo, sale: LocalSale, tenders: Tender[], today: string, shiftId: string): Promise<LocalSale> {
   const payments = validatePayments(paise(sale.totalPaise), tenders);
   const issued = nextReceipt(device.counterCode, (await getMeta('receiptCounter')) ?? null, today);
   await db.meta.put({ key: 'receiptCounter', value: issued.counter });
   const date = issued.counter.date;
-  await queue({ type: 'payment.taken', schemaVersion: EVENT_SCHEMA_VERSION, saleId: sale.id, businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments });
-  return { ...sale, status: 'paid', businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments };
+  await queue({ type: 'payment.taken', schemaVersion: EVENT_SCHEMA_VERSION, saleId: sale.id, shiftId, businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments });
+  return { ...sale, status: 'paid', shiftId, businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments };
 }
 
 /** Saves a new order; with `tenders` it is paid in the same step (cashier). */
@@ -47,9 +55,10 @@ export async function createSale(args: {
     subtotalPaise: t.subtotal, taxPaise: t.tax, roundOffPaise: t.roundOff, totalPaise: t.total,
     receiptNo: null, receiptSeq: null, payments: [],
   };
-  return db.transaction('rw', db.sales, db.outbox, db.meta, async () => {
+  return db.transaction('rw', db.sales, db.outbox, db.meta, db.shifts, async () => {
+    const shiftId = tenders ? await drawerFor(actor) : null; // checked first: no shift, no sale saved either
     await queue(saleCreated(open));
-    const final = tenders ? await takePayment(device, open, tenders, open.businessDate) : open;
+    const final = tenders ? await takePayment(device, open, tenders, open.businessDate, shiftId!) : open;
     await db.sales.put(final);
     return final;
   });
@@ -58,10 +67,10 @@ export async function createSale(args: {
 /** A cashier pays an order that a waiter (or they) saved earlier. */
 export async function payOrder(args: { device: DeviceInfo; actor: Actor; saleId: string; tenders: Tender[]; now?: Date }): Promise<LocalSale> {
   if (args.actor.role !== 'cashier') throw new Error('only a cashier takes payment');
-  return db.transaction('rw', db.sales, db.outbox, db.meta, async () => {
+  return db.transaction('rw', db.sales, db.outbox, db.meta, db.shifts, async () => {
     const sale = await db.sales.get(args.saleId);
     if (!sale || sale.status !== 'open') throw new Error('that order is not open');
-    const paid = await takePayment(args.device, sale, args.tenders, businessDate(args.device.timezone, args.now ?? new Date()));
+    const paid = await takePayment(args.device, sale, args.tenders, businessDate(args.device.timezone, args.now ?? new Date()), await drawerFor(args.actor));
     await db.sales.put(paid);
     return paid;
   });

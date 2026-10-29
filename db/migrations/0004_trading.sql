@@ -61,8 +61,14 @@ CREATE TABLE shift (
   UNIQUE (tenant_id, id),
   FOREIGN KEY (tenant_id, outlet_id) REFERENCES outlet(tenant_id, id),
   FOREIGN KEY (tenant_id, device_id) REFERENCES device(tenant_id, id),
-  FOREIGN KEY (tenant_id, user_id)   REFERENCES app_user(tenant_id, id)
+  FOREIGN KEY (tenant_id, user_id)   REFERENCES app_user(tenant_id, id),
+  -- A closed shift carries its whole count; an open one carries none of it.
+  CHECK ((closed_at IS NULL) = (counted_cash_paise IS NULL)),
+  CHECK ((closed_at IS NULL) = (expected_cash_paise IS NULL)),
+  CHECK ((closed_at IS NULL) = (variance_paise IS NULL))
 );
+-- One drawer per tablet at a time.
+CREATE UNIQUE INDEX shift_one_open_per_device ON shift (device_id) WHERE closed_at IS NULL;
 SELECT app.enable_tenant_rls('shift');
 REVOKE DELETE, TRUNCATE ON shift FROM pos_app;
 
@@ -154,7 +160,7 @@ CREATE TABLE sync_event (
   device_id         uuid NOT NULL,
   seq               bigint NOT NULL CHECK (seq > 0),
   type              text NOT NULL,
-  entity_id         uuid,                    -- the sale an event is about, when it names one
+  entity_id         uuid,                    -- the sale or shift an event is about, when it names one
   schema_version    int,
   created_at_device timestamptz NOT NULL,
   received_at       timestamptz NOT NULL DEFAULT now(),

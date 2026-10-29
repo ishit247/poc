@@ -34,6 +34,7 @@ export function buildApp() {
 
   app.setErrorHandler((err: { statusCode?: number }, _req, reply) => {
     const status = err.statusCode ?? 500;
+    if (status >= 500) console.error('SERVER ERROR', err); // logged here, never sent to the client
     // Never leak internals on a 5xx.
     reply.code(status).send({ error: status >= 500 ? 'internal error' : 'request failed' });
   });

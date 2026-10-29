@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { liveQuery } from 'dexie';
-import { db, getMeta, type DeviceInfo } from './db.ts';
+import { currentShift, db, getMeta, type DeviceInfo, type LocalShift } from './db.ts';
 import { enrol, pull, push } from './sync.ts';
 import { loadMenu, type MenuView } from './menu.ts';
 import type { Actor } from './sale.ts';
 import { PinScreen } from './PinScreen.tsx';
 import { Sell } from './Sell.tsx';
 import { Orders } from './Orders.tsx';
+import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
 import { Branding } from './Branding.tsx';
 
@@ -62,7 +63,8 @@ function EnrolScreen({ onDone }: { onDone: (d: DeviceInfo) => void }) {
 function Counter({ device }: { device: DeviceInfo }) {
   const [menu, setMenu] = useState<MenuView | null>(null);
   const [actor, setActor] = useState<Actor | null>(null);
-  const [tab, setTab] = useState<'sell' | 'orders'>('sell');
+  const [tab, setTab] = useState<'sell' | 'orders' | 'shift'>('sell');
+  const shift = useLive(() => currentShift().then((s) => s ?? null), undefined as LocalShift | null | undefined);
   const [online, setOnline] = useState(navigator.onLine);
   const [syncError, setSyncError] = useState('');
   const pending = useLive(() => db.outbox.filter((r) => !r.rejected).count(), 0);
@@ -119,13 +121,17 @@ function Counter({ device }: { device: DeviceInfo }) {
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
       {!actor ? (
         <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
+      ) : actor.role === 'cashier' && shift === null && tab !== 'shift' ? (
+        // A cashier with no open drawer cannot take money: send them to open one first.
+        <Shift device={device} actor={actor} shift={undefined} onSync={sync} />
       ) : (
         <>
           <nav>
             <button data-testid="tab-sell" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
             <button data-testid="tab-orders" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Open orders</button>
+            {actor.role === 'cashier' && <button data-testid="tab-shift" className={tab === 'shift' ? 'active' : ''} onClick={() => setTab('shift')}>Shift</button>}
           </nav>
-          {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : <Orders device={device} actor={actor} />}
+          {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : tab === 'orders' ? <Orders device={device} actor={actor} /> : <Shift device={device} actor={actor} shift={shift ?? undefined} onSync={sync} />}
         </>
       )}
     </div>

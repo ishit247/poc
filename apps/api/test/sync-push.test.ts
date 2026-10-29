@@ -38,7 +38,7 @@ class Tablet {
   }
 
   /** A 2 x Tea sale at 10.00 + 5% GST = 21.00, and the payment for it. */
-  sale(o: { date?: string; seq?: number; saleId?: string; itemId?: string; qty?: number; at?: string; createdBy?: string } = {}) {
+  sale(o: { date?: string; seq?: number; saleId?: string; itemId?: string; qty?: number; at?: string; createdBy?: string; shiftId?: string } = {}) {
     const saleId = o.saleId ?? crypto.randomUUID();
     const date = o.date ?? '2026-03-01';
     const qty = o.qty ?? 2;
@@ -51,10 +51,21 @@ class Tablet {
     }, o.at);
     const rseq = o.seq ?? 1;
     const paid = this.event({
-      type: 'payment.taken', schemaVersion: 1, saleId, businessDate: date, receiptNo: `C1-${date.replaceAll('-', '')}-${rseq}`, receiptSeq: rseq,
+      type: 'payment.taken', schemaVersion: 1, saleId, ...(o.shiftId ? { shiftId: o.shiftId } : {}), businessDate: date, receiptNo: `C1-${date.replaceAll('-', '')}-${rseq}`, receiptSeq: rseq,
       payments: [{ method: 'cash', amountPaise: net + tax, tenderedPaise: net + tax, changePaise: 0, upiRef: null }],
     }, o.at);
     return { saleId, created, paid, total: net + tax };
+  }
+
+  open(shiftId: string, opening = 50_000, userId = this.cashierId) {
+    return this.event({ type: 'shift.opened', schemaVersion: 1, shiftId, userId, openingCashPaise: opening, at: new Date().toISOString() });
+  }
+  close(shiftId: string, counted: number) {
+    return this.event({ type: 'shift.closed', schemaVersion: 1, shiftId, countedCashPaise: counted, at: new Date().toISOString() });
+  }
+  async shiftRow(id: string) {
+    return withTenant(this.tenant, async (c) => (await c.query(
+      'SELECT closed_at IS NOT NULL closed, opening_cash_paise::int opening, counted_cash_paise::int counted, expected_cash_paise::int expected, variance_paise::int variance FROM shift WHERE id = $1', [id])).rows[0]);
   }
 
   async push(events: Env[]): Promise<Res[]> {
@@ -215,7 +226,7 @@ test('unknown event types and future schema versions are turned away without bei
   const t = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');
   const s = t.sale();
   const future = structuredClone(s.created); future.payload.schemaVersion = 2;
-  const odd = t.event({ type: 'shift.opened', schemaVersion: 1 });
+  const odd = t.event({ type: 'shift.teleported', schemaVersion: 1 });
   const r = await t.push([future, odd]);
   assert.deepEqual(r.map((x) => x.reason), ['unsupported_schema_version', 'unknown_event_type']);
   assert.equal((await t.tally()).ledger, 0);
@@ -388,4 +399,74 @@ test('two tablets selling at once, with faults, add up to exactly what was rung 
     assert.equal(pending[i]!.size, 0);
     assert.deepEqual(await o.t.tally(), { sales: 8, paid: 8, lines: 8, takings: o.sales.reduce((a, s) => a + s.total, 0), ledger: 16 });
   }
+});
+
+// ---- Shifts (phase 6) ----
+
+test('a shift: the server works out expected cash and variance from the payments it holds', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', 'School 1 Canteen');
+  const shiftId = crypto.randomUUID();
+  const open = t.open(shiftId);
+  const s1 = t.sale({ seq: 1, shiftId });
+  const s2 = t.sale({ seq: 2, shiftId });
+  const close = t.close(shiftId, 54_000);
+  assert.deepEqual(statuses(await t.push([open, s1.created, s1.paid, s2.created, s2.paid, close])), Array(6).fill('applied'));
+  assert.deepEqual(await t.shiftRow(shiftId), { closed: true, opening: 50_000, counted: 54_000, expected: 54_200, variance: -200 });
+  assert.equal(await withTenant(A, async (c) => (await c.query('SELECT count(*)::int n FROM sale WHERE shift_id = $1', [shiftId])).rows[0].n), 2);
+});
+
+test('shift events are idempotent: a retry is a duplicate, a second close is refused', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', 'School 1 Canteen');
+  const shiftId = crypto.randomUUID();
+  const open = t.open(shiftId);
+  const close = t.close(shiftId, 50_000);
+  await t.push([open, close]);
+  assert.deepEqual(statuses(await t.push([open, close])), ['duplicate', 'duplicate']);
+  const again = await t.push([t.close(shiftId, 1)]);
+  assert.deepEqual(again.map((r) => r.reason), ['shift_already_closed']);
+  assert.equal((await t.shiftRow(shiftId)).counted, 50_000, 'the first count stands');
+});
+
+test('a close that arrives before its open waits; a payment for a refused or foreign shift is rejected', async () => {
+  const app = buildApp();
+  const t = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');
+  const other = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');
+  const shiftId = crypto.randomUUID();
+  const open = t.open(shiftId);
+  const close = t.close(shiftId, 50_000);
+  assert.deepEqual(statuses(await t.push([close])), ['deferred']);
+  assert.deepEqual(statuses(await t.push([open, close])), ['applied', 'applied']);
+
+  const mine = crypto.randomUUID();
+  await t.push([t.open(mine)]);
+  const foreign = other.sale({ shiftId: mine });
+  assert.deepEqual((await other.push([foreign.created, foreign.paid])).map((r) => r.reason ?? r.status), ['applied', 'wrong_device']);
+
+  const refused = crypto.randomUUID();
+  const bad = t.open(refused, 0, '00000000-0000-4000-8000-0000000000ff'); // not a person at this outlet
+  const s = t.sale({ shiftId: refused });
+  assert.deepEqual((await t.push([bad, s.created, s.paid])).map((r) => r.reason ?? r.status), ['unknown_user', 'applied', 'shift_rejected']);
+});
+
+test('one drawer per tablet, and only a cashier holds it', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', 'School 1 Canteen');
+  const waiter = await withTenant(A, async (c) => (await c.query("SELECT u.id FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id WHERE u.role = 'waiter' LIMIT 1")).rows[0]?.id as string | undefined);
+  const first = crypto.randomUUID();
+  const res = await t.push([t.open(first), t.open(crypto.randomUUID())]);
+  assert.deepEqual(res.map((r) => r.reason ?? r.status), ['applied', 'shift_already_open']);
+  if (waiter) {
+    const w = await t.push([t.close(first, 0), t.open(crypto.randomUUID(), 0, waiter)]);
+    assert.deepEqual(w.map((r) => r.reason ?? r.status), ['applied', 'unknown_user']);
+  }
+});
+
+test('money taken after the count is accepted and flagged; the variance already fixed does not move', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', 'School 1 Canteen');
+  const shiftId = crypto.randomUUID();
+  const open = t.open(shiftId);
+  const close = t.close(shiftId, 50_000);
+  const late = t.sale({ shiftId });
+  assert.deepEqual(statuses(await t.push([open, close, late.created, late.paid])), Array(4).fill('applied'));
+  assert.deepEqual((await t.saleRow(late.saleId)).flags, ['after_shift_close']);
+  assert.equal((await t.shiftRow(shiftId)).variance, 0);
 });

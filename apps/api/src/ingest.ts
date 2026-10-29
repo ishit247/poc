@@ -12,8 +12,8 @@
 // an unknown person or item) is rejected.
 import type pg from 'pg';
 import {
-  EVENT_SCHEMA_VERSION, OutboxEvent, exclusiveLine, paise, roundOffFor,
-  type GstRounding, type PaymentTaken, type PrintReprinted, type SaleCreated, type TradingSettings,
+  EVENT_SCHEMA_VERSION, OutboxEvent, exclusiveLine, expectedCash, paise, roundOffFor,
+  type GstRounding, type PaymentTaken, type PrintReprinted, type SaleCreated, type ShiftClosed, type ShiftOpened, type TradingSettings,
 } from '@pos/shared';
 import { audit } from './audit.js';
 import { withTenant } from './db.js';
@@ -56,7 +56,7 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
 
   const head = e.payload as { type?: unknown; schemaVersion?: unknown } | null;
   const type = typeof head?.type === 'string' ? head.type : '';
-  if (type !== 'sale.created' && type !== 'payment.taken' && type !== 'print.reprinted') throw new RejectUnrecorded('unknown_event_type');
+  if (!['sale.created', 'payment.taken', 'print.reprinted', 'shift.opened', 'shift.closed'].includes(type)) throw new RejectUnrecorded('unknown_event_type');
   if (head?.schemaVersion !== EVENT_SCHEMA_VERSION) throw new RejectUnrecorded('unsupported_schema_version');
 
   let reason: string | null = null;
@@ -69,6 +69,8 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
     const ev = parsed.data;
     if (ev.type === 'sale.created') await applySale(c, p, e, ev, settings);
     else if (ev.type === 'payment.taken') await applyPayment(c, p, ev);
+    else if (ev.type === 'shift.opened') await applyShiftOpened(c, p, ev);
+    else if (ev.type === 'shift.closed') await applyShiftClosed(c, p, ev);
     else await applyReprint(c, p, ev);
     await c.query('RELEASE SAVEPOINT ev');
   } catch (err) {
@@ -81,7 +83,7 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
     } else throw err;
   }
 
-  const entityId = parsed.success ? parsed.data.saleId : null;
+  const entityId = !parsed.success ? null : 'saleId' in parsed.data ? parsed.data.saleId : parsed.data.shiftId;
   await c.query(
     `INSERT INTO sync_event (tenant_id, id, device_id, seq, type, entity_id, schema_version, created_at_device, outcome, reason, payload)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
@@ -192,6 +194,43 @@ async function applyReprint(c: pg.PoolClient, p: DevicePrincipal, ev: PrintRepri
   await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: ev.reprintedBy, action: 'sale.reprinted', entity: 'sale', entityId: ev.saleId, detail: { receiptNo: sale.receipt_no, at: ev.at, deviceId: p.deviceId } });
 }
 
+/** This device's shift, locked. Not here yet: wait for it, unless its opening was turned away. */
+async function shiftOf(c: pg.PoolClient, p: DevicePrincipal, shiftId: string) {
+  const shift = (await c.query(
+    'SELECT device_id, user_id, closed_at, opening_cash_paise::int AS opening FROM shift WHERE id = $1 FOR UPDATE', [shiftId])).rows[0];
+  if (!shift) {
+    const refused = await c.query(
+      `SELECT 1 FROM sync_event WHERE device_id = $1 AND entity_id = $2 AND type = 'shift.opened' AND outcome = 'rejected'`, [p.deviceId, shiftId]);
+    if (refused.rowCount) throw new Reject('shift_rejected');
+    throw new Defer();
+  }
+  if (shift.device_id !== p.deviceId) throw new Reject('wrong_device');
+  return shift as { user_id: string; closed_at: Date | null; opening: number };
+}
+
+async function applyShiftOpened(c: pg.PoolClient, p: DevicePrincipal, ev: ShiftOpened): Promise<void> {
+  // Only a cashier holds a drawer, and only one drawer is open per tablet at a time.
+  const who = await c.query(
+    `SELECT 1 FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id WHERE u.id = $1 AND uo.outlet_id = $2 AND u.role = 'cashier'`, [ev.userId, p.outletId]);
+  if (!who.rowCount) throw new Reject('unknown_user');
+  if ((await c.query('SELECT 1 FROM shift WHERE device_id = $1 AND closed_at IS NULL', [p.deviceId])).rowCount) throw new Reject('shift_already_open');
+  await c.query(
+    `INSERT INTO shift (id, tenant_id, outlet_id, device_id, user_id, opened_at, opening_cash_paise) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [ev.shiftId, p.tenantId, p.outletId, p.deviceId, ev.userId, ev.at, ev.openingCashPaise]);
+}
+
+/** Expected cash and variance are worked out here, from the payments this server holds, in the same way the tablet's slip does. */
+async function applyShiftClosed(c: pg.PoolClient, p: DevicePrincipal, ev: ShiftClosed): Promise<void> {
+  const shift = await shiftOf(c, p, ev.shiftId);
+  if (shift.closed_at) throw new Reject('shift_already_closed');
+  const pays = await c.query(
+    `SELECT pay.method, pay.amount_paise::int AS "amountPaise" FROM payment pay JOIN sale s ON s.id = pay.sale_id WHERE s.shift_id = $1`, [ev.shiftId]);
+  const expected = expectedCash(shift.opening, pays.rows);
+  await c.query(
+    `UPDATE shift SET closed_at = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint WHERE id = $1`,
+    [ev.shiftId, ev.at, ev.countedCashPaise, expected]);
+}
+
 async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTaken): Promise<void> {
   const sale = await saleOf(c, p, ev.saleId);
   if (sale.status === 'void') throw new Reject('sale_void');
@@ -201,12 +240,18 @@ async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTak
   const code = (await c.query('SELECT code FROM counter WHERE id = $1', [p.counterId])).rows[0]?.code as string | undefined;
   if (ev.receiptNo !== `${code}-${ev.businessDate.replaceAll('-', '')}-${ev.receiptSeq}`) throw new Reject('bad_receipt_no');
 
+  // Money taken after the drawer was counted still belongs to that shift, but its variance is already
+  // fixed: accept it (the cash was taken) and flag the sale so a manager sees it.
+  const shift = ev.shiftId ? await shiftOf(c, p, ev.shiftId) : null;
+  const afterClose = !!shift?.closed_at;
+
   const day = await businessDay(c, p, ev.businessDate);
   await c.query(
-    `UPDATE sale SET status = 'paid', receipt_no = $2, receipt_seq = $3, business_date = $4, business_day_id = $5,
+    `UPDATE sale SET status = 'paid', receipt_no = $2, receipt_seq = $3, business_date = $4, business_day_id = $5, shift_id = $7,
                      flags = CASE WHEN $6 AND NOT 'late_arrival' = ANY(flags) THEN array_append(flags, 'late_arrival') ELSE flags END
+                             || CASE WHEN $8 THEN ARRAY['after_shift_close'] ELSE '{}'::text[] END
       WHERE id = $1`,
-    [ev.saleId, ev.receiptNo, ev.receiptSeq, ev.businessDate, day.id, day.closed]);
+    [ev.saleId, ev.receiptNo, ev.receiptSeq, ev.businessDate, day.id, day.closed, ev.shiftId ?? null, afterClose]);
   for (const x of ev.payments) {
     await c.query(
       `INSERT INTO payment (tenant_id, sale_id, method, amount_paise, tendered_paise, change_paise, upi_ref) VALUES ($1,$2,$3,$4,$5,$6,$7)`,

@@ -35,6 +35,19 @@ export interface LocalSale {
   receiptNo: string | null;
   receiptSeq: number | null;
   payments: PaymentRecord[];
+  /** The shift whose drawer took the money. Null while open, and on sales paid before shifts existed. */
+  shiftId?: string | null;
+}
+
+/** A till session on this tablet. `closedAt` set means the drawer was counted. */
+export interface LocalShift {
+  id: string;
+  userId: string;
+  userName: string;
+  openedAt: string;
+  openingCashPaise: number;
+  closedAt: string | null;
+  countedCashPaise: number | null;
 }
 
 /** An event waiting to sync. `seq` is the device order the server will replay. */
@@ -61,6 +74,7 @@ class CounterDb extends Dexie {
   sales!: Table<LocalSale, string>;
   outbox!: Table<OutboxRow, number>;
   logo!: Table<LogoRow, string>;
+  shifts!: Table<LocalShift, string>;
 
   constructor() {
     super('counter');
@@ -72,10 +86,16 @@ class CounterDb extends Dexie {
       outbox: '++seq, eventId',
       logo: 'sha',
     });
+    this.version(2).stores({ shifts: 'id, closedAt' });
   }
 }
 
 export const db = new CounterDb();
+
+/** The drawer that is open on this tablet right now, if any. At most one: a closed shift keeps its row for the slip. */
+export async function currentShift(): Promise<LocalShift | undefined> {
+  return (await db.shifts.toArray()).find((s) => !s.closedAt);
+}
 
 export async function getMeta<K extends MetaValue['key']>(key: K): Promise<Extract<MetaValue, { key: K }>['value'] | undefined> {
   return (await db.meta.get(key))?.value as any;

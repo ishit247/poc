@@ -7,6 +7,8 @@ import { addItem, paise, DEFAULT_SETTINGS, type MenuEntry, type Tender } from '@
 import { db, type DeviceInfo } from '../src/db.ts';
 import { createSale, type Actor } from '../src/sale.ts';
 import { push } from '../src/sync.ts';
+import { closeShift, openShift } from '../src/shift.ts';
+import { seedShift } from './helpers.ts';
 import { buildApp } from '../../api/src/app.ts';
 import { pool, withTenant } from '../../api/src/db.ts';
 
@@ -20,6 +22,7 @@ const realFetch = globalThis.fetch;
 
 beforeEach(async () => {
   await Promise.all([db.sales.clear(), db.outbox.clear(), db.meta.clear()]);
+  await seedShift(cashier);
   globalThis.fetch = realFetch;
 });
 
@@ -84,7 +87,11 @@ test('contract: the real tablet sale is accepted by the real server, once, even 
   const real: DeviceInfo = { ...device, credential, deviceId: credential.split('.')[1]!, tenantId: A, outletId: o.id, counterId: o.counter_id };
   const actor: Actor = { id: ids.user, name: 'Cashier', role: 'cashier' };
 
+  await db.shifts.clear(); // the real shift, with its real events, replaces the seeded one
+  await openShift({ actor, openingCashPaise: 50_000 });
   const sale = await createSale({ device: real, actor, cart: addItem([], { ...tea, itemId: ids.item }, 3), settings: DEFAULT_SETTINGS, menuVersion: 1, tenders: cash(3150) });
+  const slip = await closeShift({ device: real, actor, countedCashPaise: 53_000 }); // ₹1.50 short of 500.00 + 31.50 = 531.50
+  assert.equal(slip.variancePaise, -150);
 
   // The server applies the batch but the response never arrives.
   let applied: unknown;
@@ -94,16 +101,21 @@ test('contract: the real tablet sale is accepted by the real server, once, even 
     throw new TypeError('connection dropped');
   }) as typeof fetch;
   await assert.rejects(push(real));
-  assert.deepEqual((applied as any).results.map((r: any) => r.status), ['applied', 'applied']);
-  assert.equal(await db.outbox.count(), 2, 'the tablet cannot know, so it keeps everything');
+  assert.deepEqual((applied as any).results.map((r: any) => r.status), ['applied', 'applied', 'applied', 'applied']);
+  assert.equal(await db.outbox.count(), 4, 'the tablet cannot know, so it keeps everything');
 
   // Back online: the retry is answered "duplicate", the outbox empties, the cloud has it once.
   globalThis.fetch = (async (url: string, init: RequestInit) => {
     const r = await app.inject({ method: 'POST', url: String(url).replace(/^\/api/, ''), headers: init.headers as Record<string, string>, payload: init.body as string });
     return new Response(r.body, { status: r.statusCode });
   }) as typeof fetch;
-  assert.deepEqual(await push(real), { sent: 2, done: 2, parked: 0, deferred: 0 });
+  assert.deepEqual(await push(real), { sent: 4, done: 4, parked: 0, deferred: 0 });
   assert.equal(await db.outbox.count(), 0);
+
+  // The server worked out the same expected cash as the tablet's slip, from the payments it holds.
+  const shift = await withTenant(A, async (c) => (await c.query(
+    'SELECT expected_cash_paise::int expected, counted_cash_paise::int counted, variance_paise::int variance FROM shift WHERE device_id = $1', [real.deviceId])).rows[0]);
+  assert.deepEqual(shift, { expected: 53_150, counted: 53_000, variance: -150 });
 
   const server = await withTenant(A, async (c) => (await c.query(
     `SELECT s.status, s.receipt_no, s.total_paise::int total, s.flags, (SELECT count(*)::int FROM payment WHERE sale_id = s.id) payments
