@@ -41,6 +41,15 @@ const PULL_SQL = `
   SELECT 'counter_item', item_id, version, deleted_at IS NOT NULL,
          jsonb_build_object('listed', listed, 'pricePaise', price_paise)
     FROM counter_item WHERE version > $1 AND counter_id = $3
+  UNION ALL
+  -- Staff of THIS outlet only, cashiers and waiters only (a manager's verifier never leaves the server).
+  -- A user row changes when the person OR their membership does, hence GREATEST. Removal and
+  -- deactivation are tombstones with no verifier, so a lost PIN cannot linger on a tablet.
+  SELECT 'user', u.id, GREATEST(u.version, uo.version), (uo.deleted_at IS NOT NULL OR NOT u.active),
+         CASE WHEN uo.deleted_at IS NOT NULL OR NOT u.active THEN '{}'::jsonb
+              ELSE jsonb_build_object('name', u.name, 'role', u.role, 'pinVerifier', u.pin_verifier) END
+    FROM user_outlet uo JOIN app_user u ON u.id = uo.user_id
+   WHERE uo.outlet_id = $2 AND u.role IN ('cashier', 'waiter') AND GREATEST(u.version, uo.version) > $1
   ORDER BY version
   LIMIT ${PAGE + 1}`;
 

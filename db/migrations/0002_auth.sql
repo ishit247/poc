@@ -9,9 +9,24 @@ CREATE TABLE session (
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
   revoked_at timestamptz,
-  FOREIGN KEY (tenant_id, user_id) REFERENCES app_user(tenant_id, id)
+  device_id  uuid, -- set for PIN sessions: the session is only valid from that tablet
+  FOREIGN KEY (tenant_id, user_id) REFERENCES app_user(tenant_id, id),
+  FOREIGN KEY (tenant_id, device_id) REFERENCES device(tenant_id, id)
 );
 SELECT app.enable_tenant_rls('session');
+
+-- Failed-attempt state, one row per (user, kind). Kept out of app_user, which is
+-- versioned and pulled by devices: a failed PIN must not make every tablet re-pull the user.
+CREATE TABLE login_lockout (
+  tenant_id    uuid NOT NULL REFERENCES tenant(id),
+  user_id      uuid NOT NULL,
+  kind         text NOT NULL CHECK (kind IN ('password', 'pin')),
+  failed       int NOT NULL DEFAULT 0,
+  locked_until timestamptz,
+  PRIMARY KEY (user_id, kind),
+  FOREIGN KEY (tenant_id, user_id) REFERENCES app_user(tenant_id, id)
+);
+SELECT app.enable_tenant_rls('login_lockout');
 
 CREATE TABLE enrolment_code (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),

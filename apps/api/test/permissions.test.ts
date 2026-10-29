@@ -8,7 +8,7 @@ import type { Permission, Principal, Role } from '../src/scope.js';
 const A = '00000000-0000-4000-8000-00000000000a';
 test.after(() => pool.end());
 
-const user = (role: Role): Principal => ({ kind: 'user', tenantId: A, userId: 'u', role, outletIds: [], sessionId: 's' });
+const user = (role: Role): Principal => ({ kind: 'user', tenantId: A, userId: 'u', role, outletIds: [], sessionId: 's', deviceId: null });
 const device: Principal = { kind: 'device', tenantId: A, deviceId: 'd', outletId: 'o', counterId: 'c' };
 
 // What each principal may do. Waiters take orders but never payment or management.

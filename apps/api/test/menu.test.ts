@@ -187,7 +187,10 @@ test('pull pages without gaps or duplicates across the page boundary', async () 
     UNION ALL SELECT version::int FROM outlet WHERE id = $1
     UNION ALL SELECT version::int FROM outlet_price WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM counter WHERE id = $2
-    UNION ALL SELECT version::int FROM counter_item WHERE counter_id = $2 ORDER BY 1`, [outlet.id, outlet.counter_id]));
+    UNION ALL SELECT version::int FROM counter_item WHERE counter_id = $2
+    UNION ALL SELECT GREATEST(u.version, uo.version)::int FROM user_outlet uo JOIN app_user u ON u.id = uo.user_id
+               WHERE uo.outlet_id = $1 AND u.role IN ('cashier', 'waiter')
+    ORDER BY 1`, [outlet.id, outlet.counter_id]));
   assert.deepEqual(seen, expected.rows.map((r) => r.version), 'pages must equal the full ordered set');
 });
 

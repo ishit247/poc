@@ -74,7 +74,7 @@ test('tenant A cannot read or modify tenant B rows, on every table', async () =>
 });
 
 test('versioned tables are soft-delete only; the version counter is not writable by the app role', async () => {
-  for (const t of ['category', 'item', 'item_price', 'outlet_item']) {
+  for (const t of ['category', 'item', 'item_price', 'outlet_item', 'app_user', 'user_outlet']) {
     await as(A, async (c) => {
       await assert.rejects(c.query(`DELETE FROM ${t}`), /permission denied/, `${t}: app role can hard-delete`);
     });

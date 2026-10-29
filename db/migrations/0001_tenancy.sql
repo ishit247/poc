@@ -69,8 +69,10 @@ CREATE TABLE app_user (
   -- Web login is for managers only; cashiers and waiters sign in with a PIN on a device.
   email         text,
   password_hash text,
-  failed_logins int NOT NULL DEFAULT 0,
-  locked_until  timestamptz,
+  -- Versioned (trigger added in 0003) so a PIN change or deactivation reaches devices by pull.
+  -- Lockout counters are NOT here: a failed attempt must not look like a change to every device.
+  version       bigint NOT NULL DEFAULT 0,
+  updated_at    timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, id),
   CHECK (role <> 'manager' OR (email IS NOT NULL AND password_hash IS NOT NULL))
 );
@@ -80,6 +82,11 @@ CREATE TABLE user_outlet (
   tenant_id uuid NOT NULL REFERENCES tenant(id),
   user_id   uuid NOT NULL,
   outlet_id uuid NOT NULL,
+  -- Membership is versioned with tombstones (trigger in 0003): removing someone from an
+  -- outlet is a row the outlet's devices can pull, not a vanished row.
+  version    bigint NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
   PRIMARY KEY (user_id, outlet_id),
   FOREIGN KEY (tenant_id, user_id)   REFERENCES app_user(tenant_id, id),
   FOREIGN KEY (tenant_id, outlet_id) REFERENCES outlet(tenant_id, id)

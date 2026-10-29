@@ -26,6 +26,9 @@ for (const t of Object.values(SEED)) {
   let i = 0;
   const outletIds: string[] = [];
   const counterIds: string[][] = [];
+  const deviceIds: string[] = [];
+  const cashierIds: string[] = [];
+  const waiterIds: string[] = [];
   const itemIds: Record<string, string> = {};
   for (const o of t.outlets) {
     i++;
@@ -40,22 +43,29 @@ for (const t of Object.values(SEED)) {
       "INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, 'C1'), ($1, $2, 'C2') RETURNING id", [t.id, outletId]);
     counterIds.push(counters.rows.map((r: { id: string }) => r.id));
     // Placeholder credential: this device cannot authenticate (no secret is known for it).
-    await client.query(
-      'INSERT INTO device (tenant_id, outlet_id, counter_id, credential_hash) VALUES ($1, $2, $3, $4)',
+    const dev = await client.query(
+      'INSERT INTO device (tenant_id, outlet_id, counter_id, credential_hash) VALUES ($1, $2, $3, $4) RETURNING id',
       [t.id, outletId, counters.rows[0].id, sha256(newSecret())]);
+    deviceIds.push(dev.rows[0].id);
     // One manager per outlet, assigned to that outlet only: a1@example.test, a2@..., b1@...
     const u = await client.query(
       `INSERT INTO app_user (tenant_id, name, pin_verifier, role, email, password_hash)
        VALUES ($1, $2, 'seed-unset', 'manager', $3, $4) RETURNING id`,
       [t.id, `${o} manager`, `${t.key}${i}@example.test`, passwordHash]);
     await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, u.rows[0].id, outletId]);
+    await client.query("INSERT INTO login_lockout (tenant_id, user_id, kind) VALUES ($1, $2, 'password')", [t.id, u.rows[0].id]);
     // Cashier and waiter: PIN only, no web login (no email / password).
+    const staff: Record<string, string> = {};
     for (const role of ['cashier', 'waiter'] as const) {
       const s = await client.query(
         "INSERT INTO app_user (tenant_id, name, pin_verifier, role) VALUES ($1, $2, $3, $4) RETURNING id",
         [t.id, `${o} ${role}`, pinHash, role]);
+      staff[role] = s.rows[0].id;
       await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, s.rows[0].id, outletId]);
+      await client.query("INSERT INTO login_lockout (tenant_id, user_id, kind) VALUES ($1, $2, 'pin')", [t.id, s.rows[0].id]);
     }
+    cashierIds.push(staff['cashier']!);
+    waiterIds.push(staff['waiter']!);
     // Rows in every table so isolation tests are not vacuous: a revoked session, a used code, an audit row.
     await client.query(
       "INSERT INTO session (tenant_id, user_id, token_hash, expires_at, revoked_at) VALUES ($1, $2, $3, now(), now())",
@@ -103,6 +113,36 @@ for (const t of Object.values(SEED)) {
     for (const drink of ['Tea', 'Cold Coffee']) {
       await client.query('INSERT INTO counter_item (tenant_id, counter_id, item_id, listed) VALUES ($1, $2, $3, true)', [t.id, c2, itemIds[drink]]);
     }
+  }
+  // Trading rows for every outlet, so isolation and ownership tests are not vacuous:
+  // a business day with one cash-paid sale by the cashier, and one open order by the waiter.
+  // Seed rows are in the past on purpose; the amounts follow exclusiveLine (5% GST on 1500 and 1000).
+  for (const [n, outletId] of outletIds.entries()) {
+    const day = await client.query("INSERT INTO business_day (tenant_id, outlet_id, date) VALUES ($1, $2, '2026-01-01') RETURNING id", [t.id, outletId]);
+    const shift = await client.query(
+      `INSERT INTO shift (id, tenant_id, outlet_id, device_id, user_id, opened_at, opening_cash_paise)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, '2026-01-01T08:00:00Z', 50000) RETURNING id`,
+      [t.id, outletId, deviceIds[n], cashierIds[n]]);
+    const sale = await client.query(
+      `INSERT INTO sale (id, tenant_id, outlet_id, business_day_id, business_date, shift_id, device_id, created_by, status,
+                         receipt_no, receipt_seq, device_seq, menu_version, subtotal_paise, tax_paise, total_paise, created_at_device)
+       VALUES (gen_random_uuid(), $1, $2, $3, '2026-01-01', $4, $5, $6, 'paid', 'C1-20260101-0001', 1, 1, 1, 3000, 150, 3150, '2026-01-01T09:00:00Z')
+       RETURNING id`,
+      [t.id, outletId, day.rows[0].id, shift.rows[0].id, deviceIds[n], cashierIds[n]]);
+    await client.query(
+      `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
+       VALUES ($1, $2, $3, 'Samosa', 1500, 500, 2, 3000, 150)`, [t.id, sale.rows[0].id, itemIds['Samosa']]);
+    await client.query(
+      `INSERT INTO payment (tenant_id, sale_id, method, amount_paise, tendered_paise, change_paise)
+       VALUES ($1, $2, 'cash', 3150, 3500, 350)`, [t.id, sale.rows[0].id]);
+    const open = await client.query(
+      `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, status, menu_version,
+                         subtotal_paise, tax_paise, total_paise, created_at_device)
+       VALUES (gen_random_uuid(), $1, $2, '2026-01-02', $3, $4, 'open', 1, 1000, 50, 1050, '2026-01-02T09:00:00Z') RETURNING id`,
+      [t.id, outletId, deviceIds[n], waiterIds[n]]);
+    await client.query(
+      `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
+       VALUES ($1, $2, $3, 'Tea', 1000, 500, 1, 1000, 50)`, [t.id, open.rows[0].id, itemIds['Tea']]);
   }
   await client.query('COMMIT');
 }

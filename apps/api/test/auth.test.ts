@@ -49,7 +49,7 @@ test('login: locks after 5 failures, even for the correct password', async () =>
   const app = buildApp();
   for (let i = 0; i < 5; i++) assert.equal((await login(app, A, 'a2@example.test', `bad-password-${i}x`)).statusCode, 401);
   assert.equal((await login(app, A, 'a2@example.test')).statusCode, 401, 'correct password must be refused while locked');
-  await withTenant(A, (c) => c.query("UPDATE app_user SET failed_logins = 0, locked_until = NULL WHERE lower(email) = 'a2@example.test'"));
+  await withTenant(A, (c) => c.query("UPDATE login_lockout SET failed = 0, locked_until = NULL WHERE user_id = (SELECT id FROM app_user WHERE lower(email) = 'a2@example.test')"));
   assert.equal((await login(app, A, 'a2@example.test')).statusCode, 200);
 });
 

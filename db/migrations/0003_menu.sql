@@ -61,6 +61,11 @@ END
 $$;
 REVOKE EXECUTE ON FUNCTION app.make_versioned(regclass) FROM PUBLIC;
 
+-- Users reach devices by pull (offline PIN sign-in). Columns are in 0001; RLS already applied.
+-- Hard delete is withheld on both: a user is deactivated, a membership is tombstoned.
+SELECT app.add_versioning('app_user');
+SELECT app.add_versioning('user_outlet');
+
 CREATE TABLE category (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id  uuid NOT NULL REFERENCES tenant(id),

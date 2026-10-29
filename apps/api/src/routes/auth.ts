@@ -1,12 +1,15 @@
-import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { withTenant } from '../db.js';
 import { audit } from '../audit.js';
 import { newEnrolmentSecret, newSecret, sha256 } from '../security/crypto.js';
 import { DUMMY_HASH, verifyPassword } from '../security/password.js';
+import { clearLockout, lockState, recordFailure } from '../lockout.js';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_MINUTES = 15;
+const PIN_MAX_FAILED = 5; // PLAN section 10: 5 failures, 5-minute lock
+const PIN_LOCK_MINUTES = 5;
 const SESSION_HOURS = 12;
 const ENROLMENT_MINUTES = 15;
 
@@ -14,6 +17,7 @@ const uuid = z.string().uuid();
 const loginBody = z.object({ tenantId: uuid, email: z.string().email().max(254), password: z.string().min(1).max(256) }).strict();
 export const deviceLabel = z.string().trim().min(1).max(60);
 const codeBody = z.object({ outletId: uuid, counterId: uuid, label: deviceLabel.optional() }).strict();
+const pinSignin = z.object({ userId: uuid, pin: z.string().regex(/^\d{6,8}$/) }).strict();
 const enrolBody = z.object({ code: z.string().max(200) }).strict();
 const idParams = z.object({ id: uuid });
 
@@ -31,23 +35,17 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, email, password } = body.data;
 
     const result = await withTenant(tenantId, async (c) => {
-      // FOR UPDATE serialises concurrent guesses per account, so the lockout count is exact.
       const r = await c.query(
-        `SELECT id, password_hash, failed_logins, (locked_until IS NOT NULL AND locked_until > now()) AS locked
-           FROM app_user
-          WHERE lower(email) = lower($1) AND role = 'manager' AND active
-          FOR UPDATE`, [email]);
+        "SELECT id, password_hash FROM app_user WHERE lower(email) = lower($1) AND role = 'manager' AND active", [email]);
       const u = r.rows[0];
+      // lockState row-locks the account's counter, so concurrent guesses are counted exactly.
+      const state = u ? await lockState(c, tenantId, u.id, 'password') : null;
       // Always burn one hash verification so timing does not reveal whether the account exists or is locked.
       const ok = await verifyPassword(password, u?.password_hash ?? DUMMY_HASH);
-      if (!u || u.locked) return null;
+      if (!u || !state || state.locked) return null;
 
       if (!ok) {
-        const lock = u.failed_logins + 1 >= MAX_FAILED_LOGINS;
-        await c.query(
-          `UPDATE app_user SET failed_logins = CASE WHEN $2 THEN 0 ELSE failed_logins + 1 END,
-                  locked_until = CASE WHEN $2 THEN now() + make_interval(mins => $3) ELSE locked_until END
-            WHERE id = $1`, [u.id, lock, LOCK_MINUTES]);
+        const lock = await recordFailure(c, u.id, 'password', state, MAX_FAILED_LOGINS, LOCK_MINUTES);
         await audit(c, { tenantId, actorKind: 'anonymous', action: lock ? 'login.locked' : 'login.failed', entity: 'app_user', entityId: u.id });
         return null;
       }
@@ -58,12 +56,61 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         `INSERT INTO session (id, tenant_id, user_id, token_hash, expires_at)
          VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5)) RETURNING expires_at`,
         [sessionId, tenantId, u.id, sha256(secret), SESSION_HOURS]);
-      await c.query('UPDATE app_user SET failed_logins = 0, locked_until = NULL WHERE id = $1', [u.id]);
+      await clearLockout(c, u.id, 'password');
       await audit(c, { tenantId, actorKind: 'user', actorId: u.id, action: 'login.ok', entity: 'session', entityId: sessionId });
       return { token: `${tenantId}.${sessionId}.${secret}`, expiresAt: exp.rows[0].expires_at as Date };
     });
 
     return result ? result : unauthorized(reply);
+  });
+
+  // --- staff PIN sign-in (online) ------------------------------------------
+  // Called by an enrolled tablet. Cashiers and waiters only: a manager never gets a session from a
+  // 6-8 digit PIN. The same user cannot be guessed past PIN_MAX_FAILED attempts from ANY device,
+  // because the counter is per user, not per tablet. Offline, the tablet checks the same verifier locally.
+  app.post('/device/pin-signin', {
+    config: {
+      scope: 'outlet', permission: 'device',
+      // Per tablet (its credential), on top of the global per-IP limit.
+      rateLimit: { max: 30, timeWindow: '1 minute', keyGenerator: (req: FastifyRequest) => String(req.headers.authorization ?? req.ip) },
+    },
+  }, async (req, reply) => {
+    const body = pinSignin.safeParse(req.body);
+    if (!body.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'device') return reply.code(403).send({ error: 'forbidden' });
+
+    const result = await withTenant(p.tenantId, async (c) => {
+      const r = await c.query(
+        `SELECT u.id, u.name, u.role, u.pin_verifier
+           FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id AND uo.deleted_at IS NULL AND uo.outlet_id = $2
+          WHERE u.id = $1 AND u.active AND u.role IN ('cashier', 'waiter')`, [body.data.userId, p.outletId]);
+      const u = r.rows[0];
+      const state = u ? await lockState(c, p.tenantId, u.id, 'pin') : null;
+      // Always burn one hash verification, so timing does not reveal who exists at this outlet or is locked.
+      const ok = await verifyPassword(body.data.pin, u?.pin_verifier ?? DUMMY_HASH);
+      if (!u || !state) return { kind: 'denied' as const };
+      if (state.locked) return { kind: 'locked' as const, until: state.lockedUntil };
+      if (!ok) {
+        const lock = await recordFailure(c, u.id, 'pin', state, PIN_MAX_FAILED, PIN_LOCK_MINUTES);
+        await audit(c, { tenantId: p.tenantId, actorKind: 'device', actorId: p.deviceId, action: lock ? 'pin.locked' : 'pin.failed', entity: 'app_user', entityId: u.id });
+        return { kind: 'denied' as const };
+      }
+
+      const sessionId = (await c.query('SELECT gen_random_uuid() AS id')).rows[0].id as string;
+      const secret = newSecret();
+      const exp = await c.query(
+        `INSERT INTO session (id, tenant_id, user_id, token_hash, expires_at, device_id)
+         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5), $6) RETURNING expires_at`,
+        [sessionId, p.tenantId, u.id, sha256(secret), SESSION_HOURS, p.deviceId]);
+      await clearLockout(c, u.id, 'pin');
+      await audit(c, { tenantId: p.tenantId, actorKind: 'device', actorId: p.deviceId, action: 'pin.ok', entity: 'session', entityId: sessionId, detail: { userId: u.id } });
+      return { kind: 'ok' as const, token: `${p.tenantId}.${sessionId}.${secret}`, expiresAt: exp.rows[0].expires_at as Date, user: { id: u.id, name: u.name, role: u.role } };
+    });
+
+    if (result.kind === 'locked') return reply.code(423).send({ error: 'locked', lockedUntil: result.until });
+    if (result.kind === 'denied') return unauthorized(reply);
+    return { token: result.token, expiresAt: result.expiresAt, user: result.user };
   });
 
   app.post('/logout', { config: { scope: 'tenant', permission: 'staff' } }, async (req) => {

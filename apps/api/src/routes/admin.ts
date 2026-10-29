@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pinProblem } from '@pos/shared';
 import { withTenant } from '../db.js';
 import { audit } from '../audit.js';
+import { clearLockout } from '../lockout.js';
 import { hashPassword } from '../security/password.js';
 import { deviceLabel } from './auth.js';
 
@@ -83,7 +84,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       const r = await c.query(
         `SELECT u.id, u.name, u.role, u.active,
                 array_agg(uo.outlet_id ORDER BY uo.outlet_id) FILTER (WHERE uo.outlet_id = ANY($1::uuid[])) AS "outletIds"
-           FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id
+           FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id AND uo.deleted_at IS NULL
           GROUP BY u.id HAVING bool_or(uo.outlet_id = ANY($1::uuid[]))
           ORDER BY u.name`, [p.outletIds]);
       return r.rows;
@@ -114,7 +115,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   /** Loads a cashier/waiter and reports whether this manager may change them. */
   async function manageable(c: import('pg').PoolClient, id: string, outletIds: string[]) {
     const r = await c.query(
-      `SELECT u.role, array_agg(uo.outlet_id) AS outlets FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id WHERE u.id = $1 GROUP BY u.role`, [id]);
+      `SELECT u.role, array_agg(uo.outlet_id) AS outlets FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id AND uo.deleted_at IS NULL WHERE u.id = $1 GROUP BY u.role`, [id]);
     const u = r.rows[0] as { role: string; outlets: string[] } | undefined;
     return u && u.role !== 'manager' && inScope(outletIds, u.outlets) ? u : null;
   }
@@ -131,9 +132,15 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       if (b.data.name !== undefined) await c.query('UPDATE app_user SET name = $2 WHERE id = $1', [ps.data.id, b.data.name]);
       if (b.data.active !== undefined) await c.query('UPDATE app_user SET active = $2 WHERE id = $1', [ps.data.id, b.data.active]);
       if (b.data.outletIds) {
-        await c.query('DELETE FROM user_outlet WHERE user_id = $1', [ps.data.id]);
-        for (const outletId of new Set(b.data.outletIds)) {
-          await c.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1,$2,$3)', [p.tenantId, ps.data.id, outletId]);
+        // Tombstone what is no longer wanted, revive or add what is. Rows that do not change are not
+        // touched (the WHERE on DO UPDATE), so they keep their version and devices do not re-pull them.
+        const wanted = [...new Set(b.data.outletIds)];
+        await c.query('UPDATE user_outlet SET deleted_at = now() WHERE user_id = $1 AND deleted_at IS NULL AND outlet_id <> ALL($2::uuid[])', [ps.data.id, wanted]);
+        for (const outletId of wanted) {
+          await c.query(
+            `INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1,$2,$3)
+             ON CONFLICT (user_id, outlet_id) DO UPDATE SET deleted_at = NULL WHERE user_outlet.deleted_at IS NOT NULL`,
+            [p.tenantId, ps.data.id, outletId]);
         }
       }
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'user.update', entity: 'app_user', entityId: ps.data.id, detail: b.data });
@@ -152,7 +159,23 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const ok = await withTenant(p.tenantId, async (c) => {
       if (!(await manageable(c, ps.data.id, p.outletIds))) return false;
       await c.query('UPDATE app_user SET pin_verifier = $2 WHERE id = $1', [ps.data.id, verifier]);
+      await clearLockout(c, ps.data.id, 'pin'); // a reset PIN starts clean
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'user.pin_reset', entity: 'app_user', entityId: ps.data.id });
+      return true;
+    });
+    return ok ? { ok: true } : notFound(reply);
+  });
+
+  // A manager clears a PIN lockout (e.g. a waiter who forgot theirs and locked themselves out).
+  app.post('/users/:id/unlock', { config: { ...cfg, rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const ps = idParams.safeParse(req.params);
+    if (!ps.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user') return reply.code(403).send({ error: 'forbidden' });
+    const ok = await withTenant(p.tenantId, async (c) => {
+      if (!(await manageable(c, ps.data.id, p.outletIds))) return false;
+      await clearLockout(c, ps.data.id, 'pin');
+      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'user.unlock', entity: 'app_user', entityId: ps.data.id });
       return true;
     });
     return ok ? { ok: true } : notFound(reply);
