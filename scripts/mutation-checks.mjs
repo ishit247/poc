@@ -142,6 +142,22 @@ const MUTANTS = [
     ['tablet-reprint-unpaid', "if (!sale || sale.status !== 'paid') throw new Error('only a paid sale has a receipt to reprint');", ''],
     ['tablet-recent-includes-open', "where('status').equals('paid')", "where('status').anyOf('paid', 'open')"],
   ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/receipt.test.ts'] })),
+  // --- phase 6: day close
+  ...[
+    ['dayclose-open-shift-ignored', 'if (bl.openShifts.length || bl.openSales || unacked.length)', 'if (bl.openSales || unacked.length)'],
+    ['dayclose-open-sale-ignored', 'if (bl.openShifts.length || bl.openSales || unacked.length)', 'if (bl.openShifts.length || unacked.length)'],
+    ['dayclose-unsent-ignored', 'if (bl.openShifts.length || bl.openSales || unacked.length)', 'if (bl.openShifts.length || bl.openSales)'],
+    ['dayclose-ack-any-device', '!acknowledgedDeviceIds.includes(d.id));\n      if (bl.', 'false);\n      if (bl.'],
+    ['dayclose-any-outlet', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);\n    const { date,", "if (p.kind !== 'user') return notFound(reply);\n    const { date,"],
+    ['dayclose-preview-any-outlet', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);\n    return withTenant", "if (p.kind !== 'user') return notFound(reply);\n    return withTenant"],
+    ['dayclose-reclose', 'if (day.closed_at) return reply.code(409)', 'if (false) return reply.code(409)'],
+    ['dayclose-future-day', "if (date > (await today(c, ps.data.id)))", 'if (false)'],
+    ['dayclose-not-frozen', 'SET closed_at = now(), closed_by = $2, totals = $3 WHERE id = $1 AND closed_at IS NULL', "SET closed_at = now(), closed_by = $2, totals = '{}'::jsonb || $3::jsonb - 'grossPaise' WHERE id = $1 AND closed_at IS NULL"],
+    ['dayclose-late-seen-twice', 'AND e.received_at > $3)', 'AND e.received_at > $3 - interval \'100 years\')'],
+    ['dayclose-gaps-hidden', 'WHERE NOT n = ANY(g.have)', 'WHERE false AND NOT n = ANY(g.have)'],
+    ['dayclose-upi-as-cash', "cashPaise: by.cash ?? 0", 'cashPaise: (by.cash ?? 0) + (by.upi ?? 0)'],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/dayclose.ts', from, to, API_TESTS('sync-push.test.ts'))),
+  M('dayclose-outbox-header-ignored', 'apps/api/src/auth.ts', 'outbox_pending = COALESCE($3, outbox_pending)', 'outbox_pending = outbox_pending', API_TESTS('sync-push.test.ts')),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });

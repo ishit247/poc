@@ -58,7 +58,11 @@ async function authenticate(req: FastifyRequest): Promise<Principal | null> {
     // The tablet reports its build on every request; a malformed value is ignored, not trusted.
     const reported = req.headers['x-app-version'];
     const appVersion = typeof reported === 'string' && APP_VERSION.test(reported) ? reported : null;
-    await c.query('UPDATE device SET last_seen_at = now(), app_version = COALESCE($2, app_version) WHERE id = $1', [p.id, appVersion]);
+    const pending = Number(req.headers['x-outbox-pending']);
+    const outboxPending = Number.isInteger(pending) && pending >= 0 && pending < 1_000_000 ? pending : null;
+    await c.query(
+      'UPDATE device SET last_seen_at = now(), app_version = COALESCE($2, app_version), outbox_pending = COALESCE($3, outbox_pending) WHERE id = $1',
+      [p.id, appVersion, outboxPending]);
     return { kind: 'device', tenantId: p.tenantId, deviceId: p.id, outletId: row.outlet_id, counterId: row.counter_id, revokedAt: row.revoked_at ?? null } as Principal;
   });
 }

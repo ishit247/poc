@@ -359,7 +359,7 @@ test('a closed day takes a late arrival and flags it; the day stays closed', asy
   const app = buildApp();
   const t = await Tablet.enrol(app, A, 'a1@example.test', 'School 1 Canteen');
   const date = '2026-03-02';
-  await withTenant(A, (c) => c.query("INSERT INTO business_day (tenant_id, outlet_id, date, closed_at) VALUES ($1, $2, $3, now()) ON CONFLICT (outlet_id, date) DO UPDATE SET closed_at = now()", [A, t.outletId, date]));
+  await withTenant(A, (c) => c.query("INSERT INTO business_day (tenant_id, outlet_id, date, closed_at, totals) VALUES ($1, $2, $3, now(), '{}') ON CONFLICT (outlet_id, date) DO UPDATE SET closed_at = now(), totals = '{}'", [A, t.outletId, date]));
   const s = t.sale({ date });
   assert.deepEqual(statuses(await t.push([s.created])), ['applied']);
   assert.deepEqual((await t.saleRow(s.saleId)).flags, ['late_arrival'], 'flagged when the sale arrives, before any payment');
@@ -469,4 +469,149 @@ test('money taken after the count is accepted and flagged; the variance already 
   assert.deepEqual(statuses(await t.push([open, close, late.created, late.paid])), Array(4).fill('applied'));
   assert.deepEqual((await t.saleRow(late.saleId)).flags, ['after_shift_close']);
   assert.equal((await t.shiftRow(shiftId)).variance, 0);
+});
+
+// ---- Day close (PLAN 14). Each test gets an outlet of its own: blockers are outlet-wide. ----
+async function freshOutlet(): Promise<string> {
+  // Named to sort after the seeded outlets: other tests pick "the first outlet" by name.
+  const name = `ZZ day close ${crypto.randomUUID().slice(0, 8)}`;
+  await withTenant(A, async (c) => {
+    const o = (await c.query('INSERT INTO outlet (tenant_id, name) VALUES ($1, $2) RETURNING id', [A, name])).rows[0].id;
+    await c.query("INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, 'C1')", [A, o]);
+    const u = (await c.query("INSERT INTO app_user (tenant_id, name, pin_verifier, role) VALUES ($1, $2, 'x', 'cashier') RETURNING id", [A, `${name} cashier`])).rows[0].id;
+    for (const user of [u, (await c.query("SELECT id FROM app_user WHERE email = 'a1@example.test'")).rows[0].id]) {
+      await c.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [A, user, o]);
+    }
+  });
+  return name;
+}
+const today = (outletId: string) => withTenant(A, async (c) => (await c.query("SELECT (now() AT TIME ZONE timezone)::date::text d FROM outlet WHERE id = $1", [outletId])).rows[0].d as string);
+const dayClose = (t: Tablet, body: object, token = t.mgr, id = t.outletId) =>
+  t.app.inject({ method: 'POST', url: `/outlets/${id}/day-close`, headers: bearer(token), payload: body });
+const report = (t: Tablet, pending: number) =>
+  t.app.inject({ method: 'GET', url: '/sync/pull?cursor=0', headers: { authorization: `Device ${t.cred}`, 'x-outbox-pending': String(pending) } });
+
+test('day close is blocked by an open shift, an open sale and unsent events; then freezes the totals', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  const shiftId = crypto.randomUUID();
+  const opened = t.open(shiftId); // built first: events are applied in device order
+  const s = t.sale({ date, shiftId });
+  const dangling = t.sale({ date, saleId: crypto.randomUUID(), seq: 2 });
+  await t.push([opened, s.created, s.paid, dangling.created]);
+
+  let r = await dayClose(t, { date });
+  assert.equal(r.statusCode, 409);
+  assert.equal(r.json().blockers.openShifts.length, 1);
+  assert.equal(r.json().blockers.openSales, 1);
+
+  await t.push([t.close(shiftId, 50_000 + s.total - 100)]); // 1.00 short
+  r = await dayClose(t, { date });
+  assert.equal(r.json().blockers.openShifts.length, 0);
+  assert.equal(r.json().blockers.openSales, 1, 'the unpaid sale still blocks');
+  await t.push([dangling.paid]);
+
+  // The tablet says it still holds three events: the server cannot see them, so the manager must be told.
+  await report(t, 3);
+  r = await dayClose(t, { date });
+  assert.equal(r.statusCode, 409);
+  assert.deepEqual(r.json().blockers.devices.map((d: any) => [d.outboxPending, d.blocking]), [[3, true]]);
+  const preview = (await t.app.inject({ method: 'GET', url: `/outlets/${t.outletId}/day-close?date=${date}`, headers: bearer(t.mgr) })).json();
+  assert.equal(preview.closed, false);
+  assert.equal(preview.provisional, true, "today's figures are provisional");
+
+  await report(t, 0);
+  r = await dayClose(t, { date });
+  assert.equal(r.statusCode, 200, r.body);
+  const tot = r.json().totals;
+  assert.equal(tot.paidSales, 2);
+  assert.equal(tot.grossPaise, s.total + dangling.total);
+  assert.equal(tot.cashPaise, s.total + dangling.total);
+  assert.equal(tot.upiPaise, 0);
+  assert.deepEqual(tot.shifts.map((x: any) => x.variance), [-100]);
+  assert.equal(tot.varianceTotalPaise, -100);
+
+  assert.equal((await dayClose(t, { date })).statusCode, 409, 'a second close is refused');
+  const after = (await t.app.inject({ method: 'GET', url: `/outlets/${t.outletId}/day-close?date=${date}`, headers: bearer(t.mgr) })).json();
+  assert.equal(after.closed, true);
+  assert.equal(after.totals.grossPaise, tot.grossPaise);
+  const row = await withTenant(A, async (c) => (await c.query("SELECT count(*)::int n FROM audit WHERE action = 'day.close' AND entity_id = (SELECT id FROM business_day WHERE outlet_id = $1 AND date = $2)", [t.outletId, date])).rows[0]);
+  assert.equal(row.n, 1);
+});
+
+test('an open shift alone blocks the close, and UPI is totalled apart from cash', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  const shiftId = crypto.randomUUID();
+  const opened = t.open(shiftId);
+  const s = t.sale({ date, shiftId });
+  s.paid.payload.payments = [{ method: 'upi', amountPaise: s.total, tenderedPaise: null, changePaise: 0, upiRef: 'UPI123456' }];
+  assert.deepEqual(statuses(await t.push([opened, s.created, s.paid])), Array(3).fill('applied'));
+  let r = await dayClose(t, { date });
+  assert.equal(r.statusCode, 409, 'nothing else is open, only the drawer');
+  assert.deepEqual([r.json().blockers.openShifts.length, r.json().blockers.openSales], [1, 0]);
+  await t.push([t.close(shiftId, 50_000)]);
+  r = await dayClose(t, { date });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.deepEqual([r.json().totals.cashPaise, r.json().totals.upiPaise], [0, s.total]);
+  assert.equal(r.json().totals.shifts[0].variance, 0, 'UPI is not in the drawer');
+});
+
+test('a manager may step over a tablet that will not report, and it is audited', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  await report(t, 5);
+  assert.equal((await dayClose(t, { date })).statusCode, 409);
+  assert.equal((await dayClose(t, { date, acknowledgedDeviceIds: [crypto.randomUUID()] })).statusCode, 409, 'naming some other device does not help');
+  assert.equal((await dayClose(t, { date, acknowledgedDeviceIds: [t.deviceId] })).statusCode, 200);
+  const a = await withTenant(A, async (c) => (await c.query("SELECT detail FROM audit WHERE action = 'day.close' AND detail->>'outletId' = $1", [t.outletId])).rows[0].detail);
+  assert.deepEqual(a.acknowledgedDevices, [{ id: t.deviceId, outboxPending: 5 }]);
+});
+
+test('day close: only a manager of that outlet, never a future day, never another tenant', async () => {
+  const app = buildApp();
+  const t = await Tablet.enrol(app, A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  const login = async (tenant: string, email: string) => (await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(tenant) }, payload: { email, password: 'dev-password-123' } })).json().token as string;
+  assert.equal((await dayClose(t, { date }, await login(A, 'a2@example.test'))).statusCode, 404, 'a manager of another outlet');
+  assert.equal((await dayClose(t, { date }, await login(B, 'b1@example.test'))).statusCode, 404, 'a manager of another tenant');
+  for (const who of [await login(A, 'a2@example.test'), await login(B, 'b1@example.test')]) {
+    const peek = await t.app.inject({ method: 'GET', url: `/outlets/${t.outletId}/day-close?date=${date}`, headers: bearer(who) });
+    assert.equal(peek.statusCode, 404, 'the preview is scoped too');
+  }
+  assert.equal((await t.app.inject({ method: 'POST', url: `/outlets/${t.outletId}/day-close`, headers: { authorization: `Device ${t.cred}` }, payload: { date } })).statusCode, 403, 'a tablet');
+  assert.equal((await dayClose(t, { date: '2999-01-01' })).statusCode, 400, 'a day that has not started');
+  const closed = await withTenant(A, async (c) => (await c.query('SELECT count(*)::int n FROM business_day WHERE outlet_id = $1 AND closed_at IS NOT NULL', [t.outletId])).rows[0].n);
+  assert.equal(closed, 0, 'none of those closed anything');
+});
+
+test('a hole in a tablet\'s receipt numbers is shown at day close, and does not block it', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  const one = t.sale({ date, seq: 1 });
+  const three = t.sale({ date, seq: 3 });
+  assert.deepEqual(statuses(await t.push([one.created, one.paid, three.created, three.paid])), Array(4).fill('applied'));
+  const preview = (await t.app.inject({ method: 'GET', url: `/outlets/${t.outletId}/day-close?date=${date}`, headers: bearer(t.mgr) })).json();
+  assert.deepEqual(preview.receiptGaps.map((g: any) => [g.counter, g.missing]), [['C1', [2]]]);
+  const r = await dayClose(t, { date });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.deepEqual(r.json().totals.receiptGaps.map((g: any) => g.missing), [[2]], 'and it is frozen with the day');
+});
+
+test('a sale that arrives after its day closed is flagged, leaves the frozen totals alone, and shows on the next close', async () => {
+  const t = await Tablet.enrol(buildApp(), A, 'a1@example.test', await freshOutlet());
+  const date = await today(t.outletId);
+  const early = '2026-03-05';
+  assert.equal((await dayClose(t, { date: early })).statusCode, 200, 'an empty day can be closed');
+  const frozen = () => withTenant(A, async (c) => (await c.query('SELECT totals FROM business_day WHERE outlet_id = $1 AND date = $2', [t.outletId, early])).rows[0].totals);
+  const before = await frozen();
+
+  const late = t.sale({ date: early });
+  assert.deepEqual(statuses(await t.push([late.created, late.paid])), ['applied', 'applied']);
+  assert.deepEqual(await frozen(), before, 'the closed day did not move');
+
+  const r = await dayClose(t, { date });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.deepEqual(r.json().totals.lateAdjustments.map((x: any) => [x.businessDate, x.totalPaise]), [[early, late.total]]);
+  assert.equal(r.json().totals.paidSales, 0, "and it is not in today's sales either");
 });

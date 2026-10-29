@@ -38,8 +38,12 @@ CREATE TABLE business_day (
   date      date NOT NULL,
   closed_at timestamptz,
   closed_by uuid,
+  -- Frozen at close (PLAN 14): never edited afterwards. Sales that arrive later are flagged late_arrival
+  -- and shown on the next close; they do not change this.
+  totals    jsonb,
   UNIQUE (tenant_id, id),
   UNIQUE (outlet_id, date),
+  CHECK ((closed_at IS NULL) = (totals IS NULL)),
   FOREIGN KEY (tenant_id, outlet_id) REFERENCES outlet(tenant_id, id),
   FOREIGN KEY (tenant_id, closed_by) REFERENCES app_user(tenant_id, id)
 );

@@ -32,12 +32,27 @@ Real Postgres for API and contract tests. Mutants caught (removed, tests failed,
 allowed; UPI counted as drawer cash; foreign-device shift accepted. Not run through `scripts/mutation-checks.mjs`
 (no phase 6 ids added yet).
 
+## Part 2: day close (API only, not yet committed)
+
+- `apps/api/src/routes/dayclose.ts`: `GET` previews, `POST /outlets/:id/day-close {date, acknowledgedDeviceIds}` closes.
+  Manager of that outlet only (404 otherwise). Blocks on any open shift at the outlet, any open sale dated on or before
+  the day, and any enrolled device whose last reported outbox count is above 0. A manager can step over a named device
+  (audited with its count). Freezes `business_day.totals` (sales, cash/UPI/online, voids, per-shift variance, late
+  adjustments, receipt gaps). A second close is refused; a day that has not started is refused.
+- Tablets report unsent events in `x-outbox-pending` on push and pull (`device.outbox_pending`, edited into 0001).
+  `business_day.totals` is edited into 0004. Seeds needed no change.
+- Late adjustments: sales of earlier days that reached the server after the previous close, listed once at the next close.
+- Receipt gaps (1..k per device per day) are shown and frozen, never blocking.
+- Verification: real Postgres, API 105 passing on a fresh database, typecheck clean; 13 mutants in
+  `scripts/mutation-checks.mjs` (`dayclose-*`), all caught (3 first survived, tests added).
+
 ## Not done / unverified (say so)
 
+- **No UI for day close** (manager screen: blockers, per-device "last heard", totals, close button). API only.
 - **No real-browser check** of the Shift screen, nor of phases 4 and 5 (still owed, do them together at tablet size).
-- **Day close** (manager, online): block while shifts or sales are open or devices have unsynced events,
-  per-counter variance, freeze totals, late-arrival adjustments surfaced next day. Not started.
-- **Receipt-number gap check** (1..k per device per day) and the offline-days lockout: not started.
+- Late adjustments key on `sync_event.received_at`; a day closed out of order (an earlier date after a later one) may
+  list or miss adjustments. Closing in date order is assumed.
+- The offline-days lockout: not started.
 - **Abandoned open orders are not auto-voided at shift close** (PLAN 9): there is no `sale.voided` event yet.
   They stay open and can be paid in the next shift.
 - A manager cannot yet see shifts, variances or `after_shift_close` flags in any screen or report.

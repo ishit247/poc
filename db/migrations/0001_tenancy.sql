@@ -57,6 +57,9 @@ CREATE TABLE device (
   label           text CHECK (label IS NULL OR length(label) BETWEEN 1 AND 60),
   enrolled_at     timestamptz NOT NULL DEFAULT now(),
   last_seen_at    timestamptz,
+  -- Events still in the tablet's outbox at its last contact (x-outbox-pending); null = never reported.
+  -- Day close shows it so a manager knows what the server cannot see.
+  outbox_pending  int CHECK (outbox_pending >= 0),
   revoked_at      timestamptz,
   app_version     text,
   UNIQUE (tenant_id, id),

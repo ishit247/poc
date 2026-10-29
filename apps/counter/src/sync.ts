@@ -6,12 +6,17 @@ import { syncLogo } from './logo.ts';
 
 interface Change { type: string; id: string; version: number; deleted: boolean; data: Record<string, any> }
 
+/** Events still waiting to be sent (parked rejections are not coming back, so they are not "waiting"). Day close shows it. */
+async function waiting(): Promise<string> {
+  return String((await db.outbox.toArray()).filter((r) => !r.rejected).length);
+}
+
 export async function pull(device: DeviceInfo): Promise<number> {
   let cursor = (await getMeta('cursor')) ?? 0;
   let applied = 0;
   for (let page = 0; page < 200; page++) {
     const r = await fetch(`/api/sync/pull?cursor=${cursor}`, {
-      headers: { authorization: `Device ${device.credential}`, 'x-app-version': __APP_VERSION__ },
+      headers: { authorization: `Device ${device.credential}`, 'x-app-version': __APP_VERSION__, 'x-outbox-pending': await waiting() },
     });
     if (!r.ok) throw new Error(`pull failed: ${r.status}`);
     const j = (await r.json()) as { cursor: number; hasMore: boolean; changes: Change[] };
@@ -48,7 +53,7 @@ export async function push(device: DeviceInfo): Promise<PushSummary> {
     const batch = rows.slice(i, i + BATCH);
     const r = await fetch('/api/sync/push', {
       method: 'POST',
-      headers: { authorization: `Device ${device.credential}`, 'content-type': 'application/json', 'x-app-version': __APP_VERSION__ },
+      headers: { authorization: `Device ${device.credential}`, 'content-type': 'application/json', 'x-app-version': __APP_VERSION__, 'x-outbox-pending': await waiting() },
       body: JSON.stringify({ events: batch.map((b) => ({ eventId: b.eventId, seq: b.seq, createdAt: b.createdAt, payload: b.payload })) }),
     });
     if (!r.ok) throw new Error(`push failed: ${r.status}`);

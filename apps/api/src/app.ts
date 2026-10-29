@@ -8,6 +8,7 @@ import { authRoutes } from './routes/auth.js';
 import { brandingRoutes } from './routes/branding.js';
 import { healthRoutes } from './routes/health.js';
 import { counterRoutes } from './routes/counters.js';
+import { dayCloseRoutes } from './routes/dayclose.js';
 import { menuRoutes } from './routes/menu.js';
 import { orderRoutes } from './routes/orders.js';
 import { outletRoutes } from './routes/outlets.js';
@@ -52,5 +53,6 @@ export function buildApp() {
   app.register(brandingRoutes);
   app.register(adminRoutes);
   app.register(syncRoutes);
+  app.register(dayCloseRoutes);
   return app;
 }
