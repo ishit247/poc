@@ -48,15 +48,18 @@ async function authenticate(req: FastifyRequest): Promise<Principal | null> {
   }
 
   return withTenant(p.tenantId, async (c) => {
+    // A route may opt in to revoked devices; it is then told when revocation happened and must judge
+    // each event against it. Every other route sees a revoked device as unknown.
+    const allowRevoked = req.routeOptions.config.allowRevokedDevice === true;
     const r = await c.query(
-      'SELECT credential_hash, outlet_id, counter_id FROM device WHERE id = $1 AND revoked_at IS NULL', [p.id]);
+      `SELECT credential_hash, outlet_id, counter_id, revoked_at FROM device WHERE id = $1 AND ($2 OR revoked_at IS NULL)`, [p.id, allowRevoked]);
     const row = r.rows[0];
     if (!row || !safeEqualHex(row.credential_hash, hash)) return null;
     // The tablet reports its build on every request; a malformed value is ignored, not trusted.
     const reported = req.headers['x-app-version'];
     const appVersion = typeof reported === 'string' && APP_VERSION.test(reported) ? reported : null;
     await c.query('UPDATE device SET last_seen_at = now(), app_version = COALESCE($2, app_version) WHERE id = $1', [p.id, appVersion]);
-    return { kind: 'device', tenantId: p.tenantId, deviceId: p.id, outletId: row.outlet_id, counterId: row.counter_id } as Principal;
+    return { kind: 'device', tenantId: p.tenantId, deviceId: p.id, outletId: row.outlet_id, counterId: row.counter_id, revokedAt: row.revoked_at ?? null } as Principal;
   });
 }
 

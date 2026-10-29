@@ -38,7 +38,11 @@ export interface LocalSale {
 }
 
 /** An event waiting to sync. `seq` is the device order the server will replay. */
-export interface OutboxRow { seq?: number; eventId: string; createdAt: string; payload: OutboxEvent }
+export interface OutboxRow {
+  seq?: number; eventId: string; createdAt: string; payload: OutboxEvent;
+  /** The server will never accept this event as sent. It stays here for a manager to look at, and is not resent. */
+  rejected?: string;
+}
 
 /** The tenant's logo, cached so the header and receipt show it with no network. Keyed by content hash. */
 export interface LogoRow { sha: string; type: string; bytes: ArrayBuffer }
@@ -47,7 +51,8 @@ export type MetaValue =
   | { key: 'device'; value: DeviceInfo }
   | { key: 'cursor'; value: number }
   | { key: 'receiptCounter'; value: ReceiptCounter }
-  | { key: 'lastPull'; value: string };
+  | { key: 'lastPull'; value: string }
+  | { key: 'lastPush'; value: string };
 
 class CounterDb extends Dexie {
   meta!: Table<MetaValue, string>;

@@ -20,12 +20,15 @@ export type Permission =
 
 export type Principal =
   | { kind: 'user'; tenantId: string; userId: string; role: Role; outletIds: string[]; sessionId: string; deviceId: string | null }
-  | { kind: 'device'; tenantId: string; deviceId: string; outletId: string; counterId: string };
+  // revokedAt is set only on a route that opted in with allowRevokedDevice (the push endpoint).
+  | { kind: 'device'; tenantId: string; deviceId: string; outletId: string; counterId: string; revokedAt: Date | null };
 
 declare module 'fastify' {
   interface FastifyContextConfig {
     scope?: ScopeRule;
     permission?: Permission;
+    /** A revoked tablet may still deliver what it did before revocation (PLAN 7.6). Only the push endpoint sets this. */
+    allowRevokedDevice?: boolean;
   }
   interface FastifyRequest {
     principal?: Principal;

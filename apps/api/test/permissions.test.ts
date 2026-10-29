@@ -10,7 +10,7 @@ const A = '00000000-0000-4000-8000-00000000000a';
 test.after(() => pool.end());
 
 const user = (role: Role): Principal => ({ kind: 'user', tenantId: A, userId: 'u', role, outletIds: [], sessionId: 's', deviceId: null });
-const device: Principal = { kind: 'device', tenantId: A, deviceId: 'd', outletId: 'o', counterId: 'c' };
+const device: Principal = { kind: 'device', tenantId: A, deviceId: 'd', outletId: 'o', counterId: 'c', revokedAt: null };
 
 // What each principal may do. Waiters take orders but never payment or management.
 const MATRIX: Record<Permission, { manager: boolean; cashier: boolean; waiter: boolean; device: boolean }> = {

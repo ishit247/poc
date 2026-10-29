@@ -33,6 +33,42 @@ export async function pull(device: DeviceInfo): Promise<number> {
   throw new Error('pull did not terminate');
 }
 
+export interface PushSummary { sent: number; done: number; parked: number; deferred: number }
+const BATCH = 50;
+
+/**
+ * Push: send the outbox in device order. An event leaves the outbox ONLY when the server says it is
+ * applied or a duplicate; a lost response, a crash or a 500 therefore just means "send it again".
+ * A rejected event is parked (kept, marked, not resent) and a deferred one is simply tried next time.
+ */
+export async function push(device: DeviceInfo): Promise<PushSummary> {
+  const summary: PushSummary = { sent: 0, done: 0, parked: 0, deferred: 0 };
+  const rows = (await db.outbox.orderBy('seq').toArray()).filter((r) => !r.rejected);
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const r = await fetch('/api/sync/push', {
+      method: 'POST',
+      headers: { authorization: `Device ${device.credential}`, 'content-type': 'application/json', 'x-app-version': __APP_VERSION__ },
+      body: JSON.stringify({ events: batch.map((b) => ({ eventId: b.eventId, seq: b.seq, createdAt: b.createdAt, payload: b.payload })) }),
+    });
+    if (!r.ok) throw new Error(`push failed: ${r.status}`);
+    const { results } = (await r.json()) as { results: { eventId: string; status: string; reason?: string }[] };
+    const bySeq = new Map(batch.map((b) => [b.eventId, b.seq!]));
+    await db.transaction('rw', db.outbox, db.meta, async () => {
+      for (const res of results) {
+        const seq = bySeq.get(res.eventId);
+        if (seq === undefined) continue;
+        if (res.status === 'applied' || res.status === 'duplicate') { await db.outbox.delete(seq); summary.done++; }
+        else if (res.status === 'rejected') { await db.outbox.update(seq, { rejected: res.reason ?? 'rejected' }); summary.parked++; }
+        else summary.deferred++;
+      }
+      await db.meta.put({ key: 'lastPush', value: new Date().toISOString() });
+    });
+    summary.sent += batch.length;
+  }
+  return summary;
+}
+
 export async function enrol(code: string): Promise<DeviceInfo> {
   const r = await fetch('/api/enrol', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: code.trim() }) });
   if (!r.ok) throw new Error('That code was not accepted. It may be used, expired or mistyped.');

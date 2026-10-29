@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { liveQuery } from 'dexie';
 import { db, getMeta, type DeviceInfo } from './db.ts';
-import { enrol, pull } from './sync.ts';
+import { enrol, pull, push } from './sync.ts';
 import { loadMenu, type MenuView } from './menu.ts';
 import type { Actor } from './sale.ts';
 import { PinScreen } from './PinScreen.tsx';
@@ -65,15 +65,20 @@ function Counter({ device }: { device: DeviceInfo }) {
   const [tab, setTab] = useState<'sell' | 'orders'>('sell');
   const [online, setOnline] = useState(navigator.onLine);
   const [syncError, setSyncError] = useState('');
-  const pending = useLive(() => db.outbox.count(), 0);
+  const pending = useLive(() => db.outbox.filter((r) => !r.rejected).count(), 0);
+  const parked = useLive(() => db.outbox.filter((r) => !!r.rejected).count(), 0);
+  const lastPush = useLive(async () => (await getMeta('lastPush')) ?? '', '');
   const logoUrl = useLogoUrl();
   const lastPull = useLive(async () => (await getMeta('lastPull')) ?? '', '');
 
   const refresh = useCallback(async () => setMenu(await loadMenu()), []);
   const sync = useCallback(async () => {
+    // Push first (it shrinks the "waiting" count), but never let a failed push stop the menu from updating.
+    let pushed = true;
+    try { await push(device); } catch { pushed = false; }
     try {
       await pull(device);
-      setSyncError('');
+      setSyncError(pushed ? '' : 'Sales could not be sent just now. They are safe on this tablet and will be retried.');
       setOnline(true);
     } catch {
       setSyncError('Could not reach the server.');
@@ -101,7 +106,7 @@ function Counter({ device }: { device: DeviceInfo }) {
         <strong>{device.outletName}</strong> <span className="muted">· counter {device.counterCode}</span>
         <span className="spacer" />
         <span data-testid="sync-status" className={online ? 'ok' : 'warn'}>{online ? '● Online' : '● Offline'}</span>
-        <span data-testid="pending" className="muted" title="Sales waiting to reach the server">{pending} waiting</span>
+        <span data-testid="pending" className="muted" title="Sales waiting to reach the server">{pending} waiting{lastPush ? ` · last sent ${new Date(lastPush).toLocaleTimeString()}` : ''}</span>
         <button data-testid="sync-now" onClick={sync}>Sync</button>
         {actor && (
           <>
@@ -110,6 +115,7 @@ function Counter({ device }: { device: DeviceInfo }) {
           </>
         )}
       </header>
+      {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
       {!actor ? (
         <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />

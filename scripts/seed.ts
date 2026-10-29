@@ -154,6 +154,12 @@ for (const t of Object.values(SEED)) {
     await client.query(
       `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
        VALUES ($1, $2, $3, 'Tea', 1000, 500, 1, 1000, 50)`, [t.id, open.rows[0].id, itemIds['Tea']]);
+    // The ledger entries those sales would have left (payloads are placeholders; seeds are not replayed).
+    for (const [seq, type, saleId] of [[1, 'sale.created', sale.rows[0].id], [2, 'payment.taken', sale.rows[0].id], [3, 'sale.created', open.rows[0].id]] as const) {
+      await client.query(
+        `INSERT INTO sync_event (tenant_id, id, device_id, seq, type, entity_id, schema_version, created_at_device, outcome, payload)
+         VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, 1, '2026-01-01T09:00:00Z', 'applied', '{}')`, [t.id, deviceIds[n], seq, type, saleId]);
+    }
   }
   await client.query('COMMIT');
 }

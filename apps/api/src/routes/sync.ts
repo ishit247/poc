@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { DEFAULT_SETTINGS, type TradingSettings } from '@pos/shared';
 import { withTenant } from '../db.js';
+import { ingest } from '../ingest.js';
 
 const PAGE = 500;
 const query = z.object({ cursor: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0) }).strict();
@@ -64,7 +66,40 @@ const PULL_SQL = `
   ORDER BY version
   LIMIT ${PAGE + 1}`;
 
+const MAX_BATCH = 100;
+const pushBody = z.object({
+  events: z.array(z.object({
+    eventId: z.string().uuid(),
+    seq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    createdAt: z.string().datetime({ offset: true }),
+    payload: z.unknown(),
+  }).strict()).min(1).max(MAX_BATCH),
+}).strict();
+
+async function tenantSettings(tenantId: string): Promise<TradingSettings> {
+  const row = await withTenant(tenantId, async (c) =>
+    (await c.query('SELECT max_line_qty, gst_rounding, bill_round_to, offline_days FROM tenant_setting')).rows[0]);
+  return row
+    ? { maxLineQty: row.max_line_qty, gstRounding: row.gst_rounding, billRoundTo: row.bill_round_to, offlineDays: row.offline_days }
+    : DEFAULT_SETTINGS;
+}
+
 export const syncRoutes: FastifyPluginAsync = async (app) => {
+  // Push. Scope: an enrolled device writes events for ITS OWN outlet and counter only; the tenant, outlet,
+  // device and counter all come from the credential, never from the body. A revoked device is let in on
+  // this route alone, and ingest judges each event against the moment of revocation.
+  app.post('/sync/push', { config: { scope: 'outlet', permission: 'device', allowRevokedDevice: true } }, async (req, reply) => {
+    const body = pushBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid request' });
+    const p = req.principal!;
+    if (p.kind !== 'device') return reply.code(403).send({ error: 'forbidden' });
+    const settings = await tenantSettings(p.tenantId);
+    // In the device's own order: a payment is judged after the sale it pays for.
+    const results = [];
+    for (const e of [...body.data.events].sort((a, b) => a.seq - b.seq)) results.push(await ingest(p, e, settings));
+    return { results };
+  });
+
   // Scope: an enrolled device gets its tenant's catalogue, its own outlet's availability,
   // its own outlet's settings, menu rules and price overrides, and ONLY its own counter's menu rules.
   app.get('/sync/pull', { config: { scope: 'outlet', permission: 'device' } }, async (req, reply) => {

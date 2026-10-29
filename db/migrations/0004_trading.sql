@@ -1,6 +1,5 @@
 -- Trading: business day, shift, sale, lines, payments. PLAN.md sections 8 and 9.
 -- Rows arrive from devices by sync push (phase 4); the ids are client-generated UUIDs.
--- Sync ledger (sync_event) is added with the push endpoint in phase 4.
 
 -- Manager-set trading rules, one row per tenant, delivered to tablets by pull. Defaults here must
 -- match DEFAULT_SETTINGS in packages/shared/src/settings.ts. A tenant with no row uses the defaults.
@@ -143,6 +142,34 @@ CREATE TABLE payment (
 );
 SELECT app.enable_tenant_rls('payment');
 REVOKE UPDATE, DELETE, TRUNCATE ON payment FROM pos_app;
+
+-- The sync ledger: one row per event the server has DECIDED (applied or rejected), keyed by the
+-- client's event id so a retry finds its earlier answer. (tenant_id, id) rather than id alone: an id
+-- another tenant used must not look like "already seen" through RLS. A deferred event (its sale has not
+-- arrived yet) is not decided and leaves no row. The payload is kept so a rejected event is not lost
+-- if the tablet is. The ledger is append-only: REVOKE withholds (default privileges grant all four).
+CREATE TABLE sync_event (
+  tenant_id         uuid NOT NULL REFERENCES tenant(id),
+  id                uuid NOT NULL,
+  device_id         uuid NOT NULL,
+  seq               bigint NOT NULL CHECK (seq > 0),
+  type              text NOT NULL,
+  entity_id         uuid,                    -- the sale an event is about, when it names one
+  schema_version    int,
+  created_at_device timestamptz NOT NULL,
+  received_at       timestamptz NOT NULL DEFAULT now(),
+  outcome           text NOT NULL CHECK (outcome IN ('applied', 'rejected')),
+  reason            text,
+  payload           jsonb NOT NULL,
+  PRIMARY KEY (tenant_id, id),
+  CHECK ((outcome = 'rejected') = (reason IS NOT NULL)),
+  FOREIGN KEY (tenant_id, device_id) REFERENCES device(tenant_id, id)
+);
+-- A device numbers its events 1, 2, 3...; one number is one event.
+CREATE UNIQUE INDEX sync_event_device_seq_uq ON sync_event (device_id, seq);
+CREATE INDEX sync_event_entity_ix ON sync_event (device_id, entity_id) WHERE entity_id IS NOT NULL;
+SELECT app.enable_tenant_rls('sync_event');
+REVOKE UPDATE, DELETE, TRUNCATE ON sync_event FROM pos_app;
 
 -- Invariant 4: once a sale leaves 'open' its money cannot change, and the only
 -- moves are open->paid|void and paid->refunded|void.
