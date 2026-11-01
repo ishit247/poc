@@ -195,6 +195,40 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(201).send({ id: userId });
   });
 
+  // --- support impersonation (0009): read-only, 30 minutes, reason required, owner only ----------------------------
+  // The grant is written by a SECURITY DEFINER function that also writes the tenant's own audit row; the platform audit
+  // row goes in the same transaction. The credential is shown once and works as `Support <tenantId>.<id>.<secret>`.
+  app.post('/platform/tenants/:id/impersonate', { config: { ...owner, ...strict(10) } }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    const body = reasonBody.safeParse(req.body);
+    if (!params.success || !body.success) return bad(reply);
+    const a = req.admin!;
+    const tenantId = params.data.id;
+    const out = await withPlatform(async (c) => {
+      const t = (await c.query('SELECT suspended_at FROM tenant WHERE id = $1', [tenantId])).rows[0];
+      if (!t) return null;
+      const adminName = (await c.query('SELECT name FROM platform_admin WHERE id = $1', [a.adminId])).rows[0].name as string;
+      const secret = newSecret();
+      const g = (await c.query('SELECT id, expires_at FROM platform.start_impersonation($1, $2, $3, $4, $5)',
+        [tenantId, a.adminId, adminName, body.data.reason, sha256(secret)])).rows[0];
+      await platformAudit(c, { adminId: a.adminId, action: 'impersonation.start', tenantId, entity: 'impersonation', entityId: g.id, detail: { reason: body.data.reason, readOnly: true, expiresAt: g.expires_at } });
+      return { id: g.id as string, expiresAt: g.expires_at as Date, credential: `Support ${tenantId}.${g.id}.${secret}`, readOnly: true as const };
+    });
+    return out ? reply.code(201).send(out) : notFound(reply);
+  });
+
+  app.post('/platform/tenants/:id/impersonations/:iid/end', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
+    const params = z.object({ id: uuid, iid: uuid }).safeParse(req.params);
+    if (!params.success) return bad(reply);
+    const a = req.admin!;
+    const ended = await withPlatform(async (c) => {
+      const ok = (await c.query('SELECT platform.end_impersonation($1, $2) AS ok', [params.data.id, params.data.iid])).rows[0].ok as boolean;
+      if (ok) await platformAudit(c, { adminId: a.adminId, action: 'impersonation.end', tenantId: params.data.id, entity: 'impersonation', entityId: params.data.iid });
+      return ok;
+    });
+    return ended ? { ok: true } : notFound(reply);
+  });
+
   // --- health and usage: counts from SECURITY DEFINER functions (0008), never rows ---------------------------
   const healthQuery = z.object({
     staleHours: z.coerce.number().int().min(0).max(720).default(24),

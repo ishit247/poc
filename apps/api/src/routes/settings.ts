@@ -17,6 +17,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? DEFAULT_SETTINGS;
   });
 
+  // Scope: the tenant's own record of every time the platform operator looked at its data (0009). Never the token.
+  app.get('/support-access', { config: cfg }, async (req) => {
+    const p = req.principal!;
+    return withTenant(p.tenantId, async (c) => (await c.query(
+      `SELECT id, admin_name AS "operator", reason, created_at AS "startedAt", expires_at AS "expiresAt", ended_at AS "endedAt"
+         FROM impersonation ORDER BY created_at DESC LIMIT 100`)).rows);
+  });
+
   app.put('/settings', { config: cfg }, async (req, reply) => {
     const b = TradingSettings.safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: 'invalid request' });

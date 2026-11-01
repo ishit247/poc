@@ -27,7 +27,9 @@ export interface PlatformAdmin {
 }
 
 export type Principal =
-  | { kind: 'user'; tenantId: string; userId: string; role: Role; outletIds: string[]; sessionId: string; deviceId: string | null }
+  // `support` is set only for a platform operator's impersonation: a read-only manager view (no real user behind it,
+  // userId is the nil uuid, outletIds is every outlet of the tenant). auth.ts refuses every method but GET/HEAD for it.
+  | { kind: 'user'; tenantId: string; userId: string; role: Role; outletIds: string[]; sessionId: string; deviceId: string | null; support?: { impersonationId: string } }
   // revokedAt is set only on a route that opted in with allowRevokedDevice (the push endpoint).
   | { kind: 'device'; tenantId: string; deviceId: string; outletId: string; counterId: string; revokedAt: Date | null };
 

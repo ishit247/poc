@@ -1,4 +1,8 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
+
+/** Per-request flag, opened by an onRequest hook (auth.ts) and set once the caller proves to be a support session. */
+export const requestMode = new AsyncLocalStorage<{ readOnly: boolean }>();
 
 const url = process.env.APP_DATABASE_URL ?? 'postgres://pos_app:pos_app@localhost:55432/pos';
 export const pool = new pg.Pool({ connectionString: url });
@@ -33,6 +37,8 @@ export async function withTenant<T>(tenantId: string, fn: (c: pg.PoolClient) => 
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
+    // A support (impersonation) request cannot write: Postgres itself refuses, whatever a route does.
+    if (requestMode.getStore()?.readOnly) await c.query('SET TRANSACTION READ ONLY');
     await c.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
     const out = await fn(c);
     await c.query('COMMIT');

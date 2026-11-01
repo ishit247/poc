@@ -33,7 +33,7 @@ PLAN.md refs: sections 5 (roles), 14 (reports), 15 (audit), 18 (operations), 19 
 | 1 | Migration `0007_platform.sql`, `app_platform` role, grants/policies, DB tests, 7 mutants | done, committed |
 | 2 | Platform auth (password + TOTP, lockout, replay refusal, sessions), tenant create/rename/suspend/reactivate, first-manager creation, platform audit, suspension enforced on tenant login and auth | done, uncommitted (see notes) |
 | 3 | Health and usage views (device last-seen, unsynced, sync rejects, outbox backlog, webhook quiet, app-version skew; counts per month) | done, uncommitted |
-| 4 | Impersonation (reason, expiry, read-only, tenant-visible audit) | not started |
+| 4 | Impersonation (reason, 30-minute expiry, read-only only, tenant-visible audit) | done, uncommitted |
 | 5 | `apps/admin` UI, checked in a real browser at tablet size | not started |
 | 6 | Mutation checks per gate; fold phase 9 gaps (integration/mapping admin, encrypt webhook secrets); runbook, backups/restore drill, rate limits | not started |
 
@@ -91,6 +91,30 @@ console connection.
 Not covered: nothing measured against large data (the functions scan per tenant; check `EXPLAIN` before a tenant has
 a year of sales); no alert delivery, the console only shows warnings; the lifetime of "rejected" events is not
 trimmed, so `sync-rejected` counts the last 24 h only.
+
+### Step 4 (done)
+Decided with the user on 2026-11-02: a support session is **read-only only** (there is no write mode, not even an
+opt-in) and lasts **30 minutes**, not extendable.
+
+Built: `db/migrations/0009_impersonation.sql`, `requestMode` in `db.ts`, `Support` credential in `auth.ts`,
+`POST /platform/tenants/:id/impersonate` and `.../impersonations/:iid/end` (owner only, reason 3 to 200 chars),
+`GET /support-access` (a tenant's managers), `test/platform-impersonation.test.ts`.
+
+Design:
+- The grant is a row in the tenant-side `impersonation` table (FORCE RLS). `pos_app` can only read it; the console
+  role has no right on it. The console starts and ends a grant through two SECURITY DEFINER functions, which also write
+  the tenant's own audit row (`support.access.start` / `.end`); the platform audit row goes in the same transaction.
+- The 30 minutes is fixed in the start function and pinned by a CHECK (`expires_at <= created_at + 30 min`); the caller
+  chooses nothing. Expiry and early end are checked on every request.
+- Credential: `Support <tenantId>.<id>.<secret>`, shown once. It acts as a manager who has every outlet of that tenant
+  (nil-uuid user). Device-only routes refuse it.
+- Read-only twice over: auth refuses any method but GET/HEAD, and every transaction of a support request is
+  `SET TRANSACTION READ ONLY` (AsyncLocalStorage flag read by `withTenant`), so a GET route that wrote would fail with
+  25006 instead of writing.
+
+Not done: individual reads are not audited (only start/end, as the rest of the system does not audit reads);
+a suspended tenant refuses support access like everyone else; no console UI yet (step 5); no per-operator cap on how
+many grants may be open at once.
 
 ## Open items carried
 

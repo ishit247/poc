@@ -350,6 +350,19 @@ const MUTANTS = [
     ['plat-warning-severity', 'apps/api/src/platformHealth.ts', "add('sync-rejected', 'alert'", "add('sync-rejected', 'warn'", 'api'],
   ].map(([id, file, from, to, kind]) => M(id, file, from, to, kind === 'db'
     ? { cwd: '.', cmd: ['node', '--test', 'db/test/platform.test.mjs'] } : API_TESTS('platform-health.test.ts'))),
+  // --- support impersonation (step 4)
+  ...[
+    ['imp-method-gate-removed', 'apps/api/src/auth.ts', "if (req.method !== 'GET' && req.method !== 'HEAD') return reply", "if (false) return reply"],
+    ['imp-db-not-readonly', 'apps/api/src/db.ts', "if (requestMode.getStore()?.readOnly) await c.query('SET TRANSACTION READ ONLY');", ''],
+    ['imp-readonly-flag-not-set', 'apps/api/src/auth.ts', 'mode.readOnly = true;', 'mode.readOnly = false;'],
+    ['imp-expiry-ignored', 'apps/api/src/auth.ts', "WHERE id = $1 AND ended_at IS NULL AND expires_at > now()'", "WHERE id = $1 AND ended_at IS NULL'"],
+    ['imp-end-ignored', 'apps/api/src/auth.ts', "WHERE id = $1 AND ended_at IS NULL AND expires_at > now()'", "WHERE id = $1 AND expires_at > now()'"],
+    ['imp-limit-not-in-db', 'db/migrations/0009_impersonation.sql', "CHECK (expires_at > created_at AND expires_at <= created_at + interval '30 minutes')", 'CHECK (expires_at > created_at)'],
+    ['imp-app-role-can-write', 'db/migrations/0009_impersonation.sql', 'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON impersonation FROM pos_app;', ''],
+    ['imp-support-role-may-start', 'apps/api/src/routes/platform.ts', "'/platform/tenants/:id/impersonate', { config: { ...owner", "'/platform/tenants/:id/impersonate', { config: { ...any"],
+    ['imp-no-tenant-audit', 'db/migrations/0009_impersonation.sql', "'support.access.start'", "'support.access.x'"],
+    ['imp-tenant-unchecked', 'apps/api/src/auth.ts', "if (req.hostTenantId && req.hostTenantId !== principal.tenantId)", "if (false)"],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('platform-impersonation.test.ts'))),
   M('outbox-one-tenant-only','apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
 ];
 

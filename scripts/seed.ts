@@ -137,6 +137,11 @@ for (const t of Object.values(SEED)) {
   await client.query(
     `INSERT INTO inbound_event (tenant_id, outlet_id, channel, result, detail, raw_payload) VALUES ($1, $2, 'zomato', 'rejected', 'seed sample', '{}')`,
     [t.id, outletIds[0]]);
+  // One past, already-ended support session, so the tenant's "support access" list is not empty.
+  await client.query(
+    `INSERT INTO impersonation (tenant_id, admin_id, admin_name, reason, token_hash, created_at, expires_at, ended_at)
+     VALUES ($1, gen_random_uuid(), 'Seed Operator', 'seed sample', $2, now() - interval '2 hours', now() - interval '90 minutes', now() - interval '100 minutes')`,
+    [t.id, sha256(newSecret())]);
   // Counter-specific menus. Counter 1: whole menu, Samosa cheaper here. Counter 2: drinks only.
   for (const [c1, c2] of counterIds) {
     await client.query('INSERT INTO counter_item (tenant_id, counter_id, item_id, listed, price_paise) VALUES ($1, $2, $3, true, 1200)', [t.id, c1, itemIds['Samosa']]);

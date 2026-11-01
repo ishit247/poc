@@ -6,7 +6,7 @@
 // same 401, so nothing is learned from the failure.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
-import { tenantForHost, withPlatform, withTenant } from './db.js';
+import { requestMode, tenantForHost, withPlatform, withTenant } from './db.js';
 import { safeEqualHex, sha256 } from './security/crypto.js';
 import type { Permission, PlatformAdmin, Principal } from './scope.js';
 
@@ -15,11 +15,13 @@ const CRED = new RegExp(`^(${UUID})\\.(${UUID})\\.([A-Za-z0-9_-]{43})$`, 'i');
 
 const APP_VERSION = /^[A-Za-z0-9._+-]{1,40}$/;
 
-function parse(header: string | undefined): { scheme: 'Bearer' | 'Device'; tenantId: string; id: string; secret: string } | null {
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+function parse(header: string | undefined): { scheme: 'Bearer' | 'Device' | 'Support'; tenantId: string; id: string; secret: string } | null {
   if (!header) return null;
   const sp = header.indexOf(' ');
   const scheme = header.slice(0, sp);
-  if (scheme !== 'Bearer' && scheme !== 'Device') return null;
+  if (scheme !== 'Bearer' && scheme !== 'Device' && scheme !== 'Support') return null;
   const m = CRED.exec(header.slice(sp + 1));
   return m ? { scheme, tenantId: m[1]!.toLowerCase(), id: m[2]!.toLowerCase(), secret: m[3]! } : null;
 }
@@ -60,6 +62,19 @@ async function authenticate(req: FastifyRequest): Promise<Principal | 'suspended
   const p = parse(req.headers.authorization);
   if (!p) return null;
   const hash = sha256(p.secret);
+
+  // An operator's impersonation grant (platform console, 0009). Expiry (30 min) and early end are checked on every request.
+  if (p.scheme === 'Support') {
+    return withTenant(p.tenantId, async (c) => {
+      const r = await c.query(
+        'SELECT token_hash FROM impersonation WHERE id = $1 AND ended_at IS NULL AND expires_at > now()', [p.id]);
+      const row = r.rows[0];
+      if (!row || !safeEqualHex(row.token_hash, hash)) return null;
+      if (await isSuspended(c, p.tenantId)) return 'suspended' as const;
+      const outlets = (await c.query('SELECT id FROM outlet')).rows.map((o) => o.id as string);
+      return { kind: 'user', tenantId: p.tenantId, userId: NIL_UUID, role: 'manager', outletIds: outlets, sessionId: p.id, deviceId: null, support: { impersonationId: p.id } } as Principal;
+    });
+  }
 
   if (p.scheme === 'Bearer') {
     return withTenant(p.tenantId, async (c) => {
@@ -122,6 +137,9 @@ export function allowedAdmin(permission: Permission, a: PlatformAdmin): boolean 
 }
 
 export function registerAuth(app: FastifyInstance) {
+  // Opens the per-request store that withTenant reads. Callback style, so the whole request runs inside it.
+  app.addHook('onRequest', (_req, _reply, done) => { requestMode.run({ readOnly: false }, done); });
+
   app.addHook('onRequest', async (req, reply) => {
     const cfg = req.routeOptions.config;
     // Everything under /platform (login included) answers only on the console's own address when one is configured.
@@ -143,6 +161,14 @@ export function registerAuth(app: FastifyInstance) {
     if (req.hostTenantId && req.hostTenantId !== principal.tenantId) return reply.code(401).send({ error: 'unauthorized' });
     // Deny by default: a route with no permission (cannot happen past onRoute) is refused.
     if (!cfg.permission || !allowed(cfg.permission, principal)) return reply.code(403).send({ error: 'forbidden' });
+    // Support access is read-only: refused here by method, and again by Postgres (every transaction of this request
+    // is READ ONLY). A route that wrote on GET would fail the second, not slip through.
+    if (principal.kind === 'user' && principal.support) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(403).send({ error: 'read-only support session' });
+      const mode = requestMode.getStore();
+      if (!mode) return reply.code(500).send({ error: 'request failed' }); // cannot happen; never fall back to read-write
+      mode.readOnly = true;
+    }
     req.principal = principal;
   });
 }
