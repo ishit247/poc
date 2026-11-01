@@ -257,6 +257,18 @@ const MUTANTS = [
   M('outbox-scan-open-to-all', 'db/migrations/0005_online.sql', "USING (current_setting('app.job', true) = 'outbox' AND", 'USING (', API_TESTS('outbox.test.ts')),
   M('outbox-scan-ignores-due', 'db/migrations/0005_online.sql', "status = 'pending' AND next_attempt_at <= now());", "status = 'pending');", API_TESTS('outbox.test.ts')),
   M('outbox-delete-granted', 'db/migrations/0005_online.sql', 'REVOKE DELETE, TRUNCATE ON integration_outbox FROM pos_app;', '', API_TESTS('outbox.test.ts')),
+  // --- phase 9: inbound webhooks and the platform senders
+  ...[
+    ['webhook-signature-unchecked', 'apps/api/src/routes/webhooks.ts', ' || !provider.verifySignature(integ.secret, ts, raw, sig)', ''],
+    ['webhook-signature-any-same-length', 'apps/api/src/providers/index.ts', 'return got.length === want.length && timingSafeEqual(got, want);', 'return got.length === want.length;'],
+    ['webhook-replay-window-off', 'apps/api/src/providers/index.ts', 'Math.abs(nowMs - ts * 1000) > MAX_SKEW_MS', 'false'],
+    ['webhook-unmapped-dropped', 'apps/api/src/routes/webhooks.ts', '{ provider: ch, rawPayload: raw, unmapped }', '{ provider: ch, rawPayload: raw, unmapped: [] }'],
+    ['webhook-raw-not-kept', 'apps/api/src/routes/webhooks.ts', '{ provider: ch, rawPayload: raw, unmapped }', '{ provider: ch, rawPayload: null as unknown as string, unmapped }'],
+    ['webhook-platform-price-ignored', 'apps/api/src/routes/webhooks.ts', 'qty: l.qty, unitPaise: l.unitPaise }));', 'qty: l.qty }));'],
+    ['webhook-rejection-not-recorded', 'apps/api/src/routes/webhooks.ts', 'await c.query(`INSERT INTO inbound_event', 'await c.query(`SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::text -- INSERT INTO inbound_event'],
+    ['webhook-sender-pretends-success', 'apps/api/src/jobs/outbox.ts', "async () => { throw new Error(`${provider}: partner API not configured`); }", 'async () => {}'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('webhooks.test.ts'))),
+  M('webhook-event-editable', 'db/migrations/0006_integrations.sql', 'REVOKE UPDATE, DELETE, TRUNCATE ON inbound_event FROM pos_app;', '', API_TESTS('webhooks.test.ts')),
   // --- phase 8: reports
   ...[
     ['rep-named-outlet-unchecked', 'apps/api/src/routes/reports.ts', 'if (outletId && !p.outletIds.includes(outletId)) return', 'if (false) return'],

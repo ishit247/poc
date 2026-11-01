@@ -48,7 +48,7 @@ const OUTBOX_ACTION: Record<string, string> = {
 export const ACTIVE =['received', 'accepted', 'preparing', 'ready'];
 
 const COLS = `o.id, o.sale_id AS "saleId", o.outlet_id AS "outletId", o.channel, o.provider, o.external_order_id AS "externalOrderId",
-  o.status, o.accept_by AS "acceptBy", o.prep_minutes AS "prepMinutes", o.customer_label AS "customerLabel",
+  o.unmapped_lines AS "unmappedLines", o.status, o.accept_by AS "acceptBy", o.prep_minutes AS "prepMinutes", o.customer_label AS "customerLabel",
   o.delivery_note AS "deliveryNote", o.reason, o.price_overridden AS "priceOverridden", o.received_at AS "receivedAt",
   o.status_at AS "statusAt", s.total_paise::bigint AS "totalPaise"`;
 
@@ -77,8 +77,10 @@ async function fetchOrder(c: pg.PoolClient, outletIds: string[], id: string) {
 }
 
 type Actor = { tenantId: string; userId: string; deviceId: string };
+/** Set by the webhook path (phase 9): where the order came from, what the platform sent, and lines we could not map. */
+export type OrderSource = { provider: 'zomato' | 'swiggy'; rawPayload: string; unmapped: unknown[] };
 
-async function createOrder(c: pg.PoolClient, a: Actor, outletIds: string[], b: z.infer<typeof createBody>) {
+export async function createOrder(c: pg.PoolClient, a: Actor, outletIds: string[], b: z.infer<typeof createBody>, source?: OrderSource) {
   const dev = (await c.query('SELECT outlet_id FROM device WHERE id = $1', [a.deviceId])).rows[0];
   if (!dev || !outletIds.includes(dev.outlet_id)) return { kind: 'not_found' as const };
   const outletId: string = dev.outlet_id;
@@ -127,9 +129,11 @@ async function createOrder(c: pg.PoolClient, a: Actor, outletIds: string[], b: z
       [a.tenantId, sale.id, p.it.id, p.it.name, p.unit, p.it.gstRateBp, p.l.qty, p.net, p.tax]);
   }
   const o = (await c.query(
-    `INSERT INTO online_order (tenant_id, outlet_id, sale_id, provider, channel, external_order_id, accept_by, customer_label, delivery_note, price_overridden)
-     VALUES ($1,$2,$3,'manual',$4,$5, now() + make_interval(secs => $6), $7,$8,$9) RETURNING id`,
-    [a.tenantId, outletId, sale.id, b.channel, b.externalOrderId, b.acceptWithinSeconds, b.customerLabel ?? null, b.deliveryNote ?? null, overridden])).rows[0];
+    `INSERT INTO online_order (tenant_id, outlet_id, sale_id, provider, channel, external_order_id, accept_by, customer_label, delivery_note, price_overridden, raw_payload, unmapped_lines)
+     VALUES ($1,$2,$3,$10,$4,$5, now() + make_interval(secs => $6), $7,$8,$9, $11::text::jsonb, $12)
+     RETURNING id`,
+    [a.tenantId, outletId, sale.id, b.channel, b.externalOrderId, b.acceptWithinSeconds, b.customerLabel ?? null, b.deliveryNote ?? null, overridden,
+      source?.provider ?? 'manual', source?.rawPayload ?? null, JSON.stringify(source?.unmapped ?? [])])).rows[0];
   await c.query(
     `INSERT INTO online_order_event (tenant_id, online_order_id, from_status, to_status, actor_id, device_id, detail) VALUES ($1,$2,NULL,'received',$3,$4,$5)`,
     [a.tenantId, o.id, a.userId, a.deviceId, { priceOverridden: overridden }]);

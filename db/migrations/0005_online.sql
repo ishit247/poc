@@ -21,7 +21,9 @@ CREATE TABLE online_order (
   reason            text,                                         -- why it was rejected or cancelled
   price_overridden  boolean NOT NULL DEFAULT false,               -- a cashier changed a line price to match the platform
   raw_payload       jsonb,
-  received_at       timestamptz NOT NULL DEFAULT now(),
+  -- Platform lines with no item_channel_map entry (phase 9). They are not on the sale; the manager must see them.
+  unmapped_lines    jsonb NOT NULL DEFAULT '[]',
+  received_at      timestamptz NOT NULL DEFAULT now(),
   status_at         timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, id),
   UNIQUE (tenant_id, sale_id),

@@ -124,6 +124,18 @@ for (const t of Object.values(SEED)) {
     await client.query("INSERT INTO outlet_price (tenant_id, outlet_id, item_id, channel, price_paise) VALUES ($1, $2, $3, 'zomato', $4)", [t.id, oid, itemIds['Samosa'], 2500 + n * 100]);
     if (n === 1) await client.query("INSERT INTO outlet_price (tenant_id, outlet_id, item_id, channel, price_paise) VALUES ($1, $2, $3, 'counter', 900)", [t.id, oid, itemIds['Tea']]);
   }
+  // Aggregator integration (phase 9) at each tenant's first outlet: dev store id and secret, Samosa mapped, Tea not.
+  // Zomato only; the dev secret is public on purpose (tests sign with it).
+  await client.query(
+    `INSERT INTO outlet_integration (tenant_id, outlet_id, channel, external_store_id, webhook_secret, service_user_id, device_id)
+     VALUES ($1, $2, 'zomato', $3, $4, $5, $6)`,
+    [t.id, outletIds[0], `dev-store-${t.key}1`, `dev-webhook-secret-${t.key}1`, managerIds[0], deviceIds[0]]);
+  await client.query(
+    `INSERT INTO item_channel_map (tenant_id, outlet_id, channel, external_item_id, item_id) VALUES ($1, $2, 'zomato', $3, $4)`,
+    [t.id, outletIds[0], `ZS-${t.key}-samosa`, itemIds['Samosa']]);
+  await client.query(
+    `INSERT INTO inbound_event (tenant_id, outlet_id, channel, result, detail, raw_payload) VALUES ($1, $2, 'zomato', 'rejected', 'seed sample', '{}')`,
+    [t.id, outletIds[0]]);
   // Counter-specific menus. Counter 1: whole menu, Samosa cheaper here. Counter 2: drinks only.
   for (const [c1, c2] of counterIds) {
     await client.query('INSERT INTO counter_item (tenant_id, counter_id, item_id, listed, price_paise) VALUES ($1, $2, $3, true, 1200)', [t.id, c1, itemIds['Samosa']]);

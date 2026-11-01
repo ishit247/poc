@@ -8,8 +8,14 @@ export type OutboxMessage = { id: string; tenantId: string; outletId: string; on
 /** A provider sends one message to a platform; it throws if the platform did not take it. Phase 9 adds zomato and swiggy. */
 export type Sender = (m: OutboxMessage) => Promise<void>;
 
+// Until partner access exists there is no API to call. Throwing (never returning) keeps the message pending, then
+// `failed` and visible, instead of claiming the platform was told. Replace with the real call per platform.
+const noPartnerApi = (provider: string): Sender => async () => { throw new Error(`${provider}: partner API not configured`); };
+
 export const senders: Record<string, Sender> = {
   manual: async () => { /* a cashier keyed the order in by hand; there is no platform to tell */ },
+  zomato: noPartnerApi('zomato'),
+  swiggy: noPartnerApi('swiggy'),
 };
 
 /** 30 s, 1 min, 2 min ... capped at one hour. */
