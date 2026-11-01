@@ -32,7 +32,7 @@ PLAN.md refs: sections 5 (roles), 14 (reports), 15 (audit), 18 (operations), 19 
 |---|---|---|
 | 1 | Migration `0007_platform.sql`, `app_platform` role, grants/policies, DB tests, 7 mutants | done, committed |
 | 2 | Platform auth (password + TOTP, lockout, replay refusal, sessions), tenant create/rename/suspend/reactivate, first-manager creation, platform audit, suspension enforced on tenant login and auth | done, uncommitted (see notes) |
-| 3 | Health and usage views (device last-seen, unsynced, sync rejects, outbox backlog, webhook quiet, app-version skew; counts per month) | not started |
+| 3 | Health and usage views (device last-seen, unsynced, sync rejects, outbox backlog, webhook quiet, app-version skew; counts per month) | done, uncommitted |
 | 4 | Impersonation (reason, expiry, read-only, tenant-visible audit) | not started |
 | 5 | `apps/admin` UI, checked in a real browser at tablet size | not started |
 | 6 | Mutation checks per gate; fold phase 9 gaps (integration/mapping admin, encrypt webhook secrets); runbook, backups/restore drill, rate limits | not started |
@@ -65,6 +65,32 @@ patterns fixed for CRLF files first). The API suite fails on a database dirtied 
 Process note: a commit made while the mutation run was in progress captured one mutated line in
 `routes/platform.ts` (`'x.noop'` instead of `'platform.manager.create'`). The working tree is correct; commit it.
 Do not commit while `mutation-checks.mjs` is running.
+
+### Step 3 (done)
+Built: `db/migrations/0008_platform_metrics.sql` (schema `platform`; `tenant_health(ids, stale_hours, quiet_hours)`
+and `tenant_usage(ids, since)`), `apps/api/src/platformHealth.ts` (warning rules), `GET /platform/health` and
+`GET /platform/usage` in `routes/platform.ts` (owner and support).
+
+Design:
+- The console role still has no right on sales, sync events, the outbox or integrations. The two functions are
+  SECURITY DEFINER (owner pos_owner), take a list of tenant ids, stamp each tenant in turn so FORCE RLS applies
+  inside, return aggregates only, and clear the stamp on exit. EXECUTE is revoked from PUBLIC and granted to
+  `app_platform` alone. A test pins the exact output column list, so adding a column that could carry text is a
+  deliberate act.
+- Warnings (`device-stale`, `device-unsynced`, `sync-rejected`, `outbox-failed`, `outbox-backlog`,
+  `integration-quiet`, `webhook-rejected`, `version-skew`) are derived server-side. Windows (`staleHours`,
+  `quietHours`, 0 to 720) are the caller's.
+- Usage is counts per month (paid and refunded sales, online orders, active devices and outlets), no money: billing
+  is undecided (Q8).
+
+Verified (real Postgres, no browser): after `up:fresh`, API 165/165, DB 29/29. 11 mutants `plat-health-*`,
+`plat-usage-*`, `plat-warning-severity`: 10 caught first time; the survivor (`plat-health-executable-by-all`: the
+PUBLIC revoke was masked by `pos_app` lacking schema access) is now caught by a privilege check asked from the
+console connection.
+
+Not covered: nothing measured against large data (the functions scan per tenant; check `EXPLAIN` before a tenant has
+a year of sales); no alert delivery, the console only shows warnings; the lifetime of "rejected" events is not
+trimmed, so `sync-rejected` counts the last 24 h only.
 
 ## Open items carried
 

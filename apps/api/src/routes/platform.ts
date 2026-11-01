@@ -5,6 +5,7 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { withPlatform, withTenant } from '../db.js';
 import { audit } from '../audit.js';
+import { healthWarnings } from '../platformHealth.js';
 import { platformAudit } from '../platformAudit.js';
 import { newSecret, sha256 } from '../security/crypto.js';
 import { DUMMY_HASH, MIN_PASSWORD_LENGTH, hashPassword, verifyPassword } from '../security/password.js';
@@ -192,6 +193,56 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     await withPlatform(async (c) => platformAudit(c, {
       adminId: a.adminId, action: 'manager.create', tenantId, entity: 'app_user', entityId: userId, detail: { email: body.data.email } }));
     return reply.code(201).send({ id: userId });
+  });
+
+  // --- health and usage: counts from SECURITY DEFINER functions (0008), never rows ---------------------------
+  const healthQuery = z.object({
+    staleHours: z.coerce.number().int().min(0).max(720).default(24),
+    quietHours: z.coerce.number().int().min(0).max(720).default(24),
+  });
+
+  app.get('/platform/health', { config: any }, async (req, reply) => {
+    const q = healthQuery.safeParse(req.query);
+    if (!q.success) return bad(reply);
+    return withPlatform(async (c) => {
+      const tenants = (await c.query('SELECT id, name, subdomain, suspended_at AS "suspendedAt" FROM tenant ORDER BY created_at, name')).rows;
+      if (!tenants.length) return [];
+      const h = (await c.query(
+        `SELECT tenant_id AS "tenantId", outlets, devices, devices_stale AS "devicesStale", devices_unsynced AS "devicesUnsynced",
+                device_outbox_events AS "deviceOutboxEvents", last_device_seen AS "lastDeviceSeen",
+                sync_applied_24h AS "syncApplied24h", sync_rejected_24h AS "syncRejected24h", last_sync_at AS "lastSyncAt",
+                online_outbox_pending AS "onlineOutboxPending", online_outbox_failed AS "onlineOutboxFailed",
+                online_outbox_oldest_pending AS "onlineOutboxOldestPending", integrations_enabled AS "integrationsEnabled",
+                integrations_quiet AS "integrationsQuiet", webhook_rejected_24h AS "webhookRejected24h", app_versions AS "appVersions"
+           FROM platform.tenant_health($1::uuid[], $2, $3)`,
+        [tenants.map((t) => t.id), q.data.staleHours, q.data.quietHours])).rows;
+      const byId = new Map(h.map((r) => [r.tenantId as string, r]));
+      return tenants.map((t) => {
+        const row = byId.get(t.id)!;
+        return { ...t, ...row, warnings: healthWarnings(row, q.data.staleHours, q.data.quietHours) };
+      });
+    });
+  });
+
+  app.get('/platform/usage', { config: any }, async (req, reply) => {
+    const q = z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).safeParse(req.query);
+    if (!q.success) return bad(reply);
+    // Default: the last six whole months.
+    const since = q.data.since ?? new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 5, 1)).toISOString().slice(0, 10);
+    try {
+      return await withPlatform(async (c) => {
+        const ids = (await c.query('SELECT id FROM tenant')).rows.map((r) => r.id as string);
+        if (!ids.length) return [];
+        return (await c.query(
+          `SELECT u.tenant_id AS "tenantId", t.name, to_char(u.month, 'YYYY-MM') AS month, u.sales,
+                  u.online_orders AS "onlineOrders", u.active_devices AS "activeDevices", u.active_outlets AS "activeOutlets"
+             FROM platform.tenant_usage($1::uuid[], $2::date) u JOIN tenant t ON t.id = u.tenant_id
+            ORDER BY t.name, u.month`, [ids, since])).rows;
+      });
+    } catch (e) {
+      if ((e as { code?: string }).code === '22008' || (e as { code?: string }).code === '22007') return bad(reply); // impossible date
+      throw e;
+    }
   });
 
   // --- the console's own trail ------------------------------------------------------------------------------

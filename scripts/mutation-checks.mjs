@@ -335,6 +335,21 @@ const MUTANTS = [
     ['plat-manager-no-tenant-audit', 'apps/api/src/routes/platform.ts', "action: 'platform.manager.create'", "action: 'x.noop'"],
     ['plat-create-unaudited', 'apps/api/src/routes/platform.ts', "action: 'tenant.create'", "action: 'x.noop'"],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('platform.test.ts'))),
+  // --- platform health and usage (step 3)
+  ...[
+    ['plat-health-leaves-stamp', 'db/migrations/0008_platform_metrics.sql', "PERFORM set_config('app.tenant_id', '', true); -- leave the caller's connection unstamped", '', 'db'],
+    ['plat-health-executable-by-all', 'db/migrations/0008_platform_metrics.sql', 'REVOKE EXECUTE ON FUNCTION platform.tenant_health(uuid[], int, int), platform.tenant_usage(uuid[], date) FROM PUBLIC;', '', 'db'],
+    ['plat-health-no-stamp', 'db/migrations/0008_platform_metrics.sql', "PERFORM set_config('app.tenant_id', t::text, true);\n    RETURN QUERY SELECT\n", "RETURN QUERY SELECT\n", 'api'],
+    ['plat-health-rejected-as-applied', 'db/migrations/0008_platform_metrics.sql', "e.outcome = 'rejected' AND e.received_at > now() - interval '24 hours'),\n      (SELECT max(e.received_at)", "e.outcome = 'applied' AND e.received_at > now() - interval '24 hours'),\n      (SELECT max(e.received_at)", 'api'],
+    ['plat-health-unsynced', 'db/migrations/0008_platform_metrics.sql', 'AND d.outbox_pending > 0),', 'AND d.outbox_pending < 0),', 'api'],
+    ['plat-health-stale-window-fixed', 'db/migrations/0008_platform_metrics.sql', 'make_interval(hours => stale_hours)', 'make_interval(hours => 24)', 'api'],
+    ['plat-health-quiet-window-fixed', 'db/migrations/0008_platform_metrics.sql', 'make_interval(hours => quiet_hours)', 'make_interval(hours => 24)', 'api'],
+    ['plat-usage-counts-open-sales', 'db/migrations/0008_platform_metrics.sql', "s.status IN ('paid', 'refunded') AND s.business_date", "s.status IN ('paid', 'refunded', 'open', 'void') AND s.business_date", 'api'],
+    ['plat-usage-since-ignored', 'db/migrations/0008_platform_metrics.sql', "AND s.business_date >= date_trunc('month', since)::date", '', 'api'],
+    ['plat-health-route-open', 'apps/api/src/routes/platform.ts', "app.get('/platform/health', { config: any }", "app.get('/platform/health', { config: { scope: 'public' } }", 'api'],
+    ['plat-warning-severity', 'apps/api/src/platformHealth.ts', "add('sync-rejected', 'alert'", "add('sync-rejected', 'warn'", 'api'],
+  ].map(([id, file, from, to, kind]) => M(id, file, from, to, kind === 'db'
+    ? { cwd: '.', cmd: ['node', '--test', 'db/test/platform.test.mjs'] } : API_TESTS('platform-health.test.ts'))),
   M('outbox-one-tenant-only','apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
 ];
 

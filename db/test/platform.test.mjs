@@ -121,3 +121,34 @@ test('support and owner are the only console roles; email is unique ignoring cas
     await assert.rejects(ins('other@example.test', 'god'), /check constraint/);
   });
 });
+
+test('health functions: the tenant API role cannot call them, the console role can and is left unstamped', async () => {
+  for (const f of ['platform.tenant_health(ARRAY[]::uuid[], 24, 24)', "platform.tenant_usage(ARRAY[]::uuid[], '2026-01-01')"]) {
+    await assert.rejects(appPool.query(`SELECT * FROM ${f}`), /permission denied/, `pos_app calls ${f}`);
+  }
+  // The function itself is closed to everyone but the console role, independent of schema access.
+  for (const f of ['platform.tenant_health(uuid[], int, int)', 'platform.tenant_usage(uuid[], date)']) {
+    // Asked from the console connection: pos_app cannot even resolve the schema, so it cannot ask for itself.
+    const r = await platPool.query('SELECT has_function_privilege($3::name, $1, $2) ok', [f, 'EXECUTE', 'pos_app']);
+    assert.equal(r.rows[0].ok, false, `pos_app may execute ${f}`);
+    const p = await platPool.query('SELECT has_function_privilege(current_user, $1, $2) ok', [f, 'EXECUTE']);
+    assert.equal(p.rows[0].ok, true, `app_platform may not execute ${f}`);
+  }
+  await rolledBack(platPool, async (c) => {
+    const h = await c.query('SELECT * FROM platform.tenant_health(ARRAY[$1, $2]::uuid[], 24, 24)', [A, B]);
+    assert.equal(h.rowCount, 2);
+    // Counts, timestamps and version labels only: no column that could carry a customer's or a cashier's text.
+    assert.deepEqual(h.fields.map((f) => f.name).sort(), [
+      'app_versions', 'device_outbox_events', 'devices', 'devices_stale', 'devices_unsynced', 'integrations_enabled',
+      'integrations_quiet', 'last_device_seen', 'last_sync_at', 'online_outbox_failed', 'online_outbox_oldest_pending',
+      'online_outbox_pending', 'outlets', 'sync_applied_24h', 'sync_rejected_24h', 'tenant_id', 'webhook_rejected_24h']);
+    const stamp = await c.query("SELECT coalesce(current_setting('app.tenant_id', true), '') s");
+    assert.equal(stamp.rows[0].s, '', 'the function left a tenant stamp on the console connection');
+    const u = await c.query("SELECT * FROM platform.tenant_usage(ARRAY[$1]::uuid[], '2026-01-01')", [A]);
+    assert.ok(u.rowCount >= 1);
+    const stamp2 = await c.query("SELECT coalesce(current_setting('app.tenant_id', true), '') s");
+    assert.equal(stamp2.rows[0].s, '');
+    // Still no direct route to the rows behind the counts.
+    await assert.rejects(c.query('SELECT 1 FROM sync_event'), /permission denied/);
+  });
+});
