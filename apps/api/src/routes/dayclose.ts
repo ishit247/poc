@@ -85,7 +85,10 @@ async function receiptGaps(c: pg.PoolClient, outletId: string, date: string) {
   return r.rows as { deviceId: string; counter: string; missing: number[] }[];
 }
 
-/** Sales of earlier days whose records reached the server after that day's close and before this one: each is surfaced once. */
+/**
+ * Sales of earlier days whose records reached the server after that day's close and before this one: each is surfaced once.
+ * A counter sale arrives as a sync event; an online sale is made by an API call, so its arrival is its handover.
+ */
 async function lateAdjustments(c: pg.PoolClient, outletId: string, date: string) {
   const prev = await c.query(
     `SELECT max(closed_at) AS at FROM business_day WHERE outlet_id = $1 AND date < $2 AND closed_at IS NOT NULL`, [outletId, date]);
@@ -95,7 +98,8 @@ async function lateAdjustments(c: pg.PoolClient, outletId: string, date: string)
     `SELECT s.id, s.business_date::text AS "businessDate", s.receipt_no AS "receiptNo", s.status, s.total_paise::bigint AS "totalPaise"
        FROM sale s
       WHERE s.outlet_id = $1 AND s.business_date < $2 AND 'late_arrival' = ANY(s.flags)
-        AND EXISTS (SELECT 1 FROM sync_event e WHERE e.entity_id = s.id AND e.type IN ('sale.created', 'payment.taken') AND e.received_at > $3)
+        AND (EXISTS (SELECT 1 FROM sync_event e WHERE e.entity_id = s.id AND e.type IN ('sale.created', 'payment.taken') AND e.received_at > $3)
+             OR EXISTS (SELECT 1 FROM online_order o WHERE o.sale_id = s.id AND o.status = 'handed_over' AND o.status_at > $3))
       ORDER BY s.business_date, s.receipt_seq`, [outletId, date, since]);
   return r.rows.map((x) => ({ ...x, totalPaise: Number(x.totalPaise) }));
 }

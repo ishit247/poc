@@ -73,9 +73,17 @@ Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the applicatio
   had filled the shared database. It now follows `hasMore`.
 - `scripts/mutation-checks.mjs`: seven stale or ambiguous mutant patterns repaired; INVALID results print as they happen.
 
+7. **Day close** (`apps/api/src/routes/dayclose.ts`). Checked: an order still in flight blocks the close through the
+   existing open-sale blocker (`business_date <= day`); a handover counts in `onlineGrossPaise` and `grossPaise` via its
+   one `aggregator` payment; a handover into an already-closed day is flagged `late_arrival` and leaves the frozen totals
+   alone. One gap found and fixed: `lateAdjustments` only looked at sync events, so a late online handover never showed
+   on the next close. It now also accepts `online_order.status = 'handed_over'` after the previous close. Test in
+   `apps/api/test/zz-online-dayclose.test.ts` (own outlet; the name makes it run last, because the extra outlet breaks
+   the outlet and scope suites if it runs earlier); it fails with the fix reverted. API 132/132 on a fresh start. Online voids are not in the day's void count
+   (they carry no business day); not changed.
+
 ## Still to do
 
-7. Day close: check handover-date and open-order blockers against online gross.
 8. Final browser check over the whole phase, and the browser checks still owed for phases 4 to 6.
 
 ## Known gaps
