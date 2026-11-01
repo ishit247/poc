@@ -11,7 +11,7 @@ import { Orders } from './Orders.tsx';
 import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
 import { Branding } from './Branding.tsx';
-import { ManagerLogin, ManagerTools } from './manager/index.ts';
+import { EnrolCodeMaker, InviteScreen, ManagerLogin, ManagerTools } from './manager/index.ts';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -28,36 +28,53 @@ export function App() {
     void navigator.storage?.persist?.(); // ask the browser not to evict the sales database
     void getMeta('device').then((d) => setDevice(d ?? null));
   }, []);
+  // A manager invite link carries its token in the fragment: `/#invite=<token>`.
+  const [invite, setInvite] = useState(() => /^#invite=(.+)$/.exec(window.location.hash)?.[1] ?? '');
+  const [invitedEmail, setInvitedEmail] = useState('');
+  if (invite) {
+    return <InviteScreen token={invite} onDone={(email) => {
+      history.replaceState(null, '', window.location.pathname); // the token is spent: drop it from the address bar
+      setInvitedEmail(email);
+      setInvite('');
+    }} />;
+  }
   if (device === undefined) return <main className="center">Loading…</main>;
-  if (!device) return <EnrolScreen onDone={setDevice} />;
+  if (!device) return <EnrolScreen onDone={setDevice} invitedEmail={invitedEmail} />;
   return <Counter device={device} />;
 }
 
-function EnrolScreen({ onDone }: { onDone: (d: DeviceInfo) => void }) {
+function EnrolScreen({ onDone, invitedEmail }: { onDone: (d: DeviceInfo) => void; invitedEmail: string }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const go = async () => {
+  // 'code' = type a code; 'login' / 'maker' = a manager makes one on this tablet. The token is memory only.
+  const [stage, setStage] = useState<'code' | 'login' | 'maker'>(invitedEmail ? 'login' : 'code');
+  const [mgr, setMgr] = useState('');
+  const go = async (use = code) => {
     setBusy(true);
     setError('');
     try {
-      const d = await enrol(code);
+      const d = await enrol(use);
       await pull(d);
       onDone(d);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not enrol.');
+      setStage('code');
     } finally {
       setBusy(false);
     }
   };
+  if (stage === 'login') return <ManagerLogin initialEmail={invitedEmail} onToken={(t) => { setMgr(t); setStage('maker'); }} onCancel={() => setStage('code')} />;
+  if (stage === 'maker') return <EnrolCodeMaker token={mgr} onBack={() => { setMgr(''); setStage('code'); }} onUseCode={(c) => { setCode(c); setMgr(''); void go(c); }} />;
   return (
     <main className="center">
       <Branding />
       <h1>Set up this counter</h1>
       <p>Ask your manager for an enrolment code and type it here. This tablet must be online for this step.</p>
       <input data-testid="enrol-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Enrolment code" autoCapitalize="off" autoComplete="off" />
-      <button data-testid="enrol-go" className="primary" disabled={busy || !code.trim()} onClick={go}>{busy ? 'Setting up…' : 'Set up'}</button>
+      <button data-testid="enrol-go" className="primary" disabled={busy || !code.trim()} onClick={() => go()}>{busy ? 'Setting up…' : 'Set up'}</button>
       {error && <p className="error" role="alert">{error}</p>}
+      <p><button data-testid="enrol-manager" onClick={() => setStage('login')}>I am the manager — sign in to create a code</button></p>
     </main>
   );
 }

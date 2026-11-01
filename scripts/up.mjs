@@ -1,4 +1,4 @@
-// Brings the whole environment up in Docker: Postgres, migrations, API, counter (nginx).
+// Brings the whole environment up in Docker: Postgres, migrations, API, counter and platform console (nginx).
 // Seeds dev data only if the database is empty. Does NOT wipe data; `pnpm run up:fresh` does, then run this.
 import { execFileSync } from 'node:child_process';
 import pg from 'pg';
@@ -14,4 +14,4 @@ await client.end();
 if (seeded) console.log('database already seeded (use `pnpm run up:fresh` to reset)');
 else run(['run', '--rm', 'seed']);
 
-console.log('\nCounter + API  http://localhost:8080  (API under /api)\nPostgres       localhost:55432\nTest accounts: docs/test-accounts.md');
+console.log('\nCounter + API  http://localhost:8080  (API under /api)\nPlatform console  http://localhost:8081\nPostgres       localhost:55432\nTest accounts: docs/test-accounts.md');

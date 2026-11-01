@@ -34,7 +34,7 @@ PLAN.md refs: sections 5 (roles), 14 (reports), 15 (audit), 18 (operations), 19 
 | 2 | Platform auth (password + TOTP, lockout, replay refusal, sessions), tenant create/rename/suspend/reactivate, first-manager creation, platform audit, suspension enforced on tenant login and auth | done, uncommitted (see notes) |
 | 3 | Health and usage views (device last-seen, unsynced, sync rejects, outbox backlog, webhook quiet, app-version skew; counts per month) | done, uncommitted |
 | 4 | Impersonation (reason, 30-minute expiry, read-only only, tenant-visible audit) | done, uncommitted |
-| 5 | `apps/admin` UI, checked in a real browser at tablet size | not started |
+| 5 | `apps/admin` UI, checked in a real browser at tablet size | done (see notes); impersonation, audit viewer and usage screens not yet in the UI |
 | 6 | Mutation checks per gate; fold phase 9 gaps (integration/mapping admin, encrypt webhook secrets); runbook, backups/restore drill, rate limits | not started |
 
 ## Notes per step
@@ -115,6 +115,38 @@ Design:
 Not done: individual reads are not audited (only start/end, as the rest of the system does not audit reads);
 a suspended tenant refuses support access like everyone else; no console UI yet (step 5); no per-operator cap on how
 many grants may be open at once.
+
+### Step 5 (done): operator UI and the end-to-end onboarding flow
+Decided with the user on 2026-11-02: the manager receives access by a **one-time invite link** (no mail is sent; the
+operator passes it on), the manager makes the **enrolment code on the blank tablet** (sign-in on the counter's enrolment
+screen), and the **operator creates outlets and counters** in the console.
+
+Built:
+- `db/migrations/0010_manager_invite.sql` (`manager_invite`, FORCE RLS, lifetime CHECK 7 days, no DELETE for `pos_app`),
+  `apps/api/src/invite.ts`, `POST /invite/redeem` (public, single atomic claim, suspended tenant not consumed).
+- Console routes: `POST /platform/tenants/:id/outlets` (owner), `GET .../outlets` (outlets, counters, managers),
+  `POST .../managers` now takes optional `outletIds` and an optional `password` (omitted = invite, 3 days),
+  `POST .../managers/:uid/invite` (new link; refused once accepted). Outlet/counter/manager writes use the stamped tenant
+  path, so the console DB role gained no write right on tenant data.
+- `GET /me` also returns each outlet's counters.
+- `apps/admin` (Vite + React, port 8081 in Docker, own origin): sign-in with authenticator code, tenant list with health
+  warnings, tenant page (outlets, managers, invite panel, suspend/reactivate). Session token in sessionStorage.
+- Counter app: `#invite=<token>` screen (manager sets own password), manager sign-in + code maker on the enrolment screen.
+
+Verified: after `up:fresh`, `platform-onboarding.test.ts` (real Postgres) and a real-browser run (Edge, 1024x768, Docker
+stack): 13/13 checks from operator creating a tenant to a tablet showing its counter. Mutants `onb-*` in
+`scripts/mutation-checks.mjs`: 11/11 caught. After a final `up:fresh`: API 183/183, DB 17/17 (the "every table" isolation
+test needed `manager_invite` rows in the seed, now added), shared 41/41, counter 25/25, typecheck clean in all packages.
+The browser script is not in the repo.
+
+Environment note: this machine is short of memory (WSL capped at 4 GB, ~2 GB free). Docker's engine died twice during
+image builds and `tsc` ran out of memory when builds and tests overlapped; one `pnpm test` run, where the three
+packages' suites run in parallel, also gave two API failures that did not reproduce on a fresh database. Run the stages
+one after another and `up:fresh` before the API suite.
+
+Not done: the console has no screens for impersonation, usage or the platform audit yet (API exists); a manager's outlets
+cannot be changed after creation from the console; nothing is emailed or texted (the operator copies the link); the
+invite lifetime (3 days) and the 7-day DB ceiling are fixed in code.
 
 ## Open items carried
 

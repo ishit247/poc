@@ -3,8 +3,9 @@ import { z } from 'zod';
 import { tenantForLogin, withTenant } from '../db.js';
 import { audit } from '../audit.js';
 import { newEnrolmentSecret, newSecret, sha256 } from '../security/crypto.js';
-import { DUMMY_HASH, verifyPassword } from '../security/password.js';
+import { DUMMY_HASH, MIN_PASSWORD_LENGTH, hashPassword, verifyPassword } from '../security/password.js';
 import { clearLockout, lockState, recordFailure } from '../lockout.js';
+import { parseInvite } from '../invite.js';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_MINUTES = 15;
@@ -20,6 +21,7 @@ const codeBody = z.object({ outletId: uuid, counterId: uuid, label: deviceLabel.
 const pinSignin = z.object({ userId: uuid, pin: z.string().regex(/^\d{6,8}$/) }).strict();
 const enrolBody = z.object({ code: z.string().max(200) }).strict();
 const idParams = z.object({ id: uuid });
+const inviteBody = z.object({ token: z.string().max(200), password: z.string().min(MIN_PASSWORD_LENGTH).max(256) }).strict();
 
 const bad = (reply: FastifyReply) => reply.code(400).send({ error: 'invalid request' });
 const unauthorized = (reply: FastifyReply) => reply.code(401).send({ error: 'invalid credentials' });
@@ -141,9 +143,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return withTenant(p.tenantId, async (c) => {
       const u = (await c.query('SELECT name FROM app_user WHERE id = $1', [p.userId])).rows[0];
       const outlets = await c.query(
-        `SELECT id, name, timezone, (now() AT TIME ZONE timezone)::date::text AS today
-           FROM outlet WHERE id = ANY($1::uuid[]) ORDER BY name`, [p.outletIds]);
-      return { name: u?.name as string, role: p.role, outlets: outlets.rows as { id: string; name: string; timezone: string; today: string }[] };
+        `SELECT o.id, o.name, o.timezone, (now() AT TIME ZONE o.timezone)::date::text AS today,
+                COALESCE((SELECT json_agg(json_build_object('id', k.id, 'code', k.code) ORDER BY k.code) FROM counter k WHERE k.outlet_id = o.id), '[]') AS counters
+           FROM outlet o WHERE o.id = ANY($1::uuid[]) ORDER BY o.name`, [p.outletIds]);
+      return { name: u?.name as string, role: p.role, outlets: outlets.rows as { id: string; name: string; timezone: string; today: string; counters: { id: string; code: string }[] }[] };
     });
   });
 
@@ -223,6 +226,41 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       await audit(c, { tenantId: tenantId.toLowerCase(), actorKind: 'device', actorId: deviceId, action: 'device.enrol', entity: 'device', entityId: deviceId });
       return { deviceId, credential: `${tenantId.toLowerCase()}.${deviceId}.${credSecret}` };
     });
+    if (out === 'suspended') return reply.code(403).send({ error: 'tenant suspended' });
+    return out ?? unauthorized(reply);
+  });
+
+  // --- manager invite (public): the invited manager chooses their own password -----------------------------------
+  // One atomic claim, as for enrolment codes, so two concurrent redemptions cannot both set a password. A suspended
+  // tenant's invite is not consumed. Anything else wrong is the same 401, so a stranger learns nothing.
+  app.post('/invite/redeem', { config: { scope: 'public', ...strict(10) } }, async (req, reply) => {
+    const body = inviteBody.safeParse(req.body);
+    if (!body.success) return bad(reply);
+    const inv = parseInvite(body.data.token);
+    if (!inv) return unauthorized(reply);
+    const passwordHash = await hashPassword(body.data.password);
+
+    const out = await withTenant(inv.tenantId, async (c) => {
+      const claim = await c.query(
+        `UPDATE manager_invite SET used_at = now()
+          WHERE id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > now()
+            AND NOT EXISTS (SELECT 1 FROM tenant WHERE id = $3 AND suspended_at IS NOT NULL)
+          RETURNING user_id`, [inv.id, inv.secretHash, inv.tenantId]);
+      if (claim.rows.length === 0) {
+        const live = await c.query(
+          `SELECT 1 FROM manager_invite i JOIN tenant t ON t.id = i.tenant_id
+            WHERE i.id = $1 AND i.token_hash = $2 AND i.used_at IS NULL AND i.expires_at > now() AND t.suspended_at IS NOT NULL`,
+          [inv.id, inv.secretHash]);
+        return live.rows.length > 0 ? ('suspended' as const) : null;
+      }
+      const userId = claim.rows[0].user_id as string;
+      const u = (await c.query(
+        "UPDATE app_user SET password_hash = $2 WHERE id = $1 AND role = 'manager' AND active RETURNING email", [userId, passwordHash])).rows[0];
+      if (!u) throw new Error('invite for a manager that cannot sign in'); // rolls the claim back
+      await clearLockout(c, userId, 'password');
+      await audit(c, { tenantId: inv.tenantId, actorKind: 'user', actorId: userId, action: 'manager.invite.accept', entity: 'app_user', entityId: userId });
+      return { email: u.email as string };
+    }).catch((e: unknown) => (e instanceof Error && e.message.startsWith('invite for a manager') ? null : Promise.reject(e)));
     if (out === 'suspended') return reply.code(403).send({ error: 'tenant suspended' });
     return out ?? unauthorized(reply);
   });

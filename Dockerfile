@@ -9,6 +9,7 @@ FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/counter/package.json apps/counter/
+COPY apps/admin/package.json apps/admin/
 COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile
 
@@ -25,7 +26,18 @@ USER node
 EXPOSE 3000
 CMD ["node", "--import", "tsx", "apps/api/src/server.ts"]
 
+FROM src AS admin-build
+ARG VITE_COUNTER_URL=http://localhost:8080
+ENV VITE_COUNTER_URL=$VITE_COUNTER_URL
+RUN pnpm --filter @pos/admin build
+
 FROM nginx:alpine AS counter
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=counter-build /app/apps/counter/dist /usr/share/nginx/html
+EXPOSE 80
+
+# The platform console: its own origin, so a tenant page and the console never share storage or cookies.
+FROM nginx:alpine AS admin
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=admin-build /app/apps/admin/dist /usr/share/nginx/html
 EXPOSE 80

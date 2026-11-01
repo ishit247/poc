@@ -362,6 +362,20 @@ const MUTANTS = [
     ['imp-support-role-may-start', 'apps/api/src/routes/platform.ts', "'/platform/tenants/:id/impersonate', { config: { ...owner", "'/platform/tenants/:id/impersonate', { config: { ...any"],
     ['imp-no-tenant-audit', 'db/migrations/0009_impersonation.sql', "'support.access.start'", "'support.access.x'"],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('platform-impersonation.test.ts'))),
+  // --- operator onboarding: outlets, manager invite (step 5)
+  ...[
+    ['onb-invite-reusable', AUTH, 'WHERE id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > now()', 'WHERE id = $1 AND token_hash = $2 AND expires_at > now()'],
+    ['onb-invite-expiry-ignored', AUTH, 'WHERE id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > now()', 'WHERE id = $1 AND token_hash = $2 AND used_at IS NULL'],
+    ['onb-invite-secret-unchecked', AUTH, 'WHERE id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > now()', 'WHERE id = $1 AND $2::text IS NOT NULL AND used_at IS NULL AND expires_at > now()'],
+    ['onb-invite-suspended-consumed', AUTH, /AND NOT EXISTS \(SELECT 1 FROM tenant WHERE id = \$3 AND suspended_at IS NOT NULL\)\r?\n\s+RETURNING user_id/, 'RETURNING user_id'],
+    ['onb-invite-weak-password', AUTH, 'token: z.string().max(200), password: z.string().min(MIN_PASSWORD_LENGTH)', 'token: z.string().max(200), password: z.string().min(1)'],
+    ['onb-invite-known-password', 'apps/api/src/routes/platform.ts', 'body.data.password ?? newSecret()', "body.data.password ?? 'dev-password-123'"],
+    ['onb-outlet-support-may-create', 'apps/api/src/routes/platform.ts', "app.post('/platform/tenants/:id/outlets', { config: { ...owner", "app.post('/platform/tenants/:id/outlets', { config: { ...any"],
+    ['onb-manager-foreign-outlet', 'apps/api/src/routes/platform.ts', 'if (n !== outletIds.length) return null;', ''],
+    ['onb-reinvite-keeps-old-link', 'apps/api/src/routes/platform.ts', "await c.query('UPDATE manager_invite SET expires_at = now() WHERE user_id = $1 AND used_at IS NULL AND expires_at > now()', [uid]);", ''],
+    ['onb-reinvite-after-accept', 'apps/api/src/routes/platform.ts', /\r?\n\s+AND NOT EXISTS \(SELECT 1 FROM manager_invite i WHERE i\.user_id = u\.id AND i\.used_at IS NOT NULL\)`/, '`'],
+    ['onb-invite-lifetime-not-in-db', 'db/migrations/0010_manager_invite.sql', "CHECK (expires_at > created_at AND expires_at <= created_at + interval '7 days'),", ''],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('platform-onboarding.test.ts'))),
   // --- login picks the tenant (D12)
   M('login-lookup-any-email', 'db/migrations/0001_tenancy.sql', "AND lower(email) = nullif(lower(current_setting('app.login_email', true)), ''))", ')', API_TESTS('tenancy-host.test.ts')),
   M('email-unique-per-tenant', 'db/migrations/0001_tenancy.sql', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (lower(email));', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (tenant_id, lower(email));', API_TESTS('tenancy-host.test.ts')),

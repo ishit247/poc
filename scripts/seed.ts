@@ -72,6 +72,11 @@ for (const t of Object.values(SEED)) {
       [t.id, `${o} manager`, `${t.key}${i}@example.test`, passwordHash]);
     await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, u.rows[0].id, outletId]);
     await client.query("INSERT INTO login_lockout (tenant_id, user_id, kind) VALUES ($1, $2, 'password')", [t.id, u.rows[0].id]);
+    // The invite this manager "accepted": spent, so no live link exists in the seed (the isolation test wants rows for both tenants).
+    await client.query(
+      `INSERT INTO manager_invite (tenant_id, user_id, token_hash, admin_id, created_at, expires_at, used_at)
+       VALUES ($1, $2, $3, '00000000-0000-0000-0000-000000000000', now() - interval '1 day', now() + interval '2 days', now() - interval '1 hour')`,
+      [t.id, u.rows[0].id, sha256(newSecret())]);
     // Cashier and waiter: PIN only, no web login (no email / password).
     const staff: Record<string, string> = {};
     for (const role of ['cashier', 'waiter'] as const) {

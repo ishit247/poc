@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
-export function ManagerLogin({ onToken, onCancel }: { onToken: (t: string) => void; onCancel: () => void }) {
-  const [email, setEmail] = useState('');
+export function ManagerLogin({ onToken, onCancel, initialEmail = '' }: { onToken: (t: string) => void; onCancel: () => void; initialEmail?: string }) {
+  const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);

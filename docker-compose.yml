@@ -62,6 +62,19 @@ services:
       api: { condition: service_healthy }
     restart: unless-stopped
 
+  admin:
+    build:
+      context: .
+      target: admin
+      args:
+        VITE_COUNTER_URL: ${VITE_COUNTER_URL:-http://localhost:8080}
+    image: pos-admin
+    ports:
+      - "${ADMIN_PORT:-8081}:80"
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
   seed:
     build: { context: ., target: api }
     image: pos-api

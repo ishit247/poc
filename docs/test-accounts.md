@@ -44,11 +44,27 @@ Managers see only their own outlet, so signing in as `a1` and looking for School
 
 ### Enrolling a tablet (needed for PIN sign-in)
 
-The seeded devices have no known secret, so enrol a fresh one: sign in as a manager, create an enrolment code
-(`POST /enrolment-codes`, valid 15 minutes, one use), and redeem it at the counter app's enrolment screen
-(`POST /enrol`). A suspended tenant's code is refused with `tenant suspended` and is not consumed.
+The seeded devices have no known secret, so enrol a fresh one. On the blank tablet at <http://localhost:8080>, press
+**"I am the manager - sign in to create a code"**, sign in as a seeded manager (e.g. `a1@example.test`), pick the
+counter and press **Create code**, then **Set up this tablet now**. (The code is `POST /enrolment-codes`, valid 15
+minutes, one use; it can also be typed on another tablet.) A suspended tenant's code is refused with `tenant suspended`
+and is not consumed.
+
+### Onboarding a brand-new tenant end to end (the real flow)
+
+1. Open the platform console at <http://localhost:8081>, sign in as `owner@platform.test` (password + authenticator code).
+2. **New tenant**, then on its page **Add outlet** (with counters, e.g. `C1, C2`).
+3. **Create manager and invite link**: name, email, tick the outlet(s). The console shows a one-time link (valid 3 days) once.
+   Send it to the manager yourself. If lost or expired, press **New link** on the manager's row.
+4. The manager opens the link (it lands on the counter app), chooses their own password, signs in on that tablet, and
+   creates the enrolment code as above. Cashiers and waiters are then added from Manager tools.
+
+The link's host is the counter app address (default `http://localhost:8080`, editable on the invite panel, or set
+`VITE_COUNTER_URL` when building the admin image).
 
 ## Platform console operators
+
+The console is at <http://localhost:8081> (`pnpm run env:up` starts it with everything else).
 
 Sign-in needs email + password + a current authenticator code. Both share the password `dev-password-123` and the
 authenticator secret `JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP` (add it to any authenticator app as a time-based key, 30 s steps).

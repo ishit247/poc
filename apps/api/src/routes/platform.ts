@@ -7,6 +7,7 @@ import { withPlatform, withTenant } from '../db.js';
 import { audit } from '../audit.js';
 import { healthWarnings } from '../platformHealth.js';
 import { platformAudit } from '../platformAudit.js';
+import { insertInvite, newInvite } from '../invite.js';
 import { newSecret, sha256 } from '../security/crypto.js';
 import { DUMMY_HASH, MIN_PASSWORD_LENGTH, hashPassword, verifyPassword } from '../security/password.js';
 import { matchTotp } from '../security/totp.js';
@@ -25,11 +26,18 @@ const subdomain = z.string().regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/);
 const tenantBody = z.object({ name: z.string().trim().min(1).max(100), subdomain: subdomain.optional() }).strict();
 const renameBody = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 const reasonBody = z.object({ reason: z.string().trim().min(3).max(200) }).strict();
+// Without a password the manager is invited: the operator never learns the password (see 0010_manager_invite.sql).
 const managerBody = z.object({
   name: z.string().trim().min(1).max(100),
   email: z.string().email().max(254),
-  password: z.string().min(MIN_PASSWORD_LENGTH).max(256),
+  password: z.string().min(MIN_PASSWORD_LENGTH).max(256).optional(),
+  outletIds: z.array(uuid).max(50).optional(),
 }).strict();
+const outletBody = z.object({
+  name: z.string().trim().min(1).max(100),
+  counters: z.array(z.string().regex(/^[A-Za-z0-9-]{1,20}$/)).min(1).max(20).default(['C1']),
+}).strict();
+const managerParams = z.object({ id: uuid, uid: uuid });
 
 const bad = (reply: FastifyReply) => reply.code(400).send({ error: 'invalid request' });
 const notFound = (reply: FastifyReply) => reply.code(404).send({ error: 'not found' });
@@ -174,25 +182,111 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     const known = await withPlatform(async (c) => (await c.query('SELECT 1 FROM tenant WHERE id = $1', [tenantId])).rowCount === 1);
     if (!known) return notFound(reply);
 
-    const passwordHash = await hashPassword(body.data.password);
+    // Invited (no password given): the stored hash is of a secret nobody holds, so the account cannot sign in
+    // until the manager redeems the invite and sets their own.
+    const passwordHash = await hashPassword(body.data.password ?? newSecret());
     // A manager signs in by password only; the PIN column is required, so it holds a verifier nobody knows.
     const pinVerifier = await hashPassword(newSecret());
+    const invite = body.data.password === undefined ? newInvite(tenantId) : null;
+    const outletIds = [...new Set(body.data.outletIds ?? [])];
     let userId: string;
     try {
-      userId = await withTenant(tenantId, async (c) => {
+      const made = await withTenant(tenantId, async (c) => {
+        if (outletIds.length > 0) {
+          // Outlets of this tenant only (the stamped connection hides the rest).
+          const n = (await c.query('SELECT count(*)::int AS n FROM outlet WHERE id = ANY($1::uuid[])', [outletIds])).rows[0].n as number;
+          if (n !== outletIds.length) return null;
+        }
         const u = (await c.query(
           `INSERT INTO app_user (tenant_id, name, pin_verifier, role, email, password_hash)
            VALUES ($1, $2, $3, 'manager', $4, $5) RETURNING id`, [tenantId, body.data.name, pinVerifier, body.data.email, passwordHash])).rows[0];
-        await audit(c, { tenantId, actorKind: 'system', action: 'platform.manager.create', entity: 'app_user', entityId: u.id, detail: { platformAdminId: a.adminId } });
+        for (const outletId of outletIds) {
+          await c.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [tenantId, u.id, outletId]);
+        }
+        if (invite) await insertInvite(c, tenantId, u.id, invite, a.adminId);
+        await audit(c, { tenantId, actorKind: 'system', action: 'platform.manager.create', entity: 'app_user', entityId: u.id, detail: { platformAdminId: a.adminId, invited: invite !== null } });
         return u.id as string;
       });
+      if (made === null) return notFound(reply);
+      userId = made;
     } catch (e) {
       if ((e as { code?: string }).code === '23505') return reply.code(409).send({ error: 'email already used' });
       throw e;
     }
     await withPlatform(async (c) => platformAudit(c, {
-      adminId: a.adminId, action: 'manager.create', tenantId, entity: 'app_user', entityId: userId, detail: { email: body.data.email } }));
-    return reply.code(201).send({ id: userId });
+      adminId: a.adminId, action: 'manager.create', tenantId, entity: 'app_user', entityId: userId, detail: { email: body.data.email, invited: invite !== null, outletIds } }));
+    return reply.code(201).send({ id: userId, ...(invite ? { invite: invite.token, inviteExpiresAt: invite.expiresAt } : {}) });
+  });
+
+  // A fresh link for a manager who has not accepted (lost or expired). Older unused links stop working.
+  app.post('/platform/tenants/:id/managers/:uid/invite', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
+    const params = managerParams.safeParse(req.params);
+    if (!params.success) return bad(reply);
+    const a = req.admin!;
+    const { id: tenantId, uid } = params.data;
+    const known = await withPlatform(async (c) => (await c.query('SELECT 1 FROM tenant WHERE id = $1', [tenantId])).rowCount === 1);
+    if (!known) return notFound(reply);
+    const invite = newInvite(tenantId);
+    const ok = await withTenant(tenantId, async (c) => {
+      // Only a manager who never signed in: an invite that was redeemed is spent, and a live account is not reset.
+      const pending = await c.query(
+        `SELECT 1 FROM app_user u WHERE u.id = $1 AND u.role = 'manager'
+            AND EXISTS (SELECT 1 FROM manager_invite i WHERE i.user_id = u.id)
+            AND NOT EXISTS (SELECT 1 FROM manager_invite i WHERE i.user_id = u.id AND i.used_at IS NOT NULL)`, [uid]);
+      if (pending.rowCount === 0) return false;
+      await c.query('UPDATE manager_invite SET expires_at = now() WHERE user_id = $1 AND used_at IS NULL AND expires_at > now()', [uid]);
+      await insertInvite(c, tenantId, uid, invite, a.adminId);
+      await audit(c, { tenantId, actorKind: 'system', action: 'platform.manager.reinvite', entity: 'app_user', entityId: uid, detail: { platformAdminId: a.adminId } });
+      return true;
+    });
+    if (!ok) return notFound(reply);
+    await withPlatform(async (c) => platformAudit(c, { adminId: a.adminId, action: 'manager.reinvite', tenantId, entity: 'app_user', entityId: uid }));
+    return { invite: invite.token, inviteExpiresAt: invite.expiresAt };
+  });
+
+  // --- outlets and counters ---------------------------------------------------------------------------------------
+  // Written on the stamped tenant path like the first manager, so the console role gains no write right on tenant data.
+  app.get('/platform/tenants/:id/outlets', { config: any }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    if (!params.success) return bad(reply);
+    const tenantId = params.data.id;
+    const known = await withPlatform(async (c) => (await c.query('SELECT 1 FROM tenant WHERE id = $1', [tenantId])).rowCount === 1);
+    if (!known) return notFound(reply);
+    return withTenant(tenantId, async (c) => ({
+      outlets: (await c.query(
+        `SELECT o.id, o.name, o.timezone,
+                COALESCE((SELECT json_agg(json_build_object('id', k.id, 'code', k.code) ORDER BY k.code) FROM counter k WHERE k.outlet_id = o.id), '[]') AS counters
+           FROM outlet o ORDER BY o.name`)).rows,
+      managers: (await c.query(
+        `SELECT u.id, u.name, u.email, u.active,
+                EXISTS (SELECT 1 FROM manager_invite i WHERE i.user_id = u.id) AS invited,
+                EXISTS (SELECT 1 FROM manager_invite i WHERE i.user_id = u.id AND i.used_at IS NOT NULL) AS "acceptedInvite",
+                EXISTS (SELECT 1 FROM manager_invite i WHERE i.user_id = u.id AND i.used_at IS NULL AND i.expires_at > now()) AS "invitePending",
+                COALESCE((SELECT json_agg(uo.outlet_id) FROM user_outlet uo WHERE uo.user_id = u.id AND uo.deleted_at IS NULL), '[]') AS "outletIds"
+           FROM app_user u WHERE u.role = 'manager' ORDER BY u.name`)).rows,
+    }));
+  });
+
+  app.post('/platform/tenants/:id/outlets', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    const body = outletBody.safeParse(req.body);
+    if (!params.success || !body.success) return bad(reply);
+    const a = req.admin!;
+    const tenantId = params.data.id;
+    const known = await withPlatform(async (c) => (await c.query('SELECT 1 FROM tenant WHERE id = $1', [tenantId])).rowCount === 1);
+    if (!known) return notFound(reply);
+    const codes = [...new Set(body.data.counters.map((x) => x.toUpperCase()))];
+    const out = await withTenant(tenantId, async (c) => {
+      const o = (await c.query('INSERT INTO outlet (tenant_id, name) VALUES ($1, $2) RETURNING id, name, timezone', [tenantId, body.data.name])).rows[0];
+      const counters: { id: string; code: string }[] = [];
+      for (const code of codes) {
+        counters.push((await c.query('INSERT INTO counter (tenant_id, outlet_id, code) VALUES ($1, $2, $3) RETURNING id, code', [tenantId, o.id, code])).rows[0]);
+      }
+      await audit(c, { tenantId, actorKind: 'system', action: 'platform.outlet.create', entity: 'outlet', entityId: o.id, detail: { platformAdminId: a.adminId, counters: codes } });
+      return { ...o, counters };
+    });
+    await withPlatform(async (c) => platformAudit(c, { adminId: a.adminId, action: 'outlet.create', tenantId, entity: 'outlet', entityId: out.id, detail: { name: body.data.name, counters: codes } }));
+    return reply.code(201).send(out);
   });
 
   // --- support impersonation (0009): read-only, 30 minutes, reason required, owner only ----------------------------
