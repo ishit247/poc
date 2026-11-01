@@ -14,6 +14,7 @@ import { onlineRoutes } from './routes/online.js';
 import { orderRoutes } from './routes/orders.js';
 import { outletRoutes } from './routes/outlets.js';
 import { settingsRoutes } from './routes/settings.js';
+import { settlementRoutes } from './routes/settlement.js';
 import { syncRoutes } from './routes/sync.js';
 
 export function buildApp() {
@@ -56,5 +57,6 @@ export function buildApp() {
   app.register(adminRoutes);
   app.register(syncRoutes);
   app.register(dayCloseRoutes);
+  app.register(settlementRoutes);
   return app;
 }

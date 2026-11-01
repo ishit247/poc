@@ -87,3 +87,5 @@ nav { display: flex; gap: 8px; padding: 8px 14px; }
 .mgr table { border-collapse: collapse; background: #fff; }
 .mgr td, .mgr th { padding: 6px 12px; border-bottom: 1px solid #e3e5e0; text-align: left; }
 .mgr select { min-height: 48px; font: inherit; }
+.mgr .row.wrap { flex-wrap: wrap; }
+.mgr .scroll { overflow-x: auto; }

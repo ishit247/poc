@@ -11,7 +11,7 @@ import { Orders } from './Orders.tsx';
 import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
 import { Branding } from './Branding.tsx';
-import { DayClose, ManagerLogin } from './manager/index.ts';
+import { ManagerLogin, ManagerTools } from './manager/index.ts';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -125,11 +125,11 @@ function Counter({ device }: { device: DeviceInfo }) {
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
       {mgr !== null && !actor ? (
-        mgr ? <DayClose token={mgr} onDone={() => setMgr(null)} /> : <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />
+        mgr ? <ManagerTools token={mgr} onDone={() => setMgr(null)} /> : <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />
       ) : !actor ? (
         <>
           <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
-          <p className="center"><button data-testid="mgr-open" onClick={() => setMgr('')}>Manager: close the day</button></p>
+          <p className="center"><button data-testid="mgr-open" onClick={() => setMgr('')}>Manager tools</button></p>
         </>
       ) : actor.role === 'cashier' && shift === null && tab !== 'shift' ? (
         // A cashier with no open drawer cannot take money: send them to open one first.
