@@ -12,7 +12,7 @@ export function parseCsv(text: string): string[][] {
   let row: string[] = [];
   let field = '';
   let quoted = false;
-  const src = text.replace(/^﻿/, '');
+  const src = text.replace(/^\u{FEFF}/u, '');
   for (let i = 0; i < src.length; i++) {
     const ch = src[i]!;
     if (quoted) {
@@ -74,7 +74,7 @@ export function parseSettlement(text: string): ParseResult {
     try {
       const gross = amountToPaise(r[grossCol] ?? '');
       const payout = amountToPaise(r[payoutCol] ?? '');
-      if (false) return void errors.push({ row, message: 'Gross amount is negative.' });
+      if (gross < 0) return void errors.push({ row, message: 'Gross amount is negative.' });
       lines.push({ row, externalOrderId: id, grossPaise: gross, payoutPaise: payout });
     } catch { errors.push({ row, message: 'Gross or payout is not an amount.' }); }
   });

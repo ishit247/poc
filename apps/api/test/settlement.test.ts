@@ -43,7 +43,8 @@ test('a statement is read by header name, in any column order', () => {
 test('a bad statement is refused whole, with the row of each fault', () => {
   const noCol = parseSettlement('order id,gross\nZ1,10\n');
   assert.ok(!noCol.ok);
-  assert.match(noCol.errors[0]!.message, /payout/);
+  assert.equal(noCol.errors[0]!.row, 1);
+  assert.match(noCol.errors[0]!.message, /header row has no column for: payout/);
   const bad = parseSettlement('order id,gross,payout\nZ1,10,8\nZ1,10,8\n,10,8\nZ3,ten,8\nZ4,-5,1\n');
   assert.ok(!bad.ok);
   assert.deepEqual(bad.errors.map((e) => e.row), [3, 4, 5, 6]);
@@ -98,6 +99,11 @@ test('matching reports matched, amount mismatch, unknown order and missing, and 
   assert.ok(rep.missing.some((m: { externalOrderId: string }) => m.externalOrderId === gone));
   assert.ok(!rep.missing.some((m: { externalOrderId: string }) => m.externalOrderId === ok));
   assert.equal(rep.summary.commissionPaise, rep.summary.grossPaise - rep.summary.payoutPaise);
+  // The same statement for a period that has not happened yet: our orders are outside it, so none is "missing".
+  const past = (await upload(app, w1.mgr, w1.outletId, csv, { periodFrom: day(-40), periodTo: day(-30) })).json();
+  assert.equal(past.missing.length, 0);
+  const trail = await withTenant(A, async (c) => (await c.query("SELECT count(*)::int AS n FROM audit WHERE action = 'settlement.import' AND entity_id = $1", [rep.id])).rows[0].n);
+  assert.equal(trail, 1);
 
   const after = await withTenant(A, async (c) => (await c.query('SELECT count(*)::int AS n, sum(total_paise)::bigint AS t FROM sale')).rows[0]);
   assert.deepEqual(after, before);
@@ -117,6 +123,9 @@ test('an order at another outlet or on another platform does not match', async (
   const outlet1 = (await withTenant(A, async (c) => (await c.query("SELECT id FROM outlet WHERE name = 'School 1 Canteen'")).rows[0].id)) as string;
   const r = await upload(app, mgr1, outlet1, `order id,gross,payout\n${id},${rupees(w2.total)},1\n`);
   assert.equal(r.json().lines[0].result, 'unknown_order');
+  // Left out of the statement on purpose: only then could a wrongly unscoped "missing" query list it.
+  const other = (await upload(app, mgr1, outlet1, 'order id,gross,payout\nUNRELATED,1,1\n')).json();
+  assert.ok(!other.missing.some((m: { externalOrderId: string }) => m.externalOrderId === id), "another outlet's order is not missing here");
   const sw = await upload(app, w2.mgr, w2.outletId, `order id,gross,payout\n${id},${rupees(w2.total)},1\n`, { channel: 'swiggy' });
   assert.equal(sw.json().lines[0].result, 'unknown_order');
 });

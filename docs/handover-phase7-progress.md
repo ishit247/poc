@@ -2,7 +2,7 @@
 
 Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the application: [validation.md](validation.md).
 
-## Done (steps 1 to 5)
+## Done (steps 1 to 6)
 
 1. **Schema.** `db/migrations/0005_online.sql`: `online_order` (lifecycle trigger as the floor), `online_order_event`
    (append-only), `integration_outbox`, `settlement_import`, `settlement_line`, all with RLS. The `sale` CHECK in 0004
@@ -26,7 +26,19 @@ Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the applicatio
    `FOR UPDATE SKIP LOCKED`. The `manual` sender is a no-op, so its rows go straight to `done`. A failing sender backs off
    30 s, 60 s ... capped at 1 h, and the row becomes `failed` after 8 attempts. Phase 9 adds entries to `senders`.
 
+6. **Settlement import** (`apps/api/src/settlement.ts` parser, `apps/api/src/routes/settlement.ts`, manager screen
+   `apps/counter/src/manager/Settlements.tsx` under a new `ManagerTools` tab bar). A manager uploads a platform's CSV
+   (sent as JSON text, 2 MB route limit, 5000 lines, period at most 93 days). The file is read by header name; amounts
+   go through `parseRupees`, never a float; any fault refuses the whole file with row numbers and writes nothing. Each
+   line is `matched`, `amount_mismatch` or `unknown_order` against this outlet's orders on that platform. The report
+   also lists orders we handed over in the period that the statement omits ("missing", computed on read, not stored),
+   and counts lines paid by the platform for orders we did not deliver. No sale is edited. Audited as `settlement.import`.
+
 ## Decisions made (not in the original plan)
+
+- **Settlement matching compares gross to the sale total only.** An order we rejected or expired that the platform
+  paid for matches on amount and is reported separately as "paid but not delivered", not as a mismatch.
+- **The sign-in button now reads "Manager tools"** (test id `mgr-open` unchanged); day close is the first tab.
 
 - **The routes use a cashier or manager session on an enrolled tablet, not the device credential.** The sale needs a
   person (`created_by`). A user with no device gets `409 device_required`. Scope rule: `outlet`.
@@ -48,6 +60,13 @@ Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the applicatio
   defect the tests missed (a stale "Needs internet" after the network returned), now fixed. The script is in the
   session scratchpad, not the repo.
 
+- Step 6: settlement tests 8/8 on real Postgres; 19 new mutants, all caught after four tests were tightened (first
+  run 14/19). Full `pnpm test` green (shared 41, tablet 25, API 131, RLS 8). Real browser (Edge, production build,
+  fresh database, 1024x768 and 768x1024): 19/19, including a refused file, a quoted-comma amount, reopening an old
+  import, and no sideways scroll. The script is in the session scratchpad, not the repo.
+- `scope.test.ts` "withTenant stamps..." counts outlets and fails on a database other suites have used (tenant A
+  gains outlets). It passes on a fresh `up:fresh`; it was not changed.
+
 ## Test fixes made on the way
 
 - `apps/counter/test/push.test.ts`: the pull contract test read only the first page, so it failed once other suites
@@ -56,7 +75,6 @@ Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the applicatio
 
 ## Still to do
 
-6. Settlement import: API and manager screen in `apps/counter/src/manager/`.
 7. Day close: check handover-date and open-order blockers against online gross.
 8. Final browser check over the whole phase, and the browser checks still owed for phases 4 to 6.
 

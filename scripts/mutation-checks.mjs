@@ -187,7 +187,7 @@ const MUTANTS = [
     ['settle-parse-header-optional', 'if (missing.length) return', 'if (false) return'],
     ['settle-parse-negative-gross', 'if (gross < 0) return void', 'if (false) return void'],
     ['settle-parse-float-money', 'const p = parseRupees(body) as number;', 'const p = Math.round(parseFloat(body) * 100);'],
-    ['settle-parse-bom', "text.replace(/^\\uFEFF/, '')", 'text'],
+    ['settle-parse-bom', "text.replace(/^\\u{FEFF}/u, '')", 'text'],
     ['settle-parse-quote-escape', "if (src[i + 1] === '\"') { field += '\"'; i++; } else quoted = false;", 'quoted = false;'],
   ].map(([id, from, to]) => M(id, 'apps/api/src/settlement.ts', from, to, API_TESTS('settlement.test.ts'))),
   ...[
