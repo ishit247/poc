@@ -105,7 +105,7 @@ A point-of-sale service for school cafeterias, run by a caterer that serves seve
 | D9 | Receipt numbers are per-device series, not one global sequence | me; **accepted by you** |
 | D10 | Tenant = a caterer; outlet = the cafeteria in one school; the school is a customer, not a tenant | you (caterer) / me (shape) |
 | D11 | You host and operate the server | you |
-| D12 | A tenant is addressed by its own subdomain (`<subdomain>.<BASE_DOMAIN>`), assigned by the operator, never by a manager; the address picks the tenant for manager login and is checked on enrolment. A manager sets the tenant logo (PNG/JPEG/WebP up to 256 KB, no SVG), shown on sign-in screens, the counter header and the receipt | you |
+| D12 | **Revised.** The login picks the tenant, not the address: a manager's email is globally unique and belongs to one tenant; session tokens, enrolment codes and device credentials already carry the tenant id. A tenant may have an optional operator-assigned subdomain (`<subdomain>.<BASE_DOMAIN>`), used only to show its name and logo on sign-in screens; nothing is refused because of the address. Enrolled tablets fetch the logo by credential (`/device/logo`), so they work on the bare domain. A manager sets the tenant logo (PNG/JPEG/WebP up to 256 KB, no SVG), shown on sign-in screens, the counter header and the receipt. Original D12 (subdomain decides the tenant) reversed on your recommendation: one address and one TLS certificate suffice, and a wrong address can no longer lock a manager out | you |
 
 Superseded from v2: the central LAN server (old D6) and the LAN-printer-from-server
 design. Hosting makes both impossible, and section 13 replaces them.

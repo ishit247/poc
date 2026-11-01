@@ -22,7 +22,7 @@ const loginBody = z.object({
 }).strict();
 // Same shape as the database CHECK on tenant.subdomain (reserved names are refused there).
 const subdomain = z.string().regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/);
-const tenantBody = z.object({ name: z.string().trim().min(1).max(100), subdomain }).strict();
+const tenantBody = z.object({ name: z.string().trim().min(1).max(100), subdomain: subdomain.optional() }).strict();
 const renameBody = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 const reasonBody = z.object({ reason: z.string().trim().min(3).max(200) }).strict();
 const managerBody = z.object({
@@ -116,7 +116,7 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     const a = req.admin!;
     try {
       return reply.code(201).send(await withPlatform(async (c) => {
-        const t = (await c.query('INSERT INTO tenant (name, subdomain) VALUES ($1, $2) RETURNING id', [body.data.name, body.data.subdomain])).rows[0];
+        const t = (await c.query('INSERT INTO tenant (name, subdomain) VALUES ($1, $2) RETURNING id', [body.data.name, body.data.subdomain ?? null])).rows[0];
         await platformAudit(c, { adminId: a.adminId, action: 'tenant.create', tenantId: t.id, entity: 'tenant', entityId: t.id, detail: body.data });
         return (await c.query(`${TENANT_SELECT} WHERE t.id = $1`, [t.id])).rows[0];
       }));

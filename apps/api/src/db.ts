@@ -51,9 +51,31 @@ export async function withTenant<T>(tenantId: string, fn: (c: pg.PoolClient) => 
   }
 }
 
-// --- tenant from the request's host ----------------------------------------
-// <subdomain>.<BASE_DOMAIN>. The lookup is the one place a request is seen before its tenant is known:
-// it stamps app.host_subdomain, which lets the tenant row policy show that single row and nothing else.
+// --- tenant from a manager's login email -----------------------------------
+/**
+ * The tenant a manager email belongs to, or null. This is what decides whose login it is (D12): emails are globally
+ * unique. Stamps app.login_email so the app_user lookup policy shows that one active manager row, read-only.
+ */
+export async function tenantForLogin(email: string): Promise<string | null> {
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN READ ONLY');
+    await c.query("SELECT set_config('app.login_email', $1, true)", [email.toLowerCase()]);
+    const id = ((await c.query('SELECT tenant_id FROM app_user')).rows[0]?.tenant_id as string | undefined) ?? null;
+    await c.query('COMMIT');
+    return id;
+  } catch (e) {
+    await c.query('ROLLBACK');
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
+// --- tenant from the request's host (branding only) ------------------------
+// <subdomain>.<BASE_DOMAIN>. Optional and cosmetic: it picks which name and logo an unauthenticated screen shows and
+// never who is signed in. It is a request seen before its tenant is known: it stamps app.host_subdomain, which lets
+// the tenant row policy show that single row and nothing else.
 const BASE_DOMAIN = (process.env.BASE_DOMAIN ?? 'localhost').toLowerCase();
 const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 

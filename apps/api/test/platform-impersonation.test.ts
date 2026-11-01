@@ -117,10 +117,11 @@ test('a GET route that tries to write fails under a support session, and works f
 test('support access cannot reach another tenant, or act as a device', async () => {
   const app = buildApp();
   const g = await grant(app, A);
-  // The credential names tenant A. Pointed at B (by id or by address) it is refused.
+  // The credential names tenant A. Pointed at B by id it is refused. The address is cosmetic (D12): on B's address it
+  // is still A's session, never B's.
   const swapped = g.credential.replace(A, B);
   assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: as(swapped, hostFor(B)) })).statusCode, 401);
-  assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: as(g.credential, hostFor(B)) })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: as(g.credential, hostFor(B)) })).statusCode, 200);
   // Device-only routes are not for it.
   assert.equal((await app.inject({ method: 'GET', url: '/sync/pull?cursor=0', headers: as(g.credential) })).statusCode, 403);
   // A wrong secret, and a Platform-style bearer, are the same plain 401.

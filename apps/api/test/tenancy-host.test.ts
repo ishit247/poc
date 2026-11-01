@@ -37,35 +37,85 @@ test('host to tenant: seeded subdomains resolve, strangers do not', async () => 
   assert.equal(await tenantForHost('localhost'), null);
 });
 
-test('login: the tenant comes from the address, never from the body', async () => {
+test('login: the tenant comes from the email, whatever address the request used', async () => {
   const app = buildApp();
-  assert.equal((await login(app, HOST_A, 'a1@example.test')).statusCode, 200);
-  // A's manager on B's address, and on unknown or bare addresses, all get the one generic refusal.
-  const refused = [await login(app, HOST_B, 'a1@example.test'), await login(app, 'nobody.localhost', 'a1@example.test'), await login(app, undefined, 'a1@example.test')];
-  for (const r of refused) assert.equal(r.statusCode, 401);
-  assert.equal(refused[0]!.body, refused[1]!.body);
-  assert.equal(refused[0]!.body, (await login(app, HOST_A, 'a1@example.test', 'wrong-password-xx')).body);
+  const sessionOf = async (host: string | undefined, email: string) => {
+    const r = await login(app, host, email);
+    assert.equal(r.statusCode, 200, `${email} on ${host}`);
+    return r.json().token as string;
+  };
+  // The same manager signs in on their own address, another tenant's address, an unknown one, and the bare domain.
+  for (const host of [HOST_A, HOST_B, 'nobody.localhost', undefined]) assert.match(await sessionOf(host, 'a1@example.test'), new RegExp(`^${A}\\.`));
+  assert.match(await sessionOf(HOST_A, 'b1@example.test'), new RegExp(`^${B}\\.`), 'B\'s manager on A\'s address is still B\'s');
+  // Unknown email and wrong password are the same refusal.
+  const unknown = await login(app, HOST_A, 'nobody@example.test');
+  assert.equal(unknown.statusCode, 401);
+  assert.equal(unknown.body, (await login(app, HOST_A, 'a1@example.test', 'wrong-password-xx')).body);
   // A body tenantId cannot redirect the login to another tenant (unknown keys are refused).
-  const sneaky = await app.inject({ method: 'POST', url: '/login', headers: { host: HOST_B }, payload: { tenantId: A, email: 'a1@example.test', password: PW } });
+  const sneaky = await app.inject({ method: 'POST', url: '/login', headers: { host: HOST_B }, payload: { tenantId: B, email: 'a1@example.test', password: PW } });
   assert.equal(sneaky.statusCode, 400);
 });
 
-test('a session from one tenant is refused on another tenant\'s address', async () => {
+test('a session works on any address; it only ever reaches its own tenant', async () => {
   const app = buildApp();
   const a1 = await token(app, A, 'a1@example.test');
-  assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: { ...bearer(a1), host: HOST_A } })).statusCode, 200);
-  assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: { ...bearer(a1), host: HOST_B } })).statusCode, 401);
+  for (const host of [HOST_A, HOST_B, undefined])
+    assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: { ...bearer(a1), ...(host ? { host } : {}) } })).statusCode, 200);
+  assert.ok(a1.startsWith(`${A}.`), 'the session is A\'s whatever address it was used on');
 });
 
-test('an enrolment code only works on its own tenant\'s address', async () => {
+test('an enrolment code carries its tenant, so any address enrols it', async () => {
   const app = buildApp();
   const a1 = await token(app, A, 'a1@example.test');
   const place = (await withTenant(A, (c) => c.query(`SELECT o.id AS o, c.id AS c FROM outlet o JOIN counter c ON c.outlet_id = o.id ORDER BY o.name, c.code LIMIT 1`))).rows[0];
-  const mint = async () => (await app.inject({ method: 'POST', url: '/enrolment-codes', headers: bearer(a1), payload: { outletId: place.o, counterId: place.c } })).json().code as string;
-  const code = await mint();
-  assert.equal((await app.inject({ method: 'POST', url: '/enrol', headers: { host: HOST_B }, payload: { code } })).statusCode, 401);
-  // Refusing on the wrong address does not burn the code: it still works on the right one.
-  assert.equal((await app.inject({ method: 'POST', url: '/enrol', headers: { host: HOST_A }, payload: { code } })).statusCode, 200);
+  const code = (await app.inject({ method: 'POST', url: '/enrolment-codes', headers: bearer(a1), payload: { outletId: place.o, counterId: place.c } })).json().code as string;
+  const r = await app.inject({ method: 'POST', url: '/enrol', headers: { host: HOST_B }, payload: { code } });
+  assert.equal(r.statusCode, 200);
+  assert.ok((r.json().credential as string).startsWith(`${A}.`), 'the device belongs to the code\'s tenant, not the address\'s');
+});
+
+test('device logo: by credential on the bare domain, own tenant only', async () => {
+  const app = buildApp();
+  const a1 = await token(app, A, 'a1@example.test');
+  const place = (await withTenant(A, (c) => c.query(`SELECT o.id AS o, c.id AS c FROM outlet o JOIN counter c ON c.outlet_id = o.id ORDER BY o.name, c.code LIMIT 1`))).rows[0];
+  const code = (await app.inject({ method: 'POST', url: '/enrolment-codes', headers: bearer(a1), payload: { outletId: place.o, counterId: place.c } })).json().code as string;
+  const cred = (await app.inject({ method: 'POST', url: '/enrol', payload: { code } })).json().credential as string;
+  assert.equal((await app.inject({ method: 'GET', url: '/device/logo' })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/device/logo', headers: bearer(a1) })).statusCode, 403, 'a manager session is not a device');
+  const img = await app.inject({ method: 'GET', url: '/device/logo', headers: { authorization: `Device ${cred}`, host: HOST_B } });
+  assert.equal(img.statusCode, 200);
+  const a = (await app.inject({ method: 'GET', url: '/branding', headers: { host: HOST_A } })).json();
+  assert.equal(sha(img.rawPayload), a.logo.sha256, 'A\'s logo, even requested on B\'s address');
+});
+
+test('login lookup policy: a stamped email shows one manager row, read-only', async () => {
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    await c.query("SELECT set_config('app.login_email', 'A1@Example.Test', true)");
+    const rows = (await c.query('SELECT tenant_id, email, role FROM app_user')).rows;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].tenant_id, A);
+    await c.query('SAVEPOINT w');
+    assert.equal((await c.query("UPDATE app_user SET name = 'hijacked'")).rowCount, 0, 'the stamp cannot update');
+    assert.equal((await c.query("UPDATE tenant SET name = 'x'")).rowCount, 0, 'nor touch tenant');
+    await c.query('ROLLBACK TO w');
+    // A cashier's row is never shown by an email stamp, nor is any other tenant's data.
+    assert.equal((await c.query('SELECT 1 FROM outlet')).rowCount, 0);
+    await c.query('ROLLBACK');
+    await c.query('BEGIN');
+    assert.equal((await c.query('SELECT 1 FROM app_user')).rowCount, 0, 'no stamp, no rows');
+  } finally {
+    await c.query('ROLLBACK').catch(() => {});
+    c.release();
+  }
+});
+
+test('manager emails are unique across tenants', async () => {
+  await assert.rejects(
+    withTenant(B, (c) => c.query(
+      "INSERT INTO app_user (tenant_id, name, pin_verifier, role, email, password_hash) SELECT $1, 'dup', 'x', 'manager', 'A1@example.test', password_hash FROM app_user WHERE email = 'b1@example.test'", [B])),
+    /app_user_email_uq/);
 });
 
 test('tenant row policy: a host stamp shows one tenant row and can change nothing', async () => {

@@ -361,8 +361,11 @@ const MUTANTS = [
     ['imp-app-role-can-write', 'db/migrations/0009_impersonation.sql', 'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON impersonation FROM pos_app;', ''],
     ['imp-support-role-may-start', 'apps/api/src/routes/platform.ts', "'/platform/tenants/:id/impersonate', { config: { ...owner", "'/platform/tenants/:id/impersonate', { config: { ...any"],
     ['imp-no-tenant-audit', 'db/migrations/0009_impersonation.sql', "'support.access.start'", "'support.access.x'"],
-    ['imp-tenant-unchecked', 'apps/api/src/auth.ts', "if (req.hostTenantId && req.hostTenantId !== principal.tenantId)", "if (false)"],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('platform-impersonation.test.ts'))),
+  // --- login picks the tenant (D12)
+  M('login-lookup-any-email', 'db/migrations/0001_tenancy.sql', "AND lower(email) = nullif(lower(current_setting('app.login_email', true)), ''))", ')', API_TESTS('tenancy-host.test.ts')),
+  M('email-unique-per-tenant', 'db/migrations/0001_tenancy.sql', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (lower(email));', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (tenant_id, lower(email));', API_TESTS('tenancy-host.test.ts')),
+  M('device-logo-from-host', 'apps/api/src/routes/branding.ts', 'serveLogo(req, reply, req.principal!.tenantId)', 'serveLogo(req, reply, req.hostTenantId ?? req.principal!.tenantId)', API_TESTS('tenancy-host.test.ts')),
   M('outbox-one-tenant-only','apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
 ];
 

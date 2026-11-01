@@ -66,15 +66,19 @@ leaves a guard removed in the source).
 
 ## Done (tenant subdomain and logo, requested after step 4; PLAN D12)
 
-- **Subdomain:** `tenant.subdomain` (0001; unique, DNS-label format, reserved names refused) is
-  set by the operator (seed today; no operator CLI yet). `BASE_DOMAIN` env (default `localhost`,
-  so dev uses `tenant-a.localhost`, `tenant-b.localhost`). `tenantForHost()` in `apps/api/src/db.ts`
+- **Tenancy (D12, REVISED: the login picks the tenant, not the address):** manager emails are
+  globally unique (`app_user_email_uq` on `lower(email)`, 0001). `POST /login` calls
+  `tenantForLogin(email)` in `apps/api/src/db.ts`, which stamps `app.login_email`; the
+  `app_user_login_lookup` policy (0001) lets that stamp SEE one active manager row, read-only. An
+  unknown email gets the generic 401 after a dummy hash. Nothing is refused because of the Host:
+  no host check on authenticated requests or on `/enrol` (the token and the enrolment code carry the tenant).
+- **Subdomain (optional, branding only):** `tenant.subdomain` is nullable (unique, DNS-label format,
+  reserved names refused), set by the operator (seed today; no operator CLI yet). `BASE_DOMAIN` env
+  (default `localhost`, so dev uses `tenant-a.localhost`, `tenant-b.localhost`). `tenantForHost()`
   stamps `app.host_subdomain`; the `tenant` row policy lets that stamp SEE one row and write nothing.
-  `POST /login` no longer takes a tenant id: the tenant is the one whose address the request
-  arrived on (unknown, bare or other host = the generic 401). `/enrol` refuses a code on another
-  tenant's address. An authenticated request whose host names a different tenant is refused;
-  a bare/unknown host is NOT judged for authenticated routes (RLS already confines the data).
-  Tests send `host` via `apps/api/test/hosts.ts`.
+  It only feeds `GET /branding` and `GET /branding/logo` for unauthenticated sign-in screens.
+  Enrolled tablets fetch the logo by credential from `GET /device/logo`, so they work on the bare domain.
+  Tests still send `host` via `apps/api/test/hosts.ts`; it is harmless.
 - **Logo:** `tenant_logo` (0004; bytes in Postgres, live row or cleared tombstone, versioned).
   `PUT/DELETE /settings/logo` (manager; image bytes as the body, the bytes are sniffed and must
   match the declared type; 256 KB cap). Public by address: `GET /branding` (name, logo hash) and
@@ -92,6 +96,11 @@ leaves a guard removed in the source).
   real `*.yourdomain` hosts never exercised, only `*.localhost`; PNG/JPEG/WebP are validated by
   header bytes only, not decoded, and dimensions are not limited; the bare host is allowed on
   authenticated routes; the vite proxy forwards Host unchanged (do not set `changeOrigin`).
+- **D12 reversal (this change):** verified by API tests on a fresh database (full suite green: shared 41,
+  counter 25, API 177, DB 17) and three mutation checks, all caught (`login-lookup-any-email`,
+  `email-unique-per-tenant`, `device-logo-from-host`). NOT verified in a browser: the counter's
+  sign-in, enrolment and logo flow on the bare domain at tablet size. The `imp-tenant-unchecked`
+  mutation was removed with the host check it targeted. A person managing two caterers needs two emails.
 
 ## Unverified (say so; do not claim otherwise)
 

@@ -19,9 +19,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE pos_owner IN SCHEMA public
 CREATE TABLE tenant (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name       text NOT NULL,
-  -- The tenant's web address: <subdomain>.<base domain>. Assigned by the operator when the tenant is
-  -- created, never by a manager (a rename would break bookmarks and enrolled tablets, and names can be squatted).
-  subdomain  text NOT NULL UNIQUE
+  -- Optional branded address: <subdomain>.<base domain>. It only decides which name and logo a sign-in screen shows;
+  -- it never decides who someone is signed in as (the login does, D12). Assigned by the operator, never by a manager
+  -- (names can be squatted). NULL means the tenant uses the bare domain.
+  subdomain  text UNIQUE
              CHECK (subdomain ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
                     AND subdomain NOT IN ('www', 'api', 'app', 'admin', 'mail', 'static', 'assets')),
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -86,7 +87,9 @@ CREATE TABLE app_user (
   UNIQUE (tenant_id, id),
   CHECK (role <> 'manager' OR (email IS NOT NULL AND password_hash IS NOT NULL))
 );
-CREATE UNIQUE INDEX app_user_email_uq ON app_user (tenant_id, lower(email));
+-- Global, not per tenant: the email is how a manager's login finds their tenant (D12), so one email belongs to
+-- exactly one tenant. A person who manages two caterers uses two addresses.
+CREATE UNIQUE INDEX app_user_email_uq ON app_user (lower(email));
 
 CREATE TABLE user_outlet (
   tenant_id uuid NOT NULL REFERENCES tenant(id),
@@ -147,3 +150,9 @@ ALTER TABLE tenant FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON tenant
   USING (id = app.current_tenant_id() OR subdomain = nullif(current_setting('app.host_subdomain', true), ''))
   WITH CHECK (id = app.current_tenant_id());
+
+-- Manager login arrives with an email and no tenant. The API stamps the email (app.login_email, per transaction)
+-- and may then SEE that one active manager row, read-only, to learn which tenant to continue in. Permissive
+-- policies are OR-ed with app_user's tenant policy; there is no write side, so the stamp can modify nothing.
+CREATE POLICY app_user_login_lookup ON app_user FOR SELECT
+  USING (role = 'manager' AND active AND lower(email) = nullif(lower(current_setting('app.login_email', true)), ''));

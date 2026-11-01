@@ -40,10 +40,12 @@ test('login: success, and failure is identical for wrong password and unknown us
 
   const wrong = await login(app, A, 'a1@example.test', 'wrong-password-xx');
   const unknown = await login(app, A, 'nobody@example.test');
-  const otherTenant = await login(app, B, 'a1@example.test'); // right user, wrong tenant
-  for (const r of [wrong, unknown, otherTenant]) assert.equal(r.statusCode, 401);
+  for (const r of [wrong, unknown]) assert.equal(r.statusCode, 401);
   assert.equal(wrong.body, unknown.body);
-  assert.equal(wrong.body, otherTenant.body);
+  // The address does not choose the tenant (D12): the right user on another tenant's address is still their own tenant's.
+  const otherAddress = await login(app, B, 'a1@example.test');
+  assert.equal(otherAddress.statusCode, 200);
+  assert.ok(otherAddress.json().token.startsWith(`${A}.`));
 });
 
 test('/me lists only the manager\'s own outlets, with each outlet\'s today', async () => {

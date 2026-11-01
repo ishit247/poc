@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { withTenant } from '../db.js';
+import { tenantForLogin, withTenant } from '../db.js';
 import { audit } from '../audit.js';
 import { newEnrolmentSecret, newSecret, sha256 } from '../security/crypto.js';
 import { DUMMY_HASH, verifyPassword } from '../security/password.js';
@@ -33,9 +33,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const body = loginBody.safeParse(req.body);
     if (!body.success) return bad(reply);
     const { email, password } = body.data;
-    // The tenant is the one whose address this request arrived on. No such tenant: the same answer as a wrong password.
-    const tenantId = req.hostTenantId;
-    if (!tenantId) return unauthorized(reply);
+    // The tenant is the one this email belongs to (globally unique). Unknown email: the same answer as a wrong
+    // password, after the same hash work, so timing does not reveal which emails exist.
+    const tenantId = await tenantForLogin(email);
+    if (!tenantId) {
+      await verifyPassword(password, DUMMY_HASH);
+      return unauthorized(reply);
+    }
 
     const result = await withTenant(tenantId, async (c) => {
       const r = await c.query(
@@ -192,8 +196,6 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const m = /^([0-9a-f-]{36})\.([0-9a-f-]{36})\.([A-Z2-9_]{16})$/i.exec(body.data.code);
     if (!m || !uuid.safeParse(m[1]).success || !uuid.safeParse(m[2]).success) return unauthorized(reply);
     const [, tenantId, codeId, secret] = m as unknown as [string, string, string, string];
-    // A code only works on its own tenant's address.
-    if (req.hostTenantId && req.hostTenantId !== tenantId.toLowerCase()) return unauthorized(reply);
 
     const out = await withTenant(tenantId.toLowerCase(), async (c) => {
       // Single atomic claim: concurrent redemptions of one code cannot both succeed.

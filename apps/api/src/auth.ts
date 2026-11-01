@@ -156,9 +156,6 @@ export function registerAuth(app: FastifyInstance) {
     const principal = await authenticate(req);
     if (!principal) return reply.code(401).send({ error: 'unauthorized' });
     if (principal === 'suspended') return reply.code(403).send({ error: 'tenant suspended' });
-    // A credential from one tenant presented on another tenant's address is refused (RLS would stop the
-    // data anyway; this keeps the address and the account in agreement). A bare/unknown host is not judged.
-    if (req.hostTenantId && req.hostTenantId !== principal.tenantId) return reply.code(401).send({ error: 'unauthorized' });
     // Deny by default: a route with no permission (cannot happen past onRoute) is refused.
     if (!cfg.permission || !allowed(cfg.permission, principal)) return reply.code(403).send({ error: 'forbidden' });
     // Support access is read-only: refused here by method, and again by Postgres (every transaction of this request

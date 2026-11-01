@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { LOGO_MAX_BYTES, LOGO_TYPES, sniffLogo } from '@pos/shared';
 import { withTenant } from '../db.js';
 import { audit } from '../audit.js';
@@ -21,9 +21,8 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  app.get('/branding/logo', { config: { scope: 'public', ...limit(120) } }, async (req, reply) => {
-    if (!req.hostTenantId) return reply.code(404).send({ error: 'not found' });
-    const row = (await withTenant(req.hostTenantId, (c) =>
+  const serveLogo = async (req: FastifyRequest, reply: FastifyReply, tenantId: string) => {
+    const row = (await withTenant(tenantId, (c) =>
       c.query('SELECT bytes, content_type AS "contentType", sha256 FROM tenant_logo WHERE deleted_at IS NULL'))).rows[0];
     if (!row) return reply.code(404).send({ error: 'not found' });
     const etag = `"${row.sha256}"`;
@@ -35,7 +34,17 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
       .header('x-content-type-options', 'nosniff')
       .header('content-security-policy', "default-src 'none'; sandbox")
       .send(row.bytes);
+  };
+
+  // By address, for the optional branded sign-in page.
+  app.get('/branding/logo', { config: { scope: 'public', ...limit(120) } }, async (req, reply) => {
+    if (!req.hostTenantId) return reply.code(404).send({ error: 'not found' });
+    return serveLogo(req, reply, req.hostTenantId);
   });
+
+  // By credential, for an enrolled tablet (works on the bare domain). Scope: the device's own tenant, nothing else.
+  app.get('/device/logo', { config: { scope: 'tenant', permission: 'device', ...limit(120) } }, async (req, reply) =>
+    serveLogo(req, reply, req.principal!.tenantId));
 
   // Manager: set or remove their own tenant's logo (RLS pins the tenant).
   const cfg = { scope: 'tenant', permission: 'manager' } as const;

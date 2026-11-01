@@ -221,8 +221,16 @@ test('logo: stored only if it matches the hash pull promised; refetched only whe
   const sha = await hex(bytes);
   let served: Uint8Array = bytes;
   let calls = 0;
+  let lastAuth: string | null = null;
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async () => { calls++; return new Response(served as BodyInit, { status: 200 }); }) as typeof fetch;
+  // The logo is fetched by device credential (D12), so a device must be enrolled for the fetch to happen.
+  await db.meta.put({ key: 'device', value: { credential: 'tid.did.secret' } });
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    assert.equal(String(url), '/api/device/logo');
+    lastAuth = new Headers(init?.headers).get('authorization');
+    calls++;
+    return new Response(served as BodyInit, { status: 200 });
+  }) as typeof fetch;
   try {
     // no logo row: nothing is fetched, and any cached logo is dropped
     await db.logo.put({ sha: 'old', type: 'image/png', bytes: new ArrayBuffer(1) });
@@ -240,6 +248,7 @@ test('logo: stored only if it matches the hash pull promised; refetched only whe
     served = bytes;
     await syncLogo();
     assert.equal((await db.logo.get(sha))?.type, 'image/png');
+    assert.equal(lastAuth, 'Device tid.did.secret');
     const before = calls;
     await syncLogo();
     assert.equal(calls, before, 'a cached logo is not fetched again');
@@ -268,7 +277,7 @@ test('pull still succeeds when the logo cannot be fetched (cosmetic, never fatal
   const page = { cursor: 3, hasMore: false, changes: [{ type: 'tenant_logo', id: 't', version: 3, deleted: false, data: { sha256: 'a'.repeat(64), contentType: 'image/png' } }] };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string) => {
-    if (String(url).includes('/branding/logo')) throw new TypeError('network down');
+    if (String(url).includes('/device/logo')) throw new TypeError('network down');
     return new Response(JSON.stringify(page), { status: 200 });
   }) as typeof fetch;
   try {

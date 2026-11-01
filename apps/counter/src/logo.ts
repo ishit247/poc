@@ -14,7 +14,9 @@ export async function syncLogo(): Promise<void> {
   }
   const sha = String(row.data.sha256);
   if (await db.logo.get(sha)) return;
-  const r = await fetch('/api/branding/logo');
+  const device = (await db.meta.get('device'))?.value as { credential: string } | undefined;
+  if (!device) return;
+  const r = await fetch('/api/device/logo', { headers: { authorization: `Device ${device.credential}` } });
   if (!r.ok) return;
   const bytes = await r.arrayBuffer();
   // Never store what does not match what pull promised: a stale or swapped response is ignored.
