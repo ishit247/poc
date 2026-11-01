@@ -198,11 +198,21 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const [, tenantId, codeId, secret] = m as unknown as [string, string, string, string];
 
     const out = await withTenant(tenantId.toLowerCase(), async (c) => {
-      // Single atomic claim: concurrent redemptions of one code cannot both succeed.
+      // Single atomic claim: concurrent redemptions of one code cannot both succeed. A suspended tenant's
+      // codes are not claimed (they stay valid until they expire, so reactivation does not waste them).
       const claim = await c.query(
         `UPDATE enrolment_code SET used_at = now()
           WHERE id = $1 AND code_hash = $2 AND used_at IS NULL AND expires_at > now()
-          RETURNING outlet_id, counter_id, label`, [codeId.toLowerCase(), sha256(secret)]);
+            AND NOT EXISTS (SELECT 1 FROM tenant WHERE id = $3 AND suspended_at IS NOT NULL)
+          RETURNING outlet_id, counter_id, label`, [codeId.toLowerCase(), sha256(secret), tenantId.toLowerCase()]);
+      if (claim.rows.length === 0) {
+        // Said only to someone holding a live code, as at login, so a stranger learns nothing about the tenant.
+        const live = await c.query(
+          `SELECT 1 FROM enrolment_code e JOIN tenant t ON t.id = e.tenant_id
+            WHERE e.id = $1 AND e.code_hash = $2 AND e.used_at IS NULL AND e.expires_at > now() AND t.suspended_at IS NOT NULL`,
+          [codeId.toLowerCase(), sha256(secret)]);
+        if (live.rows.length > 0) return 'suspended' as const;
+      }
       const code = claim.rows[0];
       if (!code) return null;
       const deviceId = (await c.query('SELECT gen_random_uuid() AS id')).rows[0].id as string;
@@ -213,6 +223,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       await audit(c, { tenantId: tenantId.toLowerCase(), actorKind: 'device', actorId: deviceId, action: 'device.enrol', entity: 'device', entityId: deviceId });
       return { deviceId, credential: `${tenantId.toLowerCase()}.${deviceId}.${credSecret}` };
     });
+    if (out === 'suspended') return reply.code(403).send({ error: 'tenant suspended' });
     return out ?? unauthorized(reply);
   });
 

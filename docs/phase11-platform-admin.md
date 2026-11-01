@@ -121,4 +121,3 @@ many grants may be open at once.
 - Q4 hosting (needed for IP allowlist/VPN in front of the console, TLS, backups).
 - Whether support staff exist besides the owner (the `support` role is built either way).
 - Outlet/counter onboarding by the platform (step 2 does tenants and the first manager only).
-- Device enrolment redemption for a suspended tenant is not yet blocked (login, bearer and device auth are).

@@ -184,7 +184,24 @@ test('suspending a tenant stops its managers and devices; reactivating restores 
   assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: bearer })).statusCode, 403, 'existing session');
   assert.equal((await app.inject({ method: 'GET', url: '/sync/pull', headers: deviceHeaders })).statusCode, 403, 'device');
 
+  // Enrolment: a live code is refused while suspended (and not consumed); a bogus code stays a plain 401.
+  const codeSecret = 'ABCDEFGHJKLMNPQR';
+  const codeId = await withTenant(t.id, async (c) => {
+    const o = (await c.query('SELECT outlet_id, id AS counter_id FROM counter WHERE tenant_id = $1 LIMIT 1', [t.id])).rows[0];
+    const u = (await c.query('SELECT id FROM app_user WHERE tenant_id = $1 LIMIT 1', [t.id])).rows[0];
+    return (await c.query(
+      `INSERT INTO enrolment_code (tenant_id, outlet_id, counter_id, code_hash, created_by, expires_at)
+       VALUES ($1, $2, $3, $4, $5, now() + interval '15 minutes') RETURNING id`,
+      [t.id, o.outlet_id, o.counter_id, createHash('sha256').update(codeSecret).digest('hex'), u.id])).rows[0].id as string;
+  });
+  const enrol = (code: string) => app.inject({ method: 'POST', url: '/enrol', payload: { code }, headers: { host } });
+  const blockedEnrol = await enrol(`${t.id}.${codeId}.${codeSecret}`);
+  assert.equal(blockedEnrol.statusCode, 403);
+  assert.deepEqual(blockedEnrol.json(), { error: 'tenant suspended' });
+  assert.equal((await enrol(`${t.id}.${codeId}.ZZZZZZZZZZZZZZZZ`)).statusCode, 401, 'wrong secret is not an oracle');
+
   assert.equal((await send(app, 'POST', `/platform/tenants/${t.id}/reactivate`, owner, { reason: 'paid' })).statusCode, 200);
+  assert.equal((await enrol(`${t.id}.${codeId}.${codeSecret}`)).statusCode, 200, 'code survived the suspension');
   assert.equal((await send(app, 'POST', `/platform/tenants/${t.id}/reactivate`, owner, { reason: 'again' })).statusCode, 404, 'not suspended');
   assert.equal((await app.inject({ method: 'GET', url: '/settings', headers: bearer })).statusCode, 200);
   assert.equal((await login()).statusCode, 200);
