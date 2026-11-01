@@ -5,9 +5,10 @@
 // Any malformed, unknown, expired, revoked or mismatching credential yields the
 // same 401, so nothing is learned from the failure.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { tenantForHost, withTenant } from './db.js';
+import type { PoolClient } from 'pg';
+import { tenantForHost, withPlatform, withTenant } from './db.js';
 import { safeEqualHex, sha256 } from './security/crypto.js';
-import type { Permission, Principal } from './scope.js';
+import type { Permission, PlatformAdmin, Principal } from './scope.js';
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const CRED = new RegExp(`^(${UUID})\\.(${UUID})\\.([A-Za-z0-9_-]{43})$`, 'i');
@@ -23,7 +24,39 @@ function parse(header: string | undefined): { scheme: 'Bearer' | 'Device'; tenan
   return m ? { scheme, tenantId: m[1]!.toLowerCase(), id: m[2]!.toLowerCase(), secret: m[3]! } : null;
 }
 
-async function authenticate(req: FastifyRequest): Promise<Principal | null> {
+/** A suspended tenant is refused here (not as "unknown credential"), so a tablet can tell the operator's decision from a typo. */
+async function isSuspended(c: PoolClient, tenantId: string): Promise<boolean> {
+  const r = await c.query('SELECT suspended_at FROM tenant WHERE id = $1', [tenantId]);
+  return r.rows[0]?.suspended_at != null;
+}
+
+// --- platform console credential: "Platform <sessionId>.<secret>" ----------------------------------------
+const PLATFORM_CRED = new RegExp(`^Platform (${UUID})\\.([A-Za-z0-9_-]{43})$`, 'i');
+
+async function authenticatePlatform(req: FastifyRequest): Promise<PlatformAdmin | null> {
+  const m = PLATFORM_CRED.exec(req.headers.authorization ?? '');
+  if (!m) return null;
+  const sessionId = m[1]!.toLowerCase();
+  return withPlatform(async (c) => {
+    const r = await c.query(
+      `SELECT s.token_hash, a.id AS admin_id, a.role
+         FROM platform_session s JOIN platform_admin a ON a.id = s.admin_id AND a.active
+        WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`, [sessionId]);
+    const row = r.rows[0];
+    if (!row || !safeEqualHex(row.token_hash, sha256(m[2]!))) return null;
+    return { adminId: row.admin_id, role: row.role, sessionId } as PlatformAdmin;
+  });
+}
+
+/** Console routes are served only on PLATFORM_HOST when it is set, so they can sit behind a VPN or allowlist. */
+function wrongPlatformHost(req: FastifyRequest): boolean {
+  const want = process.env.PLATFORM_HOST?.toLowerCase();
+  if (!want) return false;
+  const have = (req.headers.host ?? '').toLowerCase().replace(/:\d{1,5}$/, '');
+  return have !== want;
+}
+
+async function authenticate(req: FastifyRequest): Promise<Principal | 'suspended' | null> {
   const p = parse(req.headers.authorization);
   if (!p) return null;
   const hash = sha256(p.secret);
@@ -43,6 +76,7 @@ async function authenticate(req: FastifyRequest): Promise<Principal | null> {
           GROUP BY s.token_hash, s.device_id, u.id, u.role`, [p.id]);
       const row = r.rows[0];
       if (!row || !safeEqualHex(row.token_hash, hash)) return null;
+      if (await isSuspended(c, p.tenantId)) return 'suspended' as const;
       return { kind: 'user', tenantId: p.tenantId, userId: row.user_id, role: row.role, outletIds: row.outlet_ids, sessionId: p.id, deviceId: row.device_id } as Principal;
     });
   }
@@ -55,6 +89,7 @@ async function authenticate(req: FastifyRequest): Promise<Principal | null> {
       `SELECT credential_hash, outlet_id, counter_id, revoked_at FROM device WHERE id = $1 AND ($2 OR revoked_at IS NULL)`, [p.id, allowRevoked]);
     const row = r.rows[0];
     if (!row || !safeEqualHex(row.credential_hash, hash)) return null;
+    if (await isSuspended(c, p.tenantId)) return 'suspended' as const;
     // The tablet reports its build on every request; a malformed value is ignored, not trusted.
     const reported = req.headers['x-app-version'];
     const appVersion = typeof reported === 'string' && APP_VERSION.test(reported) ? reported : null;
@@ -73,16 +108,36 @@ export function allowed(permission: Permission, p: Principal): boolean {
     case 'till': return p.kind === 'user' && (p.role === 'manager' || p.role === 'cashier');
     case 'staff': return p.kind === 'user';
     case 'device': return p.kind === 'device';
+    case 'platform-owner':
+    case 'platform-any': return false; // console permissions are judged by allowedAdmin, never against a tenant principal
+  }
+}
+
+export function allowedAdmin(permission: Permission, a: PlatformAdmin): boolean {
+  switch (permission) {
+    case 'platform-owner': return a.role === 'owner';
+    case 'platform-any': return true;
+    default: return false;
   }
 }
 
 export function registerAuth(app: FastifyInstance) {
   app.addHook('onRequest', async (req, reply) => {
     const cfg = req.routeOptions.config;
+    // Everything under /platform (login included) answers only on the console's own address when one is configured.
+    if (req.url.startsWith('/platform/') && wrongPlatformHost(req)) return reply.code(404).send({ error: 'request failed' });
     req.hostTenantId = await tenantForHost(req.headers.host);
     if (cfg.scope === 'public') return;
+    if (cfg.scope === 'platform') {
+      const admin = await authenticatePlatform(req);
+      if (!admin) return reply.code(401).send({ error: 'unauthorized' });
+      if (!cfg.permission || !allowedAdmin(cfg.permission, admin)) return reply.code(403).send({ error: 'forbidden' });
+      req.admin = admin;
+      return;
+    }
     const principal = await authenticate(req);
     if (!principal) return reply.code(401).send({ error: 'unauthorized' });
+    if (principal === 'suspended') return reply.code(403).send({ error: 'tenant suspended' });
     // A credential from one tenant presented on another tenant's address is refused (RLS would stop the
     // data anyway; this keeps the address and the account in agreement). A bare/unknown host is not judged.
     if (req.hostTenantId && req.hostTenantId !== principal.tenantId) return reply.code(401).send({ error: 'unauthorized' });

@@ -16,7 +16,15 @@ export type Permission =
   | 'manager' // manager only
   | 'till' // takes payment: cashier or manager
   | 'staff' // takes orders: waiter, cashier or manager
-  | 'device'; // enrolled device credential
+  | 'device' // enrolled device credential
+  | 'platform-owner' // console: owner only
+  | 'platform-any'; // console: owner or support
+
+export interface PlatformAdmin {
+  adminId: string;
+  role: 'owner' | 'support';
+  sessionId: string;
+}
 
 export type Principal =
   | { kind: 'user'; tenantId: string; userId: string; role: Role; outletIds: string[]; sessionId: string; deviceId: string | null }
@@ -32,6 +40,8 @@ declare module 'fastify' {
   }
   interface FastifyRequest {
     principal?: Principal;
+    /** The signed-in console operator, set only on scope 'platform' routes. Never a tenant principal. */
+    admin?: PlatformAdmin;
     /** The tenant named by the request's Host (<subdomain>.<base domain>), or null for a bare/unknown host. */
     hostTenantId?: string | null;
   }

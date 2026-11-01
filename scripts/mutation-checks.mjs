@@ -313,6 +313,28 @@ const MUTANTS = [
     ['plat-tenant-policy-for-all-roles', 'CREATE POLICY platform_console ON tenant TO app_platform USING', 'CREATE POLICY platform_console ON tenant USING'],
     ['plat-device-policy-for-all-roles', 'CREATE POLICY platform_console ON device FOR SELECT TO app_platform USING', 'CREATE POLICY platform_console ON device FOR SELECT USING'],
   ].map(([id, from, to]) => M(id, 'db/migrations/0007_platform.sql', from, to, { cwd: '.', cmd: ['node', '--test', 'db/test/platform.test.mjs'] })),
+  // --- platform console auth, roles, suspension (step 2)
+  ...[
+    ['plat-login-skips-totp', 'apps/api/src/routes/platform.ts', 'const codeOk = step !== null && step > Number(a.totp_last_step);', 'const codeOk = true;'],
+    ['plat-totp-replay-ok', 'apps/api/src/routes/platform.ts', 'step !== null && step > Number(a.totp_last_step)', 'step !== null'],
+    ['plat-lockout-ignored', 'apps/api/src/routes/platform.ts', 'if (!a || a.locked) return null;', 'if (!a) return null;'],
+    ['plat-lockout-threshold', 'apps/api/src/routes/platform.ts', 'const MAX_FAILED_LOGINS = 5;', 'const MAX_FAILED_LOGINS = 500;'],
+    ['plat-owner-routes-open-to-support', 'apps/api/src/routes/platform.ts', "const owner = { scope: 'platform', permission: 'platform-owner' } as const;", "const owner = { scope: 'platform', permission: 'platform-any' } as const;"],
+    ['plat-admin-permission-unjudged', 'apps/api/src/auth.ts', "case 'platform-owner': return a.role === 'owner';", "case 'platform-owner': return true;"],
+    ['plat-session-secret-unchecked', 'apps/api/src/auth.ts', "if (!row || !safeEqualHex(row.token_hash, sha256(m[2]!))) return null;", "if (!row) return null;"],
+    ['plat-session-expiry-ignored', 'apps/api/src/auth.ts', 'AND s.revoked_at IS NULL AND s.expires_at > now()`, [sessionId]', 'AND s.revoked_at IS NULL`, [sessionId]'],
+    ['plat-session-revoke-ignored', 'apps/api/src/auth.ts', 'AND s.revoked_at IS NULL AND s.expires_at > now()`, [sessionId]', 'AND s.expires_at > now()`, [sessionId]'],
+    ['plat-inactive-admin-session', 'apps/api/src/auth.ts', 'JOIN platform_admin a ON a.id = s.admin_id AND a.active', 'JOIN platform_admin a ON a.id = s.admin_id'],
+    ['plat-host-unchecked', 'apps/api/src/auth.ts', 'wrongPlatformHost(req)) return reply', 'false) return reply'],
+    ['plat-suspended-bearer-ok', 'apps/api/src/auth.ts', "if (await isSuspended(c, p.tenantId)) return 'suspended' as const;\n      return { kind: 'user'", "return { kind: 'user'"],
+    ['plat-suspended-device-ok', 'apps/api/src/auth.ts', "if (await isSuspended(c, p.tenantId)) return 'suspended' as const;\n    // The tablet", "// The tablet"],
+    ['plat-suspended-login-ok', 'apps/api/src/routes/auth.ts', "if ((await c.query('SELECT suspended_at FROM tenant WHERE id = $1', [tenantId])).rows[0]?.suspended_at) return 'suspended' as const;", ''],
+    ['plat-suspend-reason-optional', 'apps/api/src/routes/platform.ts', 'reason: z.string().trim().min(3).max(200) })', 'reason: z.string().trim().min(3).max(200).optional() })'],
+    ['plat-suspend-state-unchecked', 'apps/api/src/routes/platform.ts', 'WHERE id = $1 AND (suspended_at IS NULL) = $2 RETURNING id', 'WHERE id = $1 AND $2::boolean IS NOT NULL RETURNING id'],
+    ['plat-manager-weak-password', 'apps/api/src/routes/platform.ts', 'password: z.string().min(MIN_PASSWORD_LENGTH)', 'password: z.string().min(1)'],
+    ['plat-manager-no-tenant-audit', 'apps/api/src/routes/platform.ts', "action: 'platform.manager.create'", "action: 'x.noop'"],
+    ['plat-create-unaudited', 'apps/api/src/routes/platform.ts', "action: 'tenant.create'", "action: 'x.noop'"],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('platform.test.ts'))),
   M('outbox-one-tenant-only','apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
 ];
 

@@ -9,6 +9,7 @@ import { newSecret, sha256 } from '../apps/api/src/security/crypto.ts';
 
 export const DEV_PASSWORD = 'dev-password-123';
 export const DEV_PIN = '482913'; // dev only
+export const DEV_TOTP_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'; // dev only, platform operators
 
 const SEED = {
   A: { id: '00000000-0000-4000-8000-00000000000a', name: 'Tenant A Caterers', subdomain: 'tenant-a', logo: [31, 78, 61], key: 'a', outlets: ['School 1 Canteen', 'School 2 Canteen'] },
@@ -226,5 +227,12 @@ for (const t of Object.values(SEED)) {
   }
   await client.query('COMMIT');
 }
+
+// Platform console operators (DEV ONLY: fixed password and authenticator secret, which tests use to compute codes).
+for (const [email, name, role] of [['owner@platform.test', 'Platform Owner', 'owner'], ['support@platform.test', 'Platform Support', 'support']]) {
+  await client.query(
+    'INSERT INTO platform_admin (email, name, role, password_hash, totp_secret) VALUES ($1, $2, $3, $4, $5)',
+    [email, name, role, passwordHash, DEV_TOTP_SECRET]);
+}
 await client.end();
-console.log('seeded tenants A and B');
+console.log('seeded tenants A and B and two platform operators');

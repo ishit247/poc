@@ -53,6 +53,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         return null;
       }
 
+      // Said only to someone who proved the password, so a stranger learns nothing about the account.
+      if ((await c.query('SELECT suspended_at FROM tenant WHERE id = $1', [tenantId])).rows[0]?.suspended_at) return 'suspended' as const;
+
       const sessionId = (await c.query('SELECT gen_random_uuid() AS id')).rows[0].id as string;
       const secret = newSecret();
       const exp = await c.query(
@@ -64,6 +67,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return { token: `${tenantId}.${sessionId}.${secret}`, expiresAt: exp.rows[0].expires_at as Date };
     });
 
+    if (result === 'suspended') return reply.code(403).send({ error: 'tenant suspended' });
     return result ? result : unauthorized(reply);
   });
 

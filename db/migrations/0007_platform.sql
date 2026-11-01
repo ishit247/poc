@@ -17,6 +17,10 @@ CREATE TABLE platform_admin (
   -- Base32 TOTP secret. Required: a console login is always two-factor.
   totp_secret   text NOT NULL,
   active        boolean NOT NULL DEFAULT true,
+  -- Highest TOTP time step already accepted. A code at or below it is refused, so a captured code cannot be replayed.
+  totp_last_step bigint NOT NULL DEFAULT 0,
+  failed_logins int NOT NULL DEFAULT 0,
+  locked_until  timestamptz,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX platform_admin_email_uq ON platform_admin (lower(email));

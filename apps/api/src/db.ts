@@ -3,6 +3,27 @@ import pg from 'pg';
 const url = process.env.APP_DATABASE_URL ?? 'postgres://pos_app:pos_app@localhost:55432/pos';
 export const pool = new pg.Pool({ connectionString: url });
 
+// The platform console's own pool, as the app_platform role (see db/migrations/0007_platform.sql).
+// It never carries a tenant stamp: what it may read is decided by grants and policies, not by a stamp.
+const platformUrl = process.env.PLATFORM_DATABASE_URL ?? 'postgres://app_platform:app_platform@localhost:55432/pos';
+export const platformPool = new pg.Pool({ connectionString: platformUrl });
+
+/** A transaction on the console role. Use only from /platform routes. */
+export async function withPlatform<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
+  const c = await platformPool.connect();
+  try {
+    await c.query('BEGIN');
+    const out = await fn(c);
+    await c.query('COMMIT');
+    return out;
+  } catch (e) {
+    await c.query('ROLLBACK');
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 /**
  * The only way to get a tenant-scoped handle. The stamp is set with
  * set_config(..., is_local => true) so it dies with the transaction and cannot

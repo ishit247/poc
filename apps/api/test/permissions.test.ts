@@ -18,6 +18,9 @@ const MATRIX: Record<Permission, { manager: boolean; cashier: boolean; waiter: b
   till: { manager: true, cashier: true, waiter: false, device: false },
   staff: { manager: true, cashier: true, waiter: true, device: false },
   device: { manager: false, cashier: false, waiter: false, device: true },
+  // Console permissions are never held by a tenant principal (judged by allowedAdmin; see platform.test.ts).
+  'platform-owner': { manager: false, cashier: false, waiter: false, device: false },
+  'platform-any': { manager: false, cashier: false, waiter: false, device: false },
 };
 
 test('permission matrix: waiter takes orders only', () => {

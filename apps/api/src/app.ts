@@ -18,6 +18,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { settlementRoutes } from './routes/settlement.js';
 import { reportRoutes } from './routes/reports.js';
 import { syncRoutes } from './routes/sync.js';
+import { platformRoutes } from './routes/platform.js';
 
 export function buildApp() {
   const app = Fastify({
@@ -34,6 +35,13 @@ export function buildApp() {
     if (!cfg?.scope) throw new Error(`route ${route.method} ${route.url} has no config.scope declaration`);
     if (cfg.scope !== 'public' && !cfg.permission) {
       throw new Error(`route ${route.method} ${route.url} has no config.permission declaration`);
+    }
+    // The console lives under /platform/ and nowhere else (the host restriction keys on the prefix), and
+    // nothing under that prefix may be a tenant route.
+    const url = String(route.url);
+    if (cfg.scope === 'platform' && !url.startsWith('/platform/')) throw new Error(`route ${route.method} ${url} has scope platform outside /platform/`);
+    if (url.startsWith('/platform/') && cfg.scope !== 'platform' && url !== '/platform/login') {
+      throw new Error(`route ${route.method} ${url} is under /platform/ but is not scope platform`);
     }
   });
 
@@ -62,5 +70,6 @@ export function buildApp() {
   app.register(dayCloseRoutes);
   app.register(settlementRoutes);
   app.register(reportRoutes);
+  app.register(platformRoutes);
   return app;
 }
