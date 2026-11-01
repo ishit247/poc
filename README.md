@@ -26,8 +26,14 @@ pnpm run typecheck
 Use `pnpm run up:fresh`, not `pnpm up` (which means `pnpm update`).
 Dev API: `pnpm --filter @pos/api dev` (port 3000); counter: `pnpm --filter @pos/counter dev` (5173, proxies `/api`).
 
+Whole environment, one compose file: `pnpm run env:up` (= `docker compose up -d --build --wait`, plus a dev seed if the
+database is empty) serves the counter app and the API at <http://localhost:8080> (API under `/api`);
+`pnpm run env:down` stops it (`-- --volumes` also wipes the database). Role passwords and DB URLs in
+`docker-compose.yml` / `db/init` are dev defaults.
+
 Seed logins (dev only): `a1@example.test`, `a2@example.test` (tenant A, one outlet each),
-`b1@example.test` (tenant B); password `dev-password-123`. Tenant ids are in `scripts/seed.ts`.
+`b1@example.test` (tenant B); password `dev-password-123`. Full list, PINs and platform operators:
+[docs/test-accounts.md](docs/test-accounts.md).
 
 ## Rules that must not drift
 

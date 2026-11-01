@@ -1,6 +1,7 @@
 node_modules
 dist
 .env
-*.log
-.validation
+*.log.validation
 .claude/settings.local.json
+.run
+.validation

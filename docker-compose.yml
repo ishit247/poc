@@ -1,3 +1,13 @@
+# The whole environment: `docker compose up -d --build --wait`.
+#   postgres  database (roles from db/init on an empty volume)
+#   migrate   one-shot: applies db/migrations, then exits
+#   api       the API, starts after migrate succeeded
+#   counter   nginx: the counter app on :8080, /api proxied to the API
+#   seed      dev data, only on request: `docker compose run --rm seed`
+# Role passwords in db/init/01-roles.sql and the URLs below are DEV defaults; change both together before real use.
+x-db-env: &db-env
+  OWNER_DATABASE_URL: postgres://pos_owner:pos_owner@postgres:5432/pos
+
 services:
   postgres:
     image: postgres:17
@@ -6,7 +16,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: pos
     ports:
-      - "55432:5432"
+      - "55432:5432" # for host-side tests and tools
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -15,6 +25,51 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  migrate:
+    build: { context: ., target: api }
+    image: pos-api
+    command: ["node", "scripts/migrate.mjs"]
+    environment: *db-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    build: { context: ., target: api }
+    image: pos-api
+    environment:
+      APP_DATABASE_URL: postgres://pos_app:pos_app@postgres:5432/pos
+      PLATFORM_DATABASE_URL: postgres://app_platform:app_platform@postgres:5432/pos
+      BASE_DOMAIN: ${BASE_DOMAIN:-localhost}
+      PLATFORM_HOST: ${PLATFORM_HOST:-}
+      TRUST_PROXY: "1" # nginx in front is ours; the API port is not published
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  counter:
+    build: { context: ., target: counter }
+    image: pos-counter
+    ports:
+      - "${COUNTER_PORT:-8080}:80"
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+  seed:
+    build: { context: ., target: api }
+    image: pos-api
+    profiles: ["seed"]
+    command: ["node", "--import", "tsx", "scripts/seed.ts"]
+    environment: *db-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
 
 volumes:
   pgdata:

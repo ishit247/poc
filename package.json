@@ -12,6 +12,8 @@
     "test": "pnpm -r run test && node --test db/test/rls.test.mjs db/test/platform.test.mjs",
     "db:up": "docker compose up -d --wait postgres",
     "up:fresh": "node scripts/up-fresh.mjs",
+    "env:up": "node scripts/up.mjs",
+    "env:down": "node scripts/down.mjs",
     "validate": "node scripts/validate.mjs",
     "validate:quick": "node scripts/validate.mjs quick",
     "validate:standard": "node scripts/validate.mjs standard",

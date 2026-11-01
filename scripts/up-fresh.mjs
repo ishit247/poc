@@ -1,9 +1,7 @@
-// Destroys the dev volume, recreates Postgres, runs every migration from 0001, reseeds.
+// Destroys the dev volume, then brings the whole Docker environment up: migrations from 0001, reseed.
 import { execFileSync } from 'node:child_process';
 
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: 'inherit' });
 
-run('docker', ['compose', 'down', '-v']);
-run('docker', ['compose', 'up', '-d', '--wait', 'postgres']);
-run('node', ['scripts/migrate.mjs']);
-run('node', ['--import', 'tsx', 'scripts/seed.ts']);
+run('docker', ['compose', '--profile', 'seed', 'down', '-v']);
+run('node', ['scripts/up.mjs']);
