@@ -82,9 +82,22 @@ Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the applicatio
    the outlet and scope suites if it runs earlier); it fails with the fix reverted. API 132/132 on a fresh start. Online voids are not in the day's void count
    (they carry no business day); not changed.
 
+8. **Browser check over the whole phase** (Edge, production build, vite preview, API on :3000, fresh database each
+   time, 1024x768 then 768x1024). Scripts are in the session scratchpad, not the repo.
+   - Online queue: 23/23. Settlements: 18/18 (run alone; run after the online script it fails one check, because the
+     online script's delivered orders fall inside the statement period, which is a script interaction, not the app).
+   - Phases 4 to 6, new flow script: shift must be opened first, ring and pay cash, receipt with number and lines,
+     sync, close shift with slip, manager sign-in, blockers listed, force-close of the seeded drawer, close of
+     2026-01-01, no sideways scroll in either orientation, no page errors. All passed.
+   - Not covered: the UPI path (the script never selected UPI, so that sale went through as cash), reprint, and the
+     offline/two-tenant checks of validation.md (covered by tests only). The older `browser-check.mjs` is stale: it
+     predates the open-shift step and the seed's Veg Sandwich unlisting at School 1.
+   - Observation, not changed: the seed leaves two saved (open) counter orders dated 2026-01-02 at School 1. Day close
+     refuses any day on or after that date while they exist, and the manager screen has no way to void them.
+
 ## Still to do
 
-8. Final browser check over the whole phase, and the browser checks still owed for phases 4 to 6.
+Nothing in phase 7. Phase 8 (reports) is next.
 
 ## Known gaps
 
