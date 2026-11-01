@@ -11,7 +11,11 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test && node --test db/test/rls.test.mjs",
     "db:up": "docker compose up -d --wait postgres",
-    "up:fresh": "node scripts/up-fresh.mjs"
+    "up:fresh": "node scripts/up-fresh.mjs",
+    "validate": "node scripts/validate.mjs",
+    "validate:quick": "node scripts/validate.mjs quick",
+    "validate:standard": "node scripts/validate.mjs standard",
+    "validate:full": "node scripts/validate.mjs full"
   },
   "devDependencies": {
     "pg": "^8.23.1",

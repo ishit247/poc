@@ -10,6 +10,7 @@ import { healthRoutes } from './routes/health.js';
 import { counterRoutes } from './routes/counters.js';
 import { dayCloseRoutes } from './routes/dayclose.js';
 import { menuRoutes } from './routes/menu.js';
+import { onlineRoutes } from './routes/online.js';
 import { orderRoutes } from './routes/orders.js';
 import { outletRoutes } from './routes/outlets.js';
 import { settingsRoutes } from './routes/settings.js';
@@ -48,6 +49,7 @@ export function buildApp() {
   app.register(menuRoutes);
   app.register(counterRoutes);
   app.register(orderRoutes);
+  app.register(onlineRoutes);
   app.register(outletRoutes);
   app.register(settingsRoutes);
   app.register(brandingRoutes);

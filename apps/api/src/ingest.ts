@@ -258,7 +258,7 @@ async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTak
 
   const day = await businessDay(c, p, ev.businessDate);
   await c.query(
-    `UPDATE sale SET status = 'paid', receipt_no = $2, receipt_seq = $3, business_date = COALESCE(business_date, $4::date), business_day_id = $5, shift_id = $7,
+    `UPDATE sale SET status = 'paid', receipt_no = $2, receipt_seq = $3, business_date = $4, business_day_id = $5, shift_id = $7,
                      flags = CASE WHEN $6 AND NOT 'late_arrival' = ANY(flags) THEN array_append(flags, 'late_arrival') ELSE flags END
                              || CASE WHEN $8 THEN ARRAY['after_shift_close'] ELSE '{}'::text[] END
       WHERE id = $1`,

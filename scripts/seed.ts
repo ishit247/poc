@@ -40,6 +40,7 @@ for (const t of Object.values(SEED)) {
   const deviceIds: string[] = [];
   const cashierIds: string[] = [];
   const waiterIds: string[] = [];
+  const managerIds: string[] = [];
   const itemIds: Record<string, string> = {};
   for (const o of t.outlets) {
     i++;
@@ -80,6 +81,7 @@ for (const t of Object.values(SEED)) {
       await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, s.rows[0].id, outletId]);
       await client.query("INSERT INTO login_lockout (tenant_id, user_id, kind) VALUES ($1, $2, 'pin')", [t.id, s.rows[0].id]);
     }
+    managerIds.push(u.rows[0].id);
     cashierIds.push(staff['cashier']!);
     waiterIds.push(staff['waiter']!);
     // Rows in every table so isolation tests are not vacuous: a revoked session, a used code, an audit row.
@@ -165,6 +167,50 @@ for (const t of Object.values(SEED)) {
         `INSERT INTO sync_event (tenant_id, id, device_id, seq, type, entity_id, schema_version, created_at_device, outcome, payload)
          VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, 1, '2026-01-01T09:00:00Z', 'applied', '{}')`, [t.id, deviceIds[n], seq, type, saleId]);
     }
+
+    // Online orders (PLAN 11): one Zomato order handed over and paid by the platform, one Swiggy order still waiting.
+    // Neither is in a cashier's shift or has a receipt number. Order ids repeat across tenants on purpose.
+    const online = async (channel: string, ext: string, saleStatus: string, orderStatus: string, date: string) => {
+      const s = await client.query(
+        `INSERT INTO sale (id, tenant_id, outlet_id, business_day_id, business_date, device_id, created_by, channel, status, menu_version,
+                           subtotal_paise, tax_paise, total_paise, created_at_device)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 1, 1000, 50, 1050, $9) RETURNING id`,
+        [t.id, outletId, saleStatus === 'paid' ? day.rows[0].id : null, date, deviceIds[n], cashierIds[n], channel, saleStatus, `${date}T10:00:00Z`]);
+      await client.query(
+        `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
+         VALUES ($1, $2, $3, 'Tea', 1000, 500, 1, 1000, 50)`, [t.id, s.rows[0].id, itemIds['Tea']]);
+      if (saleStatus === 'paid') {
+        await client.query(`INSERT INTO payment (tenant_id, sale_id, method, amount_paise) VALUES ($1, $2, 'aggregator', 1050)`, [t.id, s.rows[0].id]);
+      }
+      const o = await client.query(
+        `INSERT INTO online_order (tenant_id, outlet_id, sale_id, provider, channel, external_order_id, status, accept_by, customer_label, received_at)
+         VALUES ($1, $2, $3, 'manual', $4, $5, 'received', $6, 'Block B, Room 214', $7) RETURNING id`,
+        [t.id, outletId, s.rows[0].id, channel, ext, `${date}T10:05:00Z`, `${date}T10:00:00Z`]);
+      await client.query(
+        `INSERT INTO online_order_event (tenant_id, online_order_id, from_status, to_status, actor_id, device_id, at)
+         VALUES ($1, $2, NULL, 'received', $3, $4, $5)`, [t.id, o.rows[0].id, cashierIds[n], deviceIds[n], `${date}T10:00:00Z`]);
+      if (orderStatus !== 'received') {
+        for (const [from, to] of [['received', 'accepted'], ['accepted', 'ready'], ['ready', 'handed_over']]) {
+          await client.query(`UPDATE online_order SET status = $2, status_at = $3 WHERE id = $1`, [o.rows[0].id, to, `${date}T10:30:00Z`]);
+          await client.query(
+            `INSERT INTO online_order_event (tenant_id, online_order_id, from_status, to_status, actor_id, device_id, at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`, [t.id, o.rows[0].id, from, to, cashierIds[n], deviceIds[n], `${date}T10:30:00Z`]);
+        }
+        await client.query(
+          `INSERT INTO integration_outbox (tenant_id, outlet_id, online_order_id, provider, action, dedupe_key, status, done_at)
+           VALUES ($1, $2, $3, 'manual', 'handed_over', $4, 'done', now())`, [t.id, outletId, o.rows[0].id, `${o.rows[0].id}:handed_over`]);
+      }
+      return o.rows[0].id as string;
+    };
+    const zomatoId = `ZOM-${1001 + n}`;
+    const delivered = await online('zomato', zomatoId, 'paid', 'handed_over', '2026-01-01');
+    await online('swiggy', `SWG-${2001 + n}`, 'open', 'received', '2026-01-02');
+    const imp = await client.query(
+      `INSERT INTO settlement_import (tenant_id, outlet_id, channel, filename, period_from, period_to, uploaded_by)
+       VALUES ($1, $2, 'zomato', 'zomato-jan-week1.csv', '2026-01-01', '2026-01-07', $3) RETURNING id`, [t.id, outletId, managerIds[n]]);
+    await client.query(
+      `INSERT INTO settlement_line (tenant_id, import_id, external_order_id, gross_paise, payout_paise, online_order_id, result)
+       VALUES ($1, $2, $3, 1050, 840, $4, 'matched')`, [t.id, imp.rows[0].id, zomatoId, delivered]);
   }
   await client.query('COMMIT');
 }

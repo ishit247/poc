@@ -108,9 +108,12 @@ CREATE TABLE sale (
   flags           text[] NOT NULL DEFAULT '{}',
   UNIQUE (tenant_id, id),
   CHECK (total_paise = subtotal_paise + tax_paise + round_off_paise),
-  -- The receipt number is assigned at payment (PLAN 9), so only paid/refunded sales carry one.
-  CHECK ((status IN ('paid', 'refunded')) = (receipt_no IS NOT NULL AND receipt_seq IS NOT NULL)
-         OR status = 'void'),
+  -- The receipt number is assigned at payment (PLAN 9), so only paid/refunded counter sales carry one.
+  -- An online order (PLAN 11) is created by the server, not drawn from a tablet's gap-free series: it never
+  -- has one, and the platform's order id is its reference.
+  CHECK (CASE WHEN channel = 'counter'
+              THEN (status IN ('paid', 'refunded')) = (receipt_no IS NOT NULL AND receipt_seq IS NOT NULL) OR status = 'void'
+              ELSE receipt_no IS NULL AND receipt_seq IS NULL END),
   CHECK (status <> 'void' OR void_reason IS NOT NULL),
   FOREIGN KEY (tenant_id, outlet_id)       REFERENCES outlet(tenant_id, id),
   FOREIGN KEY (tenant_id, business_day_id) REFERENCES business_day(tenant_id, id),

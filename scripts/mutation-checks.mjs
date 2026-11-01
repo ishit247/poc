@@ -10,6 +10,9 @@ import { spawnSync } from 'node:child_process';
 const API_TESTS = (...f) => ({ cwd: 'apps/api', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', ...f.map((x) => `test/${x}`)] });
 const DB_TESTS = { cwd: '.', cmd: ['node', '--test', 'db/test/rls.test.mjs', 'db/test/trading.test.mjs'] };
 
+const ONLINE = 'db/migrations/0005_online.sql';
+const ONLINE_DB_TESTS = { cwd: '.', cmd: ['node', '--test', 'db/test/online.test.mjs'] };
+
 const AUTH = 'apps/api/src/routes/auth.ts';
 const ADMIN = 'apps/api/src/routes/admin.ts';
 const SYNC = 'apps/api/src/routes/sync.ts';
@@ -55,10 +58,10 @@ const MUTANTS = [
   M('sale-line-editable', TRADING, 'REVOKE UPDATE, DELETE, TRUNCATE ON sale_line FROM pos_app;', '', DB_TESTS),
   M('payment-editable', TRADING, 'REVOKE UPDATE, DELETE, TRUNCATE ON payment FROM pos_app;', '', DB_TESTS),
   M('receipt-not-unique', TRADING, 'CREATE UNIQUE INDEX sale_receipt_uq', 'CREATE INDEX sale_receipt_uq', DB_TESTS),
-  M('sale-total-unchecked', TRADING, 'CHECK (total_paise = subtotal_paise + tax_paise),', '', DB_TESTS),
+  M('sale-total-unchecked', TRADING, 'CHECK (total_paise = subtotal_paise + tax_paise + round_off_paise),', '', DB_TESTS),
   M('payment-change-on-upi', TRADING, "CHECK (method = 'cash' OR change_paise = 0),", '', DB_TESTS),
   M('open-sale-with-receipt', TRADING, "(status IN ('paid', 'refunded')) = (receipt_no IS NOT NULL AND receipt_seq IS NOT NULL)", 'true', DB_TESTS),
-  M('shift-deletable', TRADING, 'REVOKE DELETE, TRUNCATE ON shift FROM pos_app;', '', DB_TESTS),
+  M('shift-deletable', TRADING, "SELECT app.add_versioning('shift');", '', DB_TESTS),
   M('sale-line-no-rls', TRADING, "SELECT app.enable_tenant_rls('sale_line');", '', DB_TESTS),
   M('lockout-no-rls', 'db/migrations/0002_auth.sql', "SELECT app.enable_tenant_rls('login_lockout');", '', DB_TESTS),
   M('user-outlet-deletable', 'db/migrations/0003_menu.sql', "SELECT app.add_versioning('user_outlet');", '', API_TESTS('staff.test.ts')),
@@ -66,7 +69,7 @@ const MUTANTS = [
   ...[
     ['ingest-no-duplicate-check', 'if (seen) {', 'if (false) {'],
     ['ingest-no-device-lock', "await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [p.deviceId]);", ''],
-    ['ingest-defer-becomes-reject', 'throw new Defer();', "throw new Reject('sale_not_found');"],
+    ['ingest-defer-becomes-reject', 'throw new Defer();', "throw new Reject('sale_not_found');", true],
     ['ingest-sale-rejected-waits', "if (refused.rowCount) throw new Reject('sale_rejected');", ''],
     ['ingest-pay-other-devices-sale', "if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');", ''],
     ['ingest-after-revocation-accepted', 'if (p.revokedAt && new Date(e.createdAt) > p.revokedAt)', 'if (false)'],
@@ -76,7 +79,7 @@ const MUTANTS = [
     ['ingest-tax-unchecked', "if (tax !== ev.taxPaise) throw new Reject('tax_mismatch');", ''],
     ['ingest-round-off-unbounded', "if (Math.abs(ev.roundOffPaise) > 50) throw new Reject('round_off_too_large');", ''],
     ['ingest-channel-unchecked', "if (ev.channel !== 'counter') throw new Reject('channel_not_allowed');", ''],
-    ['ingest-unknown-user-ok', "if (!who.rowCount) throw new Reject('unknown_user');", ''],
+    ['ingest-unknown-user-ok', "if (!who.rowCount) throw new Reject('unknown_user');", '', true],
     ['ingest-unknown-item-ok', "if (items.rowCount !== ids.length) throw new Reject('unknown_item');", ''],
     ['ingest-payments-unchecked', "!== Number(sale.total_paise)) throw new Reject('payments_not_total');", '!== Number(sale.total_paise) && false) throw new Reject(\'payments_not_total\');'],
     ['ingest-receipt-no-unchecked', "if (ev.receiptNo !== `${code}-${ev.businessDate.replaceAll('-', '')}-${ev.receiptSeq}`) throw new Reject('bad_receipt_no');", ''],
@@ -93,18 +96,18 @@ const MUTANTS = [
     ['ingest-flag-late-payment', "CASE WHEN $6 AND NOT 'late_arrival' = ANY(flags)", 'CASE WHEN false'],
     ['ingest-business-date-from-sale', 'business_date = $4,', 'business_date = COALESCE(business_date, $4::date),'],
     ['ingest-no-audit-on-revoked', "if (p.revokedAt) {", 'if (false) {'],
-  ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('sync-push.test.ts'))),
+  ].map(([id, from, to, all]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('sync-push.test.ts'), all)),
   M('push-revoked-everywhere', 'apps/api/src/auth.ts', '($2 OR revoked_at IS NULL)', 'true', API_TESTS('sync-push.test.ts')),
   M('push-route-body-unstrict', SYNC, '}).strict()).min(1).max(MAX_BATCH),\n}).strict();', '})).min(1).max(MAX_BATCH),\n});', API_TESTS('sync-push.test.ts')),
   M('push-no-batch-cap', SYNC, '.min(1).max(MAX_BATCH)', '.min(1)', API_TESTS('sync-push.test.ts')),
   M('push-ledger-updatable', TRADING, 'REVOKE UPDATE, DELETE, TRUNCATE ON sync_event FROM pos_app;', '', API_TESTS('sync-push.test.ts')),
-  M('push-ledger-global-key', TRADING, 'PRIMARY KEY (tenant_id, id),\n  CHECK ((outcome', 'PRIMARY KEY (id),\n  CHECK ((outcome', API_TESTS('sync-push.test.ts')),
+  M('push-ledger-global-key', TRADING, /PRIMARY KEY \(tenant_id, id\),(\r?\n\s*CHECK \(\(outcome)/, 'PRIMARY KEY (id),$1', API_TESTS('sync-push.test.ts')),
   M('push-ledger-no-rls', TRADING, "SELECT app.enable_tenant_rls('sync_event');", '', DB_TESTS),
   // --- phase 4: the tablet
   ...[
     ['tablet-deletes-rejected', "else if (res.status === 'rejected') { await db.outbox.update(seq, { rejected: res.reason ?? 'rejected' }); summary.parked++; }", "else if (res.status === 'rejected') { await db.outbox.delete(seq); summary.parked++; }"],
     ['tablet-deletes-deferred', "else summary.deferred++;", "else { await db.outbox.delete(seq); summary.deferred++; }"],
-    ['tablet-resends-parked', '.filter((r) => !r.rejected)', ''],
+    ['tablet-resends-parked', ".orderBy('seq').toArray()).filter((r) => !r.rejected)", ".orderBy('seq').toArray())"],
     ['tablet-deletes-before-answer', "const r = await fetch('/api/sync/push', {", "await db.outbox.clear();\n    const r = await fetch('/api/sync/push', {"],
     ['tablet-ignores-http-error', "if (!r.ok) throw new Error(`push failed: ${r.status}`);", ''],
   ].map(([id, from, to]) => M(id, 'apps/counter/src/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'] })),
@@ -127,7 +130,7 @@ const MUTANTS = [
     ['reprint-other-device', "if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');\n  return sale;", 'return sale;'],
     ['reprint-no-audit-trail', "action: 'sale.reprinted'", "action: 'sale.noop'"],
     ['reprint-unknown-user-ok', "[ev.reprintedBy, p.outletId]);\n  if (!who.rowCount) throw new Reject('unknown_user');", '[ev.reprintedBy, p.outletId]);'],
-    ['reprint-type-not-accepted', "type !== 'payment.taken' && type !== 'print.reprinted'", "type !== 'payment.taken'"],
+    ['reprint-type-not-accepted', "'payment.taken', 'print.reprinted', 'shift.opened'", "'payment.taken', 'shift.opened'"],
   ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('sync-push.test.ts'))),
   ...[
     ['receipt-info-scope', "const b = receiptInfoBody.safeParse(req.body);\n    if (!ps.success || !b.success) return bad(reply);\n    const p = req.principal!;\n    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);", "const b = receiptInfoBody.safeParse(req.body);\n    if (!ps.success || !b.success) return bad(reply);\n    const p = req.principal!;\n    if (p.kind !== 'user') return notFound(reply);"],
@@ -187,6 +190,39 @@ const MUTANTS = [
     ['tablet-pull-no-server-figures', '} else if (s && !s.closedByManager) {', '} else if (false) {'],
   ].map(([id, from, to]) => M(id, 'apps/counter/src/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'] })),
   M('dayclose-outbox-header-ignored', 'apps/api/src/auth.ts', 'outbox_pending = COALESCE($3, outbox_pending)', 'outbox_pending = outbox_pending', API_TESTS('sync-push.test.ts')),
+  // --- phase 7: online orders (schema guards)
+  ...[
+    ['online-receipt-rule', TRADING, 'ELSE receipt_no IS NULL AND receipt_seq IS NULL END', 'ELSE true END'],
+    ['online-lifecycle-any-move', ONLINE, 'IF NOT (\n       (OLD.status = \'received\'', 'IF false AND NOT (\n       (OLD.status = \'received\''],
+    ['online-identity-editable', ONLINE, 'IF (NEW.tenant_id, NEW.outlet_id, NEW.sale_id,', 'IF false AND (NEW.tenant_id, NEW.outlet_id, NEW.sale_id,'],
+    ['online-id-unique-per-platform', ONLINE, 'UNIQUE (tenant_id, channel, external_order_id),', 'UNIQUE (tenant_id, channel, external_order_id, id),'],
+    ['online-reason-optional', ONLINE, "CHECK (status NOT IN ('rejected', 'cancelled') OR reason IS NOT NULL),", 'CHECK (true),'],
+    ['online-event-editable', ONLINE, 'REVOKE UPDATE, DELETE, TRUNCATE ON online_order_event FROM pos_app;', 'REVOKE TRUNCATE ON online_order_event FROM pos_app;'],
+    ['online-settlement-line-editable', ONLINE, 'REVOKE UPDATE, DELETE, TRUNCATE ON settlement_line FROM pos_app;', 'REVOKE TRUNCATE ON settlement_line FROM pos_app;'],
+    ['online-order-deletable', ONLINE, 'REVOKE DELETE, TRUNCATE ON online_order FROM pos_app;', 'REVOKE TRUNCATE ON online_order FROM pos_app;'],
+    ['online-outbox-no-dedupe', ONLINE, 'UNIQUE (tenant_id, dedupe_key),', 'UNIQUE (tenant_id, id),'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, ONLINE_DB_TESTS)),
+  // --- phase 7: the online order API
+  ...[
+    ['online-api-scope-ignored', "const SCOPE = 'o.outlet_id = ANY($1::uuid[])';", "const SCOPE = '(o.outlet_id = ANY($1::uuid[]) OR true)';"],
+    ['online-api-waiter-allowed', "const cfg = { scope: 'outlet', permission: 'till' } as const;", "const cfg = { scope: 'outlet', permission: 'staff' } as const;"],
+    ['online-api-any-move', "if (!(NEXT[from] ?? []).includes(to) && !(to === 'expired' && from === 'received')) return", "if (false) return"],
+    ['online-api-reason-optional', "&& !extra.reason) return { kind: 'reason_required' as const };", "&& false) return { kind: 'reason_required' as const };"],
+    ['online-api-no-void-on-reject', "await c.query(`UPDATE sale SET status = 'void', void_reason = $2 WHERE id = $1`", "await c.query(`SELECT $2::text, $1::uuid`"],
+    ['online-api-no-payment', "await c.query(`INSERT INTO payment (tenant_id, sale_id, method, amount_paise) VALUES ($1,$2,'aggregator',$3)`, [a.tenantId, o.sale_id, sale.total_paise]);", ''],
+    ['online-api-duplicate-creates', "if (existing) return { kind: 'existing' as const, id: existing.id as string };", ''],
+    ['online-api-override-unflagged', 'if (unit !== it.price) overridden = true;', ''],
+    ['online-api-tax-dropped', 'tax += amt.tax as number;', 'tax += 0;'],
+    ['online-api-no-event-row', "`INSERT INTO online_order_event (tenant_id, online_order_id, from_status, to_status, actor_id, device_id, detail) VALUES ($1,$2,$3,$4,$5,$6,$7)`,\n    [a.tenantId, id, from, to, a.userId, a.deviceId, { reason: extra.reason ?? null }]);", "`SELECT $1::uuid, $2::uuid, $3::text, $4::text, $5::uuid, $6::uuid, $7::text`,\n    [a.tenantId, id, from, to, a.userId, a.deviceId, '']);"],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/online.ts', from, to, API_TESTS('online.test.ts'))),
+  // --- phase 7: the stream
+  M('stream-wakes-every-outlet', 'apps/api/src/hub.ts', 'for (const fn of byOutlet.get(outletId) ?? []) fn();', 'for (const set of byOutlet.values()) for (const fn of set) fn();', API_TESTS('online.test.ts')),
+  M('stream-silent-on-create', 'apps/api/src/routes/online.ts', "case 'created': publish(r.order.outletId); return", "case 'created': return", API_TESTS('online.test.ts')),
+  // --- phase 7: the expiry job
+  M('expiry-ignores-deadline', 'db/migrations/0005_online.sql', 'AND accept_by IS NOT NULL AND accept_by < now());', 'AND accept_by IS NOT NULL);', API_TESTS('online.test.ts')),
+  M('expiry-takes-accepted', 'db/migrations/0005_online.sql', "app.job', true) = 'expire_online' AND status = 'received'", "app.job', true) = 'expire_online' AND status IN ('received', 'accepted')", API_TESTS('online.test.ts')),
+  M('expiry-scan-open-to-all', 'db/migrations/0005_online.sql', "USING (current_setting('app.job', true) = 'expire_online' AND", 'USING (', API_TESTS('online.test.ts')),
+  M('expiry-one-tenant-only', 'apps/api/src/jobs/expireOnline.ts', 'for (const d of due) {', 'for (const d of due.filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('online.test.ts')),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
@@ -201,10 +237,12 @@ const results = [];
 for (const m of todo) {
   original = readFileSync(m.file, 'utf8');
   current = m.file;
-  const count = original.split(m.from).length - 1;
-  if (count === 0 || (count > 1 && !m.all)) { results.push([m.id, 'INVALID', `pattern found ${count}x`]); continue; }
+  // `from` is a string, or a RegExp when the text spans lines (checked-in files may use CRLF).
+  const isRe = m.from instanceof RegExp;
+  const count = isRe ? (original.match(new RegExp(m.from.source, 'g'))?.length ?? 0) : original.split(m.from).length - 1;
+  if (count === 0 || (count > 1 && !m.all)) { results.push([m.id, 'INVALID', `pattern found ${count}x`]); console.log(results.at(-1).join(' | ')); continue; }
   try {
-    writeFileSync(m.file, m.all ? original.split(m.from).join(m.to) : original.replace(m.from, () => m.to));
+    writeFileSync(m.file, isRe ? original.replace(m.from, m.to) : m.all ? original.split(m.from).join(m.to) : original.replace(m.from, () => m.to));
     const up = run(['node', 'scripts/up-fresh.mjs']);
     if (up.status !== 0) { results.push([m.id, 'BROKEN', 'fresh start failed under the mutation']); continue; }
     const t = run(m.tests.cmd, m.tests.cwd);

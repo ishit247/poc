@@ -166,7 +166,14 @@ test('contract: a drawer a manager closed reaches the tablet by pull, and the ta
   const third = await openShift({ actor, openingCashPaise: 10_000 });
   await closeShift({ device: real, actor, countedCashPaise: 10_000 });
   await push(real);
-  const own = (await app.inject({ method: 'GET', url: '/sync/pull?cursor=0', headers: { authorization: `Device ${real.credential}` } })).json();
+  // Follow every page, as a real tablet does: on a database that other suites have filled, the shift rows are not on page one.
+  const own = { changes: [] as { type: string; id: string }[] };
+  for (let cursor = 0, more = true; more;) {
+    const page = (await app.inject({ method: 'GET', url: `/sync/pull?cursor=${cursor}`, headers: { authorization: `Device ${real.credential}` } })).json();
+    own.changes.push(...page.changes);
+    more = page.hasMore;
+    cursor = page.cursor;
+  }
   assert.deepEqual(own.changes.filter((c: { type: string }) => c.type === 'shift').map((c: { id: string }) => c.id).sort(), [first.id, second.id].sort());
   assert.ok(!own.changes.some((c: { id: string }) => c.id === third.id));
 

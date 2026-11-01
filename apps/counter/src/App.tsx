@@ -6,6 +6,7 @@ import { loadMenu, type MenuView } from './menu.ts';
 import type { Actor } from './sale.ts';
 import { PinScreen } from './PinScreen.tsx';
 import { Sell } from './Sell.tsx';
+import { OnlineQueue } from './OnlineQueue.tsx';
 import { Orders } from './Orders.tsx';
 import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
@@ -64,7 +65,8 @@ function EnrolScreen({ onDone }: { onDone: (d: DeviceInfo) => void }) {
 function Counter({ device }: { device: DeviceInfo }) {
   const [menu, setMenu] = useState<MenuView | null>(null);
   const [actor, setActor] = useState<Actor | null>(null);
-  const [tab, setTab] = useState<'sell' | 'orders' | 'shift'>('sell');
+  const [tab, setTab] = useState<'sell' | 'orders' | 'shift' | 'online'>('sell');
+  const [onlineWaiting, setOnlineWaiting] = useState(0);
   // null = not in manager tools; '' = signing in; otherwise the session token. Memory only, never stored.
   const [mgr, setMgr] = useState<string | null>(null);
   const shift = useLive(() => currentShift().then((s) => s ?? null), undefined as LocalShift | null | undefined);
@@ -137,9 +139,11 @@ function Counter({ device }: { device: DeviceInfo }) {
           <nav>
             <button data-testid="tab-sell" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
             <button data-testid="tab-orders" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Open orders</button>
+            {actor.role === 'cashier' && <button data-testid="tab-online" className={tab === 'online' ? 'active' : ''} onClick={() => setTab('online')}>Online{onlineWaiting > 0 && <span data-testid="online-badge" className="badge">{onlineWaiting}</span>}</button>}
             {actor.role === 'cashier' && <button data-testid="tab-shift" className={tab === 'shift' ? 'active' : ''} onClick={() => setTab('shift')}>Shift</button>}
           </nav>
-          {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : tab === 'orders' ? <Orders device={device} actor={actor} /> : <Shift device={device} actor={actor} shift={shift ?? undefined} onSync={sync} />}
+          {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : tab === 'orders' ? <Orders device={device} actor={actor} /> : tab === 'shift' ? <Shift device={device} actor={actor} shift={shift ?? undefined} onSync={sync} /> : null}
+          {actor.role === 'cashier' && <OnlineQueue device={device} actor={actor} menu={menu} hidden={tab !== 'online'} onCount={setOnlineWaiting} />}
         </>
       )}
     </div>
