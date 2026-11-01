@@ -182,7 +182,7 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
         const u = (await c.query(
           `INSERT INTO app_user (tenant_id, name, pin_verifier, role, email, password_hash)
            VALUES ($1, $2, $3, 'manager', $4, $5) RETURNING id`, [tenantId, body.data.name, pinVerifier, body.data.email, passwordHash])).rows[0];
-        await audit(c, { tenantId, actorKind: 'system', action: 'x.noop', entity: 'app_user', entityId: u.id, detail: { platformAdminId: a.adminId } });
+        await audit(c, { tenantId, actorKind: 'system', action: 'platform.manager.create', entity: 'app_user', entityId: u.id, detail: { platformAdminId: a.adminId } });
         return u.id as string;
       });
     } catch (e) {
