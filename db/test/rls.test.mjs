@@ -27,7 +27,8 @@ async function tenantTables() {
   const r = await pool.query(`
     SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname <> 'schema_migration'`);
+    WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname <> 'schema_migration'
+      AND c.relname NOT LIKE 'platform\\_%'`); // platform_* are walled off by privileges: see platform.test.mjs
   return r.rows;
 }
 

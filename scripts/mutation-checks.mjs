@@ -303,6 +303,16 @@ const MUTANTS = [
     ['rep-csv-float-money', 'apps/api/src/reports.ts', 'return `${n < 0 ?', 'return String(n / 100) || `${n < 0 ?'],
     ['rep-csv-no-total', 'apps/api/src/reports.ts', 'if (r.totals) {', 'if (false) {'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('zz-reports.test.ts'))),
+  // --- platform console walls (0007)
+  ...[
+    ['plat-audit-editable', 'GRANT SELECT, INSERT ON platform_audit TO app_platform;', 'GRANT SELECT, INSERT, UPDATE, DELETE ON platform_audit TO app_platform;'],
+    ['plat-pos-app-reads-admins', 'REVOKE ALL ON platform_admin, platform_session, platform_audit FROM pos_app;', ''],
+    ['plat-device-writable', 'GRANT SELECT ON outlet, device TO app_platform;', 'GRANT SELECT, UPDATE ON outlet, device TO app_platform;'],
+    ['plat-reads-sales', 'GRANT SELECT ON outlet, device TO app_platform;', 'GRANT SELECT ON outlet, device, sale, payment TO app_platform;'],
+    ['plat-tenant-deletable', 'GRANT SELECT, INSERT, UPDATE ON tenant TO app_platform;', 'GRANT SELECT, INSERT, UPDATE, DELETE ON tenant TO app_platform;'],
+    ['plat-tenant-policy-for-all-roles', 'CREATE POLICY platform_console ON tenant TO app_platform USING', 'CREATE POLICY platform_console ON tenant USING'],
+    ['plat-device-policy-for-all-roles', 'CREATE POLICY platform_console ON device FOR SELECT TO app_platform USING', 'CREATE POLICY platform_console ON device FOR SELECT USING'],
+  ].map(([id, from, to]) => M(id, 'db/migrations/0007_platform.sql', from, to, { cwd: '.', cmd: ['node', '--test', 'db/test/platform.test.mjs'] })),
   M('outbox-one-tenant-only','apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
 ];
 

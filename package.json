@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test && node --test db/test/rls.test.mjs",
+    "test": "pnpm -r run test && node --test db/test/rls.test.mjs db/test/platform.test.mjs",
     "db:up": "docker compose up -d --wait postgres",
     "up:fresh": "node scripts/up-fresh.mjs",
     "validate": "node scripts/validate.mjs",

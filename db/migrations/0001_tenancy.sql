@@ -24,7 +24,9 @@ CREATE TABLE tenant (
   subdomain  text NOT NULL UNIQUE
              CHECK (subdomain ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
                     AND subdomain NOT IN ('www', 'api', 'app', 'admin', 'mail', 'static', 'assets')),
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  -- Set by the platform console. A suspended tenant cannot sign in or sync; counters keep selling offline.
+  suspended_at timestamptz
 );
 
 CREATE TABLE outlet (

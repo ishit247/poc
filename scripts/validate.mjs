@@ -31,7 +31,7 @@ const STAGES = {
   },
   db: {
     what: 'Schema tests: RLS isolation, trading invariants, online orders',
-    run: 'node --test db/test/rls.test.mjs db/test/trading.test.mjs db/test/online.test.mjs',
+    run: 'node --test db/test/rls.test.mjs db/test/trading.test.mjs db/test/online.test.mjs db/test/platform.test.mjs',
     needsDb: true,
   },
   build: { what: 'Tablet production build (tsc + vite)', run: 'pnpm --filter ./apps/counter build' },
