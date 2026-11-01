@@ -223,6 +223,17 @@ const MUTANTS = [
   M('expiry-takes-accepted', 'db/migrations/0005_online.sql', "app.job', true) = 'expire_online' AND status = 'received'", "app.job', true) = 'expire_online' AND status IN ('received', 'accepted')", API_TESTS('online.test.ts')),
   M('expiry-scan-open-to-all', 'db/migrations/0005_online.sql', "USING (current_setting('app.job', true) = 'expire_online' AND", 'USING (', API_TESTS('online.test.ts')),
   M('expiry-one-tenant-only', 'apps/api/src/jobs/expireOnline.ts', 'for (const d of due) {', 'for (const d of due.filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('online.test.ts')),
+  // Outbox: queueing, dedupe, retry, the scan window, the delete revoke.
+  M('outbox-not-queued', 'apps/api/src/routes/online.ts', 'if (action) {', 'if (action && false) {', API_TESTS('outbox.test.ts')),
+  M('outbox-no-dedupe', 'db/migrations/0005_online.sql', '  UNIQUE (tenant_id, dedupe_key),\n  CHECK ((status', '  CHECK ((status', API_TESTS('outbox.test.ts')),
+  M('outbox-failure-forgotten', 'apps/api/src/jobs/outbox.ts', 'const attempts = m.attempts + 1;', 'const attempts = m.attempts;', API_TESTS('outbox.test.ts')),
+  M('outbox-no-backoff', 'apps/api/src/jobs/outbox.ts', 'return Math.min(30 * 2 ** Math.max(attempts - 1, 0), 3600);', 'return 0;', API_TESTS('outbox.test.ts')),
+  M('outbox-retries-failed', 'apps/api/src/jobs/outbox.ts', "CASE WHEN $2::int >= $4::int THEN 'failed' ELSE 'pending' END", "'pending'", API_TESTS('outbox.test.ts')),
+  M('outbox-done-without-sending', 'apps/api/src/jobs/outbox.ts', 'await send(m);', '', API_TESTS('outbox.test.ts')),
+  M('outbox-scan-open-to-all', 'db/migrations/0005_online.sql', "USING (current_setting('app.job', true) = 'outbox' AND", 'USING (', API_TESTS('outbox.test.ts')),
+  M('outbox-scan-ignores-due', 'db/migrations/0005_online.sql', "status = 'pending' AND next_attempt_at <= now());", "status = 'pending');", API_TESTS('outbox.test.ts')),
+  M('outbox-delete-granted', 'db/migrations/0005_online.sql', 'REVOKE DELETE, TRUNCATE ON integration_outbox FROM pos_app;', '', API_TESTS('outbox.test.ts')),
+  M('outbox-one-tenant-only', 'apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });

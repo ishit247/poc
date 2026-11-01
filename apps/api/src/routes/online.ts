@@ -41,7 +41,11 @@ export const NEXT: Record<string, readonly string[]> = {
   preparing: ['ready', 'cancelled'],
   ready: ['handed_over', 'cancelled'],
 };
-export const ACTIVE = ['received', 'accepted', 'preparing', 'ready'];
+/** The platform message each move sends. `preparing` and `expired` map to what the platform understands. */
+const OUTBOX_ACTION: Record<string, string> = {
+  accepted: 'accept', rejected: 'reject', expired: 'reject', ready: 'ready', handed_over: 'handed_over', cancelled: 'cancel',
+};
+export const ACTIVE =['received', 'accepted', 'preparing', 'ready'];
 
 const COLS = `o.id, o.sale_id AS "saleId", o.outlet_id AS "outletId", o.channel, o.provider, o.external_order_id AS "externalOrderId",
   o.status, o.accept_by AS "acceptBy", o.prep_minutes AS "prepMinutes", o.customer_label AS "customerLabel",
@@ -163,6 +167,15 @@ export async function moveOrder(c: pg.PoolClient, a: { tenantId: string; userId:
     `INSERT INTO online_order_event (tenant_id, online_order_id, from_status, to_status, actor_id, device_id, detail) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [a.tenantId, id, from, to, a.userId, a.deviceId, { reason: extra.reason ?? null }]);
   await audit(c, { tenantId: a.tenantId, actorKind: a.userId ? 'user' : 'system', actorId: a.userId, action: `online_order.${to}`, entity: 'online_order', entityId: id, detail: { from, reason: extra.reason ?? null } });
+  const action = OUTBOX_ACTION[to];
+  if (action) {
+    // Same transaction as the move: the message exists exactly when the move does. The dedupe key makes it one per action.
+    await c.query(
+      `INSERT INTO integration_outbox (tenant_id, outlet_id, online_order_id, provider, action, payload, dedupe_key)
+       SELECT tenant_id, outlet_id, id, provider, $2, $3, id::text || ':' || $2 FROM online_order WHERE id = $1
+       ON CONFLICT (tenant_id, dedupe_key) DO NOTHING`,
+      [id, action, { reason: extra.reason ?? null, prepMinutes: extra.prepMinutes ?? null }]);
+  }
   return { kind: 'ok' as const };
 }
 

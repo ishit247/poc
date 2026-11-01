@@ -111,6 +111,10 @@ CREATE TABLE integration_outbox (
 CREATE INDEX integration_outbox_due_ix ON integration_outbox (next_attempt_at) WHERE status = 'pending';
 SELECT app.enable_tenant_rls('integration_outbox');
 REVOKE DELETE, TRUNCATE ON integration_outbox FROM pos_app;
+-- The worker finds due messages across tenants the same way the expiry job does: a stamped, SELECT-only window.
+-- It sends and updates each row inside that row's own tenant transaction.
+CREATE POLICY outbox_scan ON integration_outbox FOR SELECT
+  USING (current_setting('app.job', true) = 'outbox' AND status = 'pending' AND next_attempt_at <= now());
 
 -- A platform's payout statement, uploaded by a manager. Matching never edits a sale; it only reports.
 CREATE TABLE settlement_import (

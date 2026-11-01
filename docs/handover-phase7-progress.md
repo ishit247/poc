@@ -2,7 +2,7 @@
 
 Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the application: [validation.md](validation.md).
 
-## Done (steps 1 to 4)
+## Done (steps 1 to 5)
 
 1. **Schema.** `db/migrations/0005_online.sql`: `online_order` (lifecycle trigger as the floor), `online_order_event`
    (append-only), `integration_outbox`, `settlement_import`, `settlement_line`, all with RLS. The `sale` CHECK in 0004
@@ -18,6 +18,13 @@ Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the applicatio
    outlets, `apps/api/src/hub.ts`). Tablet: Online tab for cashiers (`apps/counter/src/OnlineQueue.tsx`, `online.ts`):
    badge, chime, countdown to `accept_by`, Accept / Preparing / Ready / Handed over, reject or cancel with a reason, key
    in a new order, poll fallback, refresh on reconnect and on the browser's `online` event.
+
+5. **Outbox worker** (`apps/api/src/jobs/outbox.ts`, started from `server.ts`, every 5 s). `moveOrder` queues one
+   `integration_outbox` row per move in the same transaction (`expired` sends `reject`; `preparing` sends nothing;
+   unique `dedupe_key` = order id + action). The worker finds due rows across tenants through the SELECT-only
+   `outbox_scan` policy (stamp `app.job = 'outbox'`, in 0005), then sends each in its own tenant's transaction with
+   `FOR UPDATE SKIP LOCKED`. The `manual` sender is a no-op, so its rows go straight to `done`. A failing sender backs off
+   30 s, 60 s ... capped at 1 h, and the row becomes `failed` after 8 attempts. Phase 9 adds entries to `senders`.
 
 ## Decisions made (not in the original plan)
 
@@ -49,7 +56,6 @@ Plan: [phase7-plan.md](phase7-plan.md). How to check the state of the applicatio
 
 ## Still to do
 
-5. Outbox worker with the manual no-op provider (table exists).
 6. Settlement import: API and manager screen in `apps/counter/src/manager/`.
 7. Day close: check handover-date and open-order blockers against online gross.
 8. Final browser check over the whole phase, and the browser checks still owed for phases 4 to 6.
