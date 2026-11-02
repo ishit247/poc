@@ -1,5 +1,6 @@
 # The whole environment: `docker compose up -d --build --wait`.
 #   postgres  database (roles from db/init on an empty volume)
+#   garage    S3-compatible object store for item pictures (bucket and key made by scripts/garage-init.mjs)
 #   migrate   one-shot: applies db/migrations, then exits
 #   api       the API, starts after migrate succeeded
 #   counter   nginx: the counter app on :8080, /api proxied to the API
@@ -7,6 +8,14 @@
 # Role passwords in db/init/01-roles.sql and the URLs below are DEV defaults; change both together before real use.
 x-db-env: &db-env
   OWNER_DATABASE_URL: postgres://pos_owner:pos_owner@postgres:5432/pos
+# The object store is addressed only as an S3 endpoint, so Garage can be swapped for any S3-compatible service by
+# changing these five values. The key pair is created by scripts/garage-init.mjs (DEV values, public in the repo).
+x-s3-env: &s3-env
+  S3_ENDPOINT: http://garage:3900
+  S3_REGION: garage
+  S3_BUCKET: pos-images
+  S3_ACCESS_KEY_ID: "GK000000000000000000000001"
+  S3_SECRET_ACCESS_KEY: "0000000000000000000000000000000000000000000000000000000000000001" # quoted: bare digits are a number to YAML
 
 services:
   postgres:
@@ -26,6 +35,21 @@ services:
       timeout: 3s
       retries: 30
 
+  garage:
+    image: dxflrs/garage:v2.1.0
+    ports:
+      - "53900:3900" # S3 API, for host-side tests and the seed script. Not reachable from tablets: the API serves pictures.
+    volumes:
+      - ./deploy/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
   migrate:
     build: { context: ., target: api }
     image: pos-api
@@ -39,6 +63,7 @@ services:
     build: { context: ., target: api }
     image: pos-api
     environment:
+      <<: *s3-env
       APP_DATABASE_URL: postgres://pos_app:pos_app@postgres:5432/pos
       PLATFORM_DATABASE_URL: postgres://app_platform:app_platform@postgres:5432/pos
       BASE_DOMAIN: ${BASE_DOMAIN:-localhost}
@@ -80,9 +105,13 @@ services:
     image: pos-api
     profiles: ["seed"]
     command: ["node", "--import", "tsx", "scripts/seed.ts"]
-    environment: *db-env
+    environment:
+      <<: [*db-env, *s3-env]
     depends_on:
       migrate: { condition: service_completed_successfully }
+      garage: { condition: service_healthy }
 
 volumes:
   pgdata:
+  garage-meta:
+  garage-data:

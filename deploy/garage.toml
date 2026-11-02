@@ -1,0 +1,19 @@
+# Garage: the S3-compatible object store for item pictures (docs/catalog-templates.md, P2/P8).
+# DEV VALUES. The secrets below are public in the repository: replace rpc_secret and admin_token, and the S3 key pair
+# in docker-compose.yml and scripts/garage-init.mjs, before any real use. Single node, so replication_factor = 1.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "5c1b2f0e8d7a49c3b6e1f4a2d9c8b7a60f1e2d3c4b5a69788796a5b4c3d2e1f0"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token = "dev-admin-token-not-secret"

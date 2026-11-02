@@ -5,6 +5,8 @@ import { db, getMeta } from './db.ts';
 export interface MenuView {
   categories: { id: string; name: string; sortOrder: number }[];
   entries: MenuEntry[];
+  /** Tile extras by item id; kept apart from MenuEntry, which the server's order pricing shares. */
+  extras: Record<string, { description: string | null; imageSha256: string | null }>;
   settings: TradingSettings;
   menuVersion: number;
   staff: { id: string; name: string; role: 'cashier' | 'waiter'; pinVerifier: string }[];
@@ -30,6 +32,7 @@ export async function loadMenu(): Promise<MenuView> {
   return {
     categories: of('category').map((r) => ({ id: r.id, name: r.data.name, sortOrder: r.data.sortOrder })).sort((a, b) => a.sortOrder - b.sortOrder),
     entries,
+    extras: Object.fromEntries(of('item').map((r) => [r.id, { description: r.data.description ?? null, imageSha256: r.data.imageSha256 ?? null }])),
     settings: { ...DEFAULT_SETTINGS, ...(of('tenant_setting')[0]?.data as Partial<TradingSettings> | undefined) },
     menuVersion: (await getMeta('cursor')) ?? 0,
     staff: of('user').map((r) => ({ id: r.id, name: r.data.name, role: r.data.role, pinVerifier: r.data.pinVerifier })).sort((a, b) => a.name.localeCompare(b.name)),

@@ -5,6 +5,7 @@ button { min-height: 44px; min-width: 44px; padding: 8px 14px; border: 1px solid
 button:disabled { opacity: 0.45; cursor: default; }
 button.primary { background: #23395b; color: #fff; border-color: #23395b; }
 input { min-height: 44px; padding: 6px 10px; border: 1px solid #b9beb6; border-radius: 8px; width: 100%; max-width: 320px; }
+select { font: inherit; min-height: 44px; padding: 6px 10px; border: 1px solid #b9beb6; border-radius: 8px; background: #fff; max-width: 320px; }
 input[type=checkbox] { min-height: 0; width: auto; }
 h1 { font-size: 24px; margin: 8px 0; }
 h2 { font-size: 18px; margin: 0 0 8px; }
@@ -25,3 +26,7 @@ header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; backg
 table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #d5d8d2; border-radius: 10px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eceee9; vertical-align: top; }
 ul { margin: 6px 0 12px; padding-left: 20px; }
+.thumbcell { width: 72px; }
+.thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; background: #eceee9; display: block; }
+.picpick { display: inline-flex; gap: 8px; align-items: center; }
+.filebtn { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 14px; border: 1px solid #b9beb6; border-radius: 8px; background: #fff; cursor: pointer; }

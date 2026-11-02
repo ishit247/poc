@@ -14,7 +14,8 @@ pnpm run up:fresh          # destroy the database, migrate from 0001, reseed, br
 
 Everything runs from the one [docker-compose.yml](../docker-compose.yml) (`docker compose up -d --build --wait` is what
 `env:up` wraps). Open the app at <http://localhost:8080>; the API is reachable only through it, under `/api`.
-Logs: `docker compose logs -f api`. Postgres is also published on `localhost:55432` for the host-side tests.
+Item pictures live in Garage (an S3-compatible store), published on `localhost:53900` for host-side tests; `env:up` creates
+its bucket and key (`scripts/garage-init.mjs`). Logs: `docker compose logs -f api`. Postgres is also published on `localhost:55432` for the host-side tests.
 Use `pnpm run ...`, never bare `pnpm up` (that is `pnpm update`).
 
 ## Tenants
@@ -25,6 +26,8 @@ Use `pnpm run ...`, never bare `pnpm up` (that is `pnpm update`).
 | Tenant B School | `tenant-b` | `00000000-0000-4000-8000-00000000000b` | Main Canteen |
 
 Tenant B rounds totals to the rupee; A uses the defaults, so a leak between them shows.
+Item pictures differ per tenant too: A's Samosa has its own picture; B's Samosa and Tea share one picture (stored once);
+Cold Coffee has none in either. Every seeded item except Cold Coffee has a description.
 The subdomain is cosmetic: `http://tenant-a.localhost:5173` picks A's name and logo on unauthenticated screens.
 
 ## Tenant staff

@@ -55,6 +55,7 @@ test('the console role holds exactly the granted rights, on every table', async 
     catalog_template: ['SELECT', 'INSERT', 'UPDATE'],
     catalog_category: ['SELECT', 'INSERT'],
     catalog_item: ['SELECT', 'INSERT'],
+    catalog_image: ['SELECT', 'INSERT'],
     tenant: ['SELECT', 'INSERT', 'UPDATE'],
     outlet: ['SELECT'],
     device: ['SELECT'],

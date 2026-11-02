@@ -85,6 +85,11 @@ CREATE TABLE item (
   name        text NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
   -- Provision for GST invoicing (Q3): HSN/SAC code, 4 to 8 digits. Optional until the receipt format is known.
   hsn_code    text CHECK (hsn_code ~ '^[0-9]{4,8}$'),
+  -- Plain text shown on the counter tile. Travels in pull (small).
+  description text CHECK (length(description) BETWEEN 1 AND 300),
+  -- Which picture, by content hash. The bytes live in item_image and are NOT in pull: a tablet fetches a hash it
+  -- does not hold yet, once, and keeps it. No foreign key: item_image rows are immutable and cleaned up in code.
+  image_sha256 text CHECK (image_sha256 ~ '^[0-9a-f]{64}$'),
   sort_order  int NOT NULL DEFAULT 0,
   version     bigint NOT NULL DEFAULT 0,
   updated_at  timestamptz NOT NULL DEFAULT now(),
@@ -93,6 +98,23 @@ CREATE TABLE item (
   FOREIGN KEY (tenant_id, category_id) REFERENCES category(tenant_id, id)
 );
 SELECT app.make_versioned('item');
+
+-- Item pictures, content-addressed: one row per distinct image per tenant, however many items use it. This table is the
+-- INDEX only; the bytes live in the S3-compatible object store (Garage) under t/<tenant_id>/<sha256>. The browser
+-- shrinks the picture before upload (about 320 px WebP, 15 to 30 KB); the API caps one at 64 KB and a tenant at 500.
+-- Not versioned: a row never changes, and pull learns of a new picture through the item's own version. A picture
+-- nothing references any more has its row deleted in the transaction that stopped referencing it, and its object
+-- removed right after (a missed removal leaves an orphan object, never a dangling reference).
+CREATE TABLE item_image (
+  tenant_id    uuid NOT NULL REFERENCES tenant(id),
+  sha256       text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  content_type text NOT NULL CHECK (content_type IN ('image/png', 'image/jpeg', 'image/webp')),
+  byte_size    int NOT NULL CHECK (byte_size BETWEEN 1 AND 65536),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, sha256)
+);
+SELECT app.enable_tenant_rls('item_image');
+REVOKE UPDATE, TRUNCATE ON item_image FROM pos_app;
 
 -- Money is integer paise. gst_rate_bp: basis points (500 = 5%).
 CREATE TABLE item_price (

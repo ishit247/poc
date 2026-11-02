@@ -62,6 +62,9 @@ export interface OutboxRow {
 /** The tenant's logo, cached so the header and receipt show it with no network. Keyed by content hash. */
 export interface LogoRow { sha: string; type: string; bytes: ArrayBuffer }
 
+/** Item pictures, cached by content hash (see itemImages.ts). */
+export interface ItemImageRow { sha: string; type: string; bytes: ArrayBuffer }
+
 export type MetaValue =
   | { key: 'device'; value: DeviceInfo }
   | { key: 'cursor'; value: number }
@@ -77,6 +80,7 @@ class CounterDb extends Dexie {
   outbox!: Table<OutboxRow, number>;
   logo!: Table<LogoRow, string>;
   shifts!: Table<LocalShift, string>;
+  itemImages!: Table<ItemImageRow, string>;
 
   constructor() {
     super('counter');
@@ -89,6 +93,7 @@ class CounterDb extends Dexie {
       logo: 'sha',
     });
     this.version(2).stores({ shifts: 'id, closedAt' });
+    this.version(3).stores({ itemImages: 'sha' });
   }
 }
 

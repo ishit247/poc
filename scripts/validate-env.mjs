@@ -8,6 +8,8 @@ checks.push(['docker daemon reachable', spawnSync('docker', ['info'], { shell: t
 const pg = spawnSync('docker compose ps --status running --services', { shell: true, encoding: 'utf8' });
 checks.push(['postgres container running (docker compose up -d --wait postgres)', /postgres/.test(pg.stdout ?? '')]);
 
+checks.push(['garage container running (docker compose up -d --wait garage, then node scripts/garage-init.mjs)', /garage/.test(pg.stdout ?? '')]);
+
 let failed = 0;
 for (const [label, ok] of checks) {
   console.log(`${ok ? 'ok' : 'not ok'} - ${label}`);

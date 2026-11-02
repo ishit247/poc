@@ -17,7 +17,8 @@ const PULL_SQL = `
     FROM category WHERE version > $1
   UNION ALL
   SELECT 'item', id, version, deleted_at IS NOT NULL,
-         jsonb_build_object('categoryId', category_id, 'name', name, 'hsnCode', hsn_code, 'sortOrder', sort_order)
+         jsonb_build_object('categoryId', category_id, 'name', name, 'hsnCode', hsn_code, 'description', description,
+                            'imageSha256', image_sha256, 'sortOrder', sort_order)
     FROM item WHERE version > $1
   UNION ALL
   SELECT 'item_price', id, version, deleted_at IS NOT NULL,

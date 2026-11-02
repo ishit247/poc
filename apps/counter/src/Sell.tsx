@@ -3,10 +3,17 @@ import { addItem, formatRupees, paise, setQty, totals, type Cart, type MenuEntry
 import type { DeviceInfo, LocalSale } from './db.ts';
 import type { MenuView } from './menu.ts';
 import { createSale, type Actor } from './sale.ts';
+import { useItemImageUrl } from './itemImages.ts';
 import { PayDialog } from './PayDialog.tsx';
 import { Receipt } from './Receipt.tsx';
 
 const rs = (n: number) => formatRupees(paise(n));
+
+/** The cached picture, or nothing: a tile without one (or before it has arrived) is just text, as before. */
+function ItemPicture({ sha }: { sha: string | null | undefined }) {
+  const url = useItemImageUrl(sha);
+  return url ? <img src={url} alt="" loading="lazy" decoding="async" width={120} height={120} data-testid="item-picture" /> : null;
+}
 
 export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor; menu: MenuView }) {
   const [cart, setCart] = useState<Cart>([]);
@@ -38,7 +45,9 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           {shown.length === 0 && <p className="muted">Nothing to sell here yet.</p>}
           {shown.map((e: MenuEntry) => (
             <button key={e.itemId} data-testid={`item-${e.name}`} className="item" disabled={!e.available} onClick={() => attempt(() => addItem(cart, e, 1, menu.settings))}>
+              <ItemPicture sha={menu.extras[e.itemId]?.imageSha256} />
               <span>{e.name}</span>
+              {menu.extras[e.itemId]?.description && <span className="desc" data-testid={`desc-${e.name}`}>{menu.extras[e.itemId]!.description}</span>}
               <small>{e.available ? `₹${rs(e.pricePaise)}` : 'Sold out'}</small>
             </button>
           ))}

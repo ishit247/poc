@@ -24,6 +24,15 @@ export const LOGO_MAX_BYTES = 256 * 1024;
 export const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export type LogoType = (typeof LOGO_TYPES)[number];
 
+// Item pictures (0003 item_image, 0011 catalog_image). The browser shrinks to ITEM_IMAGE_EDGE px before upload, so
+// the server needs no image library: it checks the real type, the byte cap, and a per-tenant count.
+export const ITEM_IMAGE_MAX_BYTES = 64 * 1024;
+export const ITEM_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+export const ITEM_IMAGE_EDGE = 320;
+export const ITEM_IMAGE_MAX_PER_TENANT = 500;
+export const ITEM_DESCRIPTION_MAX = 300;
+export const SHA256_HEX = /^[0-9a-f]{64}$/;
+
 /** The image's real type from its first bytes, or null. A declared Content-Type is never trusted on its own. */
 export function sniffLogo(b: Uint8Array): LogoType | null {
   const at = (i: number, ...v: number[]) => v.every((x, k) => b[i + k] === x);

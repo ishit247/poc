@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, counterUrl, inviteLink, setCounterUrl, type Manager, type Outlet, type Tenant } from './api.ts';
+import { api, counterUrl, inviteLink, setCounterUrl, type Manager, type Outlet, type Tenant, type TemplateRow } from './api.ts';
+import { SUGGESTION_NOTE } from './Catalog.tsx';
 
 interface Issued { name: string; token: string; expiresAt: string }
 
@@ -48,6 +49,8 @@ export function TenantDetail({ tenantId, isOwner, onBack }: { tenantId: string; 
           </label>
         </section>
       )}
+
+      {isOwner && <SeedSection tenantId={tenantId} />}
 
       {isOwner && <SuspendSection tenant={tenant} onChanged={load} onError={(s) => fail(s, 'Could not change the status.')} />}
     </>
@@ -145,6 +148,52 @@ function ManagersSection({ tenantId, outlets, managers, isOwner, onIssued, onErr
           </>
         )
       )}
+    </section>
+  );
+}
+
+function SeedSection({ tenantId }: { tenantId: string }) {
+  const [templates, setTemplates] = useState<TemplateRow[] | null>(null);
+  const [picked, setPicked] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    void api<TemplateRow[]>('/platform/catalog-templates').then((r) => setTemplates(r.status === 200 ? r.body : []));
+  }, []);
+
+  const chosen = templates?.find((t) => t.id === picked);
+  const seed = async () => {
+    setBusy(true);
+    const r = await api(`/platform/tenants/${tenantId}/seed-catalog`, { body: { templateId: picked } });
+    setBusy(false);
+    setConfirming(false);
+    if (r.status === 201) setResult({ ok: true, text: `Menu seeded: ${r.body.categories} categories and ${r.body.items} items copied from “${chosen?.name}”.` });
+    else setResult({ ok: false, text: r.status === 409 ? 'This tenant already has a menu, so nothing was copied. Seeding is only possible while the menu is empty.'
+      : r.status === 403 ? 'Only an owner can do this.' : r.status === 404 ? 'That template no longer exists. Reload and pick another.' : 'Could not seed the menu.' });
+  };
+
+  return (
+    <section className="card" aria-label="Seed menu">
+      <h2>Seed menu from template</h2>
+      <p className="muted">Copies the template’s categories, items, HSN/SAC codes, GST rates and counter prices into this tenant once; the manager edits the menu afterwards. {SUGGESTION_NOTE} Seeding does not switch GST on for any outlet.</p>
+      {templates && templates.length === 0 ? <p className="muted">No templates yet. <a href="#/catalog">Create one</a> first.</p> : (
+        <div className="row">
+          <select data-testid="seed-template" value={picked} onChange={(e) => { setPicked(e.target.value); setConfirming(false); setResult(null); }}>
+            <option value="">Pick a template…</option>
+            {templates?.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.items} items)</option>)}
+          </select>
+          {!confirming && <button data-testid="seed-start" className="primary" disabled={!picked} onClick={() => setConfirming(true)}>Seed menu…</button>}
+        </div>
+      )}
+      {confirming && chosen && (
+        <div className="row" data-testid="seed-confirm">
+          <span>Copy {chosen.categories} categories and {chosen.items} items from “{chosen.name}” into this tenant?</span>
+          <button data-testid="seed-go" className="primary" disabled={busy} onClick={seed}>Yes, seed the menu</button>
+          <button onClick={() => setConfirming(false)}>Cancel</button>
+        </div>
+      )}
+      {result && <p role={result.ok ? 'status' : 'alert'} data-testid="seed-result" className={result.ok ? 'ok' : 'error'}>{result.text}</p>}
     </section>
   );
 }

@@ -4,6 +4,10 @@ import { z } from 'zod';
 import { withTenant } from '../db.js';
 import { audit } from '../audit.js';
 import type { Principal } from '../scope.js';
+import { ITEM_DESCRIPTION_MAX, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_TYPES } from '@pos/shared';
+import { checkImage, lockItemImages, purgeItemImage, releaseItemImage, serveItemImage, storeItemImage } from '../itemImages.js';
+
+const ITEM_COLS = 'id, category_id AS "categoryId", name, hsn_code AS "hsnCode", description, image_sha256 AS "imageSha256", sort_order AS "sortOrder"';
 
 const uuid = z.string().uuid();
 const channel = z.enum(['counter', 'zomato', 'swiggy']);
@@ -13,7 +17,8 @@ const sortOrder = z.number().int().min(-1_000_000).max(1_000_000);
 const categoryBody = z.object({ name, sortOrder: sortOrder.optional() }).strict();
 const categoryPatch = categoryBody.partial().strict().refine((b) => Object.keys(b).length > 0);
 const hsn = z.string().regex(/^[0-9]{4,8}$/).nullable();
-const itemBody = z.object({ categoryId: uuid, name, hsnCode: hsn.optional(), sortOrder: sortOrder.optional() }).strict();
+const description = z.string().trim().min(1).max(ITEM_DESCRIPTION_MAX).nullable();
+const itemBody = z.object({ categoryId: uuid, name, hsnCode: hsn.optional(), description: description.optional(), sortOrder: sortOrder.optional() }).strict();
 const itemPatch = itemBody.partial().strict().refine((b) => Object.keys(b).length > 0);
 const priceBody = z.object({
   pricePaise: z.number().int().min(0).max(100_000_000),
@@ -51,7 +56,7 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     return withTenant(p.tenantId, async (c) => {
       const [cats, items, prices] = await Promise.all([
         c.query('SELECT id, name, sort_order AS "sortOrder" FROM category WHERE deleted_at IS NULL ORDER BY sort_order, name'),
-        c.query('SELECT id, category_id AS "categoryId", name, hsn_code AS "hsnCode", sort_order AS "sortOrder" FROM item WHERE deleted_at IS NULL ORDER BY sort_order, name'),
+        c.query(`SELECT ${ITEM_COLS} FROM item WHERE deleted_at IS NULL ORDER BY sort_order, name`),
         c.query('SELECT item_id AS "itemId", channel, price_paise::int AS "pricePaise", gst_rate_bp AS "gstRateBp" FROM item_price WHERE deleted_at IS NULL'),
       ]);
       return { categories: cats.rows, items: items.rows, prices: prices.rows };
@@ -113,8 +118,8 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const row = await withTenant(p.tenantId, async (c) => {
       if (!(await liveExists(c, 'category', b.data.categoryId))) return null;
       const r = await c.query(
-        'INSERT INTO item (tenant_id, category_id, name, hsn_code, sort_order) VALUES ($1,$2,$3,$4,$5) RETURNING id, category_id AS "categoryId", name, hsn_code AS "hsnCode", sort_order AS "sortOrder"',
-        [p.tenantId, b.data.categoryId, b.data.name, b.data.hsnCode ?? null, b.data.sortOrder ?? 0]);
+        `INSERT INTO item (tenant_id, category_id, name, hsn_code, description, sort_order) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${ITEM_COLS}`,
+        [p.tenantId, b.data.categoryId, b.data.name, b.data.hsnCode ?? null, b.data.description ?? null, b.data.sortOrder ?? 0]);
       await audit(c, { ...actor(p), action: 'item.create', entity: 'item', entityId: r.rows[0].id });
       return r.rows[0];
     });
@@ -126,11 +131,11 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const b = itemPatch.safeParse(req.body);
     if (!ids.success || !b.success) return bad(reply);
     const p = req.principal!;
-    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', hsnCode: 'hsn_code', sortOrder: 'sort_order' }, 2);
+    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', hsnCode: 'hsn_code', description: 'description', sortOrder: 'sort_order' }, 2);
     const out = await withTenant(p.tenantId, async (c) => {
       if (b.data.categoryId && !(await liveExists(c, 'category', b.data.categoryId))) return 'bad-category' as const;
       const r = await c.query(
-        `UPDATE item SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING id, category_id AS "categoryId", name, hsn_code AS "hsnCode", sort_order AS "sortOrder"`,
+        `UPDATE item SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING ${ITEM_COLS}`,
         [ids.data.id, ...set.values]);
       if (!r.rowCount) return 'missing' as const;
       await audit(c, { ...actor(p), action: 'item.update', entity: 'item', entityId: ids.data.id });
@@ -144,16 +149,78 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const ids = idParams.safeParse(req.params);
     if (!ids.success) return bad(reply);
     const p = req.principal!;
-    const ok = await withTenant(p.tenantId, async (c) => {
-      const r = await c.query('UPDATE item SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL', [ids.data.id]);
-      if (!r.rowCount) return false;
+    const out = await withTenant(p.tenantId, async (c) => {
+      await lockItemImages(c, p.tenantId); // first: see itemImages.ts
+      const r = await c.query('UPDATE item SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING image_sha256', [ids.data.id]);
+      if (!r.rowCount) return null;
+      const released = await releaseItemImage(c, p.tenantId, r.rows[0].image_sha256);
       // Tombstone the prices too, so devices drop them in the same pull.
       await c.query('UPDATE item_price SET deleted_at = now() WHERE item_id = $1 AND deleted_at IS NULL', [ids.data.id]);
       await audit(c, { ...actor(p), action: 'item.delete', entity: 'item', entityId: ids.data.id });
-      return true;
+      return { released };
     });
-    return ok ? { ok: true } : notFound(reply);
+    if (!out) return notFound(reply);
+    await purgeItemImage(p.tenantId, out.released);
+    return { ok: true };
   });
+
+  // --- pictures ------------------------------------------------------------
+  // Raw image bodies. The bytes are stored once per distinct picture; the item carries only the hash, which is what
+  // pull delivers. A tablet fetches the bytes from /device/item-images/:sha256 when it meets a hash it does not hold.
+  app.addContentTypeParser([...ITEM_IMAGE_TYPES], { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+
+  app.put('/items/:id/image', { config: mgr, bodyLimit: ITEM_IMAGE_MAX_BYTES }, async (req, reply) => {
+    const ids = idParams.safeParse(req.params);
+    if (!ids.success) return bad(reply);
+    const img = checkImage(req.body, req.headers['content-type']);
+    if (!img) return bad(reply);
+    const p = req.principal!;
+    const out = await withTenant(p.tenantId, async (c) => {
+      await lockItemImages(c, p.tenantId); // first: see itemImages.ts
+      const cur = (await c.query('SELECT image_sha256 FROM item WHERE id = $1 AND deleted_at IS NULL', [ids.data.id])).rows[0];
+      if (!cur) return 'missing' as const;
+      if (!(await storeItemImage(c, p.tenantId, img.sha256, img.type, req.body as Buffer))) return 'full' as const;
+      let released: string | null = null;
+      if (cur.image_sha256 !== img.sha256) {
+        await c.query('UPDATE item SET image_sha256 = $2 WHERE id = $1', [ids.data.id, img.sha256]);
+        released = await releaseItemImage(c, p.tenantId, cur.image_sha256);
+      }
+      await audit(c, { ...actor(p), action: 'item.image.set', entity: 'item', entityId: ids.data.id, detail: { sha256: img.sha256, bytes: (req.body as Buffer).length } });
+      return { released };
+    });
+    if (out === 'missing') return notFound(reply);
+    if (out === 'full') return reply.code(409).send({ error: 'picture limit reached' });
+    await purgeItemImage(p.tenantId, out.released);
+    return { ok: true, imageSha256: img.sha256 };
+  });
+
+  app.delete('/items/:id/image', { config: mgr }, async (req, reply) => {
+    const ids = idParams.safeParse(req.params);
+    if (!ids.success) return bad(reply);
+    const p = req.principal!;
+    const out = await withTenant(p.tenantId, async (c) => {
+      await lockItemImages(c, p.tenantId); // first: see itemImages.ts
+      const cur = (await c.query('SELECT image_sha256 FROM item WHERE id = $1 AND deleted_at IS NULL', [ids.data.id])).rows[0];
+      if (!cur) return null;
+      let released: string | null = null;
+      if (cur.image_sha256) {
+        await c.query('UPDATE item SET image_sha256 = NULL WHERE id = $1', [ids.data.id]);
+        released = await releaseItemImage(c, p.tenantId, cur.image_sha256);
+        await audit(c, { ...actor(p), action: 'item.image.remove', entity: 'item', entityId: ids.data.id });
+      }
+      return { released };
+    });
+    if (!out) return notFound(reply);
+    await purgeItemImage(p.tenantId, out.released);
+    return { ok: true };
+  });
+
+  // By manager session (for the future menu editor) and by device credential (for the tablet cache). Scope: the
+  // caller's own tenant; the hash only means something inside it, and RLS pins the tenant.
+  app.get('/item-images/:sha256', { config: mgr }, async (req, reply) =>
+    serveItemImage(req, reply, req.principal!.tenantId, (req.params as { sha256: string }).sha256));
+  app.get('/device/item-images/:sha256', { config: { scope: 'tenant', permission: 'device' } }, async (req, reply) =>
+    serveItemImage(req, reply, req.principal!.tenantId, (req.params as { sha256: string }).sha256));
 
   // --- channel prices -----------------------------------------------------
   app.put('/items/:id/prices/:channel', { config: mgr }, async (req, reply) => {

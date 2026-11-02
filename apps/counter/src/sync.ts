@@ -3,6 +3,7 @@
 // ahead of the data (which would skip rows for good).
 import { db, getMeta, type DeviceInfo } from './db.ts';
 import { syncLogo } from './logo.ts';
+import { syncItemImages } from './itemImages.ts';
 
 interface Change { type: string; id: string; version: number; deleted: boolean; data: Record<string, any> }
 
@@ -41,6 +42,7 @@ export async function pull(device: DeviceInfo): Promise<number> {
     cursor = j.cursor;
     if (!j.hasMore) {
       await syncLogo().catch(() => {}); // the logo is cosmetic: never let it fail a pull
+      void syncItemImages(device.credential).catch(() => {}); // pictures are too, and are fetched in the background
       return applied;
     }
   }

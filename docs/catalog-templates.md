@@ -27,8 +27,24 @@ other menu. Nothing links the tenant back to the template afterwards.
 - Pushing a later template change to tenants that were already seeded. If wanted: an opt-in "suggested updates"
   list the manager reviews, offering only fields they have not touched. Nothing is overwritten.
 - Composed templates (base plus add-ons). Templates are flat.
-- Admin-console screens. This change is API and database only.
-- Description field on items. The tenant `item` table has none, so the catalog has none.
+- A manager menu-editor screen. Managers can set an item's description and picture through the API
+  (`PATCH /items/:id`, `PUT/DELETE /items/:id/image`), but no counter-app screen calls them yet.
+
+## Descriptions and pictures
+
+Decided 2026-11-03. Both are optional, per item, on the catalog item and on the tenant `item`.
+
+| # | Decision | Why |
+|---|---|---|
+| P1 | **Description** is plain text, 1 to 300 characters, and travels in pull with the item. | Small, and the counter tile needs it offline. |
+| P2 | **Picture bytes never travel in pull, and are not in Postgres.** `item.image_sha256` is only a hash. The bytes live in an S3-compatible object store (Garage, in a container); Postgres keeps only an index (`item_image` per tenant, `catalog_image` for the operator: hash, type, size). | A menu of hundreds or thousands of items would otherwise bloat every pull, every backup and the database's memory. Bytes in a store scale and cache independently of the database. |
+| P3 | **Content-addressed.** The same picture used by many items is one index row and one object per tenant. A tablet fetches a hash it does not hold, once, from `GET /device/item-images/:sha256`, checks the bytes against the hash, and keeps it in IndexedDB (`itemImages`). | No duplicates, no re-download, and the address can be cached forever (`immutable`). |
+| P8 | **The store is addressed only as an S3 endpoint** (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; path-style). Only `apps/api/src/objects.ts` knows it. Keys: `t/<tenant_id>/<sha256>` (a tenant's pictures), `c/<sha256>` (operator templates). Tablets never talk to the store: the API checks the tenant's index row, then returns the object. | Garage can be replaced by any S3-compatible service by changing those five values. Tenant isolation stays in Postgres (RLS on the index), not in bucket policy. |
+| P9 | **Write order.** Upload: object first, then the index row, so a row never points at a missing object. Release: row deleted in the transaction, object removed after commit; a missed removal leaves an orphan object (wasted space), never a broken item. Seeding copies `c/<sha>` to `t/<tenant>/<sha>` inside the store (the bytes do not pass through the API). A tenant-wide advisory lock, taken before any versioned write, orders storing against releasing the same picture. | Failure in the middle can waste space but cannot lose a picture an item still uses. |
+| P4 | **The browser shrinks before upload**: longest edge 320 px, WebP, at most 64 KB. The server needs no image library; it checks the real bytes (PNG, JPEG or WebP, never SVG), the 64 KB cap, and at most 500 distinct pictures per tenant. | Keeps storage, bandwidth and tablet memory small without a new dependency. |
+| P5 | **Fetched three at a time, in the background**, after a pull completes; a failure is retried on the next pull. Pictures no longer referenced are removed from the tablet. | A first sync of a large menu never blocks selling or floods the network. |
+| P6 | **A picture nothing points at is deleted** (index row in the transaction that dropped the last reference, object right after commit): replace, remove, or item delete. | No blobs accumulating. |
+| P7 | **Seeding copies each distinct picture once** into the tenant's prefix and index, and the item's hash. Nothing links back afterwards. | Same copy-on-seed rule as C1. |
 
 ## Data model
 
@@ -37,7 +53,20 @@ explicit grants. They have no `tenant_id` and no RLS, because no tenant may see 
 
 - `catalog_template(id, name, created_at, deleted_at)`
 - `catalog_category(id, template_id, name, sort_order)`
-- `catalog_item(id, template_id, category_id, name, hsn_code, gst_rate_bp, price_paise, sort_order)`
+- `catalog_item(id, template_id, category_id, name, hsn_code, description, image_sha256, gst_rate_bp, price_paise, sort_order)`
+- `catalog_image(sha256, content_type, byte_size, created_at)`: index only, write-once; `catalog_item.image_sha256`
+  references it. The bytes are the object `c/<sha256>` in the object store.
+- `item_image(tenant_id, sha256, content_type, byte_size, created_at)` (0003): the tenant's index, RLS-pinned; the bytes
+  are the object `t/<tenant_id>/<sha256>`.
+
+### Object store (Garage)
+
+`docker compose` runs `garage` (one node, S3 API on 3900 inside the network, published as `localhost:53900` for host-side
+tests and the seed). `scripts/garage-init.mjs` (called by `pnpm run env:up`) assigns the node's layout, creates the
+`pos-images` bucket and imports the dev key; it is safe to run again. `deploy/garage.toml` and the key pair in
+`docker-compose.yml` are DEV values, public in the repository: replace them before real use. Garage's data lives in the
+`garage-meta` and `garage-data` volumes, so a backup is now the Postgres dump **and** those volumes, taken together.
+`up:fresh` destroys all of them. Orphan objects (from a missed removal) are not swept yet; they cost space only.
 
 `hsn_code` uses the same check as `item.hsn_code` (4 to 8 digits; SAC codes are 6). `gst_rate_bp` uses the same
 check as `item_price.gst_rate_bp` (0 to 4000 basis points). `price_paise` is the suggested counter price.
@@ -50,6 +79,8 @@ check as `item_price.gst_rate_bp` (0 to 4000 basis points). `price_paise` is the
 | `GET /platform/catalog-templates/:id` | any console user | One template with categories and items. |
 | `POST /platform/catalog-templates` | owner | Create a template with its categories and items in one body. |
 | `DELETE /platform/catalog-templates/:id` | owner | Soft-delete a template. Already-seeded tenants are unaffected. |
+| `PUT /platform/catalog-images` | owner | Upload one picture (raw body, `image/png`, `image/jpeg` or `image/webp`, at most 64 KB). Returns `{ sha256 }`; a template item refers to that hash. |
+| `GET /platform/catalog-images/:sha256` | any console user | The picture's bytes. |
 | `POST /platform/tenants/:id/seed-catalog` | owner | Copy a template into the tenant. Body `{ templateId }`. 409 if the tenant already has a menu. |
 
 Every write is recorded in `platform_audit` (`catalog.create`, `catalog.delete`, `catalog.seed`) and the seed also

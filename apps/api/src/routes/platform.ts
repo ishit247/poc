@@ -11,6 +11,9 @@ import { insertInvite, newInvite } from '../invite.js';
 import { newSecret, sha256 } from '../security/crypto.js';
 import { DUMMY_HASH, MIN_PASSWORD_LENGTH, hashPassword, verifyPassword } from '../security/password.js';
 import { matchTotp } from '../security/totp.js';
+import { ITEM_DESCRIPTION_MAX, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_MAX_PER_TENANT, ITEM_IMAGE_TYPES, SHA256_HEX } from '@pos/shared';
+import { checkImage } from '../itemImages.js';
+import { catalogKey, copyObject, getObject, putObject, tenantKey } from '../objects.js';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_MINUTES = 15;
@@ -46,6 +49,8 @@ const templateBody = z.object({
     items: z.array(z.object({
       name: z.string().trim().min(1).max(100),
       hsnCode: z.string().regex(/^[0-9]{4,8}$/).optional(),
+      description: z.string().trim().min(1).max(ITEM_DESCRIPTION_MAX).optional(),
+      imageSha256: z.string().regex(SHA256_HEX).optional(),
       gstRateBp: z.number().int().min(0).max(4000),
       pricePaise: z.number().int().min(0).max(100000000),
     }).strict()).min(1).max(500),
@@ -53,7 +58,7 @@ const templateBody = z.object({
 }).strict();
 const seedBody = z.object({ templateId: uuid }).strict();
 
-interface TemplateItem { id: string; name: string; hsnCode: string | null; gstRateBp: number; pricePaise: number; sortOrder: number }
+interface TemplateItem { id: string; name: string; hsnCode: string | null; description: string | null; imageSha256: string | null; gstRateBp: number; pricePaise: number; sortOrder: number }
 interface Template { id: string; name: string; categories: { id: string; name: string; sortOrder: number; items: TemplateItem[] }[] }
 
 /** A live template with its categories and items in order, or null. */
@@ -62,7 +67,7 @@ async function loadTemplate(c: import('pg').PoolClient, id: string): Promise<Tem
   if (!t) return null;
   const cats = (await c.query('SELECT id, name, sort_order AS "sortOrder" FROM catalog_category WHERE template_id = $1 ORDER BY sort_order, name', [id])).rows;
   const items = (await c.query(
-    `SELECT id, category_id AS "categoryId", name, hsn_code AS "hsnCode", gst_rate_bp::int AS "gstRateBp",
+    `SELECT id, category_id AS "categoryId", name, hsn_code AS "hsnCode", description, image_sha256 AS "imageSha256", gst_rate_bp::int AS "gstRateBp",
             price_paise::int AS "pricePaise", sort_order AS "sortOrder"
        FROM catalog_item WHERE template_id = $1 ORDER BY sort_order, name`, [id])).rows;
   return { ...t, categories: cats.map((k) => ({ ...k, items: items.filter((i) => i.categoryId === k.id) })) };
@@ -336,6 +341,9 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
   app.post('/platform/catalog-templates', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
     const body = templateBody.safeParse(req.body);
     if (!body.success) return bad(reply);
+    // The tenant keeps at most ITEM_IMAGE_MAX_PER_TENANT distinct pictures, so a template may not need more than that.
+    const distinct = new Set(body.data.categories.flatMap((k) => k.items.map((i) => i.imageSha256)).filter(Boolean));
+    if (distinct.size > ITEM_IMAGE_MAX_PER_TENANT) return bad(reply);
     const a = req.admin!;
     try {
       const out = await withPlatform(async (c) => {
@@ -344,9 +352,9 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
           const k = (await c.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat.name, ci])).rows[0];
           for (const [ii, it] of cat.items.entries()) {
             await c.query(
-              `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, gst_rate_bp, price_paise, sort_order)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              [t.id, k.id, it.name, it.hsnCode ?? null, it.gstRateBp, it.pricePaise, ii]);
+              `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, description, image_sha256, gst_rate_bp, price_paise, sort_order)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [t.id, k.id, it.name, it.hsnCode ?? null, it.description ?? null, it.imageSha256 ?? null, it.gstRateBp, it.pricePaise, ii]);
           }
         }
         await platformAudit(c, { adminId: a.adminId, action: 'catalog.create', entity: 'catalog_template', entityId: t.id, detail: { name: body.data.name } });
@@ -356,9 +364,38 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     } catch (e) {
       const code = (e as { code?: string }).code;
       if (code === '23505') return reply.code(409).send({ error: 'template name taken' });
-      if (code === '23514') return bad(reply); // HSN or GST rate outside the table checks
+      if (code === '23514' || code === '23503') return bad(reply); // HSN or GST rate outside the table checks, or a picture that was never uploaded
       throw e;
     }
+  });
+
+  // Pictures are uploaded first, by content, and templates then refer to them by hash. Idempotent: the same bytes give
+  // the same hash and one row. The browser has already shrunk the picture; the server checks type, size and the real bytes.
+  app.addContentTypeParser([...ITEM_IMAGE_TYPES], { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+
+  app.put('/platform/catalog-images', { config: { ...owner, ...strict(120) }, bodyLimit: ITEM_IMAGE_MAX_BYTES }, async (req, reply) => {
+    const img = checkImage(req.body, req.headers['content-type']);
+    if (!img) return bad(reply);
+    // Object first, then the index row: a row never points at a missing object. Same bytes, same key, so a repeat is harmless.
+    await putObject(catalogKey(img.sha256), req.body as Buffer, img.type);
+    await withPlatform((c) => c.query(
+      'INSERT INTO catalog_image (sha256, content_type, byte_size) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [img.sha256, img.type, (req.body as Buffer).length]));
+    return { sha256: img.sha256 };
+  });
+
+  const shaParams = z.object({ sha256: z.string().regex(SHA256_HEX) });
+  app.get('/platform/catalog-images/:sha256', { config: { ...any, ...strict(600) } }, async (req, reply) => {
+    const params = shaParams.safeParse(req.params);
+    if (!params.success) return bad(reply);
+    const row = (await withPlatform((c) => c.query('SELECT content_type FROM catalog_image WHERE sha256 = $1', [params.data.sha256]))).rows[0];
+    const bytes = row ? await getObject(catalogKey(params.data.sha256)) : null;
+    if (!row || !bytes) return notFound(reply);
+    return reply
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .header('x-content-type-options', 'nosniff')
+      .header('content-security-policy', "default-src 'none'; sandbox")
+      .header('content-type', row.content_type)
+      .send(bytes);
   });
 
   app.delete('/platform/catalog-templates/:id', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
@@ -382,23 +419,36 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     if (!params.success || !body.success) return bad(reply);
     const a = req.admin!;
     const tenantId = params.data.id;
-    const { tpl, known } = await withPlatform(async (c) => ({
-      known: (await c.query('SELECT 1 FROM tenant WHERE id = $1', [tenantId])).rowCount === 1,
-      tpl: await loadTemplate(c, body.data.templateId),
-    }));
+    const { tpl, known, images } = await withPlatform(async (c) => {
+      const tpl = await loadTemplate(c, body.data.templateId);
+      const shas = [...new Set((tpl?.categories ?? []).flatMap((k) => k.items.map((i) => i.imageSha256)).filter((s): s is string => !!s))];
+      return {
+        known: (await c.query('SELECT 1 FROM tenant WHERE id = $1', [tenantId])).rowCount === 1,
+        tpl,
+        // Each distinct picture once, however many items use it.
+        images: (await c.query('SELECT sha256, content_type AS "contentType", byte_size AS "byteSize" FROM catalog_image WHERE sha256 = ANY($1)', [shas])).rows as
+          { sha256: string; contentType: string; byteSize: number }[],
+      };
+    });
     if (!known || !tpl) return notFound(reply);
 
     const seeded = await withTenant(tenantId, async (c) => {
       const has = await c.query(
         `SELECT (EXISTS (SELECT 1 FROM category WHERE deleted_at IS NULL) OR EXISTS (SELECT 1 FROM item WHERE deleted_at IS NULL)) AS has`);
       if (has.rows[0].has) return null;
+      // Copied inside the object store (the bytes never pass through the API), then indexed. If a copy fails the whole
+      // seed rolls back; copied objects with no row are harmless and reused by a retry.
+      for (const im of images) {
+        await copyObject(catalogKey(im.sha256), tenantKey(tenantId, im.sha256));
+        await c.query('INSERT INTO item_image (tenant_id, sha256, content_type, byte_size) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [tenantId, im.sha256, im.contentType, im.byteSize]);
+      }
       let items = 0;
       for (const cat of tpl.categories) {
         const k = (await c.query('INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [tenantId, cat.name, cat.sortOrder])).rows[0];
         for (const it of cat.items) {
           const row = (await c.query(
-            'INSERT INTO item (tenant_id, category_id, name, hsn_code, sort_order, source_catalog_item_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-            [tenantId, k.id, it.name, it.hsnCode, it.sortOrder, it.id])).rows[0];
+            'INSERT INTO item (tenant_id, category_id, name, hsn_code, description, image_sha256, sort_order, source_catalog_item_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+            [tenantId, k.id, it.name, it.hsnCode, it.description, it.imageSha256, it.sortOrder, it.id])).rows[0];
           // Counter price only: aggregator prices differ per channel and outlet, so they are the manager's to set.
           await c.query(
             "INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'counter', $3, $4)",

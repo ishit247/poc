@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import pg from 'pg';
 import { solidPng } from './png.ts';
+import { closeObjects, putObject, tenantKey } from '../apps/api/src/objects.ts';
 import { hashPassword } from '../apps/api/src/security/password.ts';
 import { newSecret, sha256 } from '../apps/api/src/security/crypto.ts';
 
@@ -106,11 +107,20 @@ for (const t of Object.values(SEED)) {
     Snacks: [['Samosa', 1500, 500], ['Veg Sandwich', 4000, 500]],
     Drinks: [['Tea', 1000, 500], ['Cold Coffee', 6000, 1800]],
   } as const;
+  // Pictures and descriptions, tenant-distinct so a leak shows. A: Samosa has its own picture. B: Samosa and Tea share one
+  // picture, which is stored once (item_image is content-addressed). Tea in A and Cold Coffee in both have none.
+  const pic = solidPng(...(t.logo.map((x) => 255 - x) as [number, number, number]), 64);
+  const picSha = createHash('sha256').update(pic).digest('hex');
+  await putObject(tenantKey(t.id, picSha), pic, 'image/png'); // bytes in the object store, index row in Postgres
+  await client.query("INSERT INTO item_image (tenant_id, sha256, content_type, byte_size) VALUES ($1, $2, 'image/png', $3)", [t.id, picSha, pic.length]);
+  const withPicture = t.key === 'a' ? ['Samosa'] : ['Samosa', 'Tea'];
+  const blurb: Record<string, string> = { Samosa: `${t.name}: crisp potato samosa`, 'Veg Sandwich': 'Grilled, with chutney', Tea: 'Hot masala chai' };
   let sort = 0;
   for (const [cat, items] of Object.entries(menu)) {
     const c = await client.query('INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat, sort++]);
     for (const [name, price, gst] of items) {
-      const it = await client.query('INSERT INTO item (tenant_id, category_id, name) VALUES ($1, $2, $3) RETURNING id', [t.id, c.rows[0].id, name]);
+      const it = await client.query('INSERT INTO item (tenant_id, category_id, name, description, image_sha256) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [t.id, c.rows[0].id, name, blurb[name] ?? null, withPicture.includes(name) ? picSha : null]);
       itemIds[name] = it.rows[0].id;
       await client.query("INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'counter', $3, $4)", [t.id, it.rows[0].id, price, gst]);
       // Aggregator price differs from the counter price (Q10 is open; the model allows it).
@@ -265,4 +275,5 @@ for (const [email, name, role] of [['owner@platform.test', 'Platform Owner', 'ow
   }
 }
 await client.end();
+closeObjects();
 console.log('seeded tenants A and B, two platform operators and a sample catalog template');

@@ -6,6 +6,7 @@ import pg from 'pg';
 const run = (args) => execFileSync('docker', ['compose', ...args], { stdio: 'inherit' });
 
 run(['up', '-d', '--build', '--wait']);
+execFileSync(process.execPath, ['scripts/garage-init.mjs'], { stdio: 'inherit' }); // bucket and key; before the seed, which uploads pictures
 
 const client = new pg.Client({ connectionString: process.env.OWNER_DATABASE_URL ?? 'postgres://pos_owner:pos_owner@localhost:55432/pos' });
 await client.connect();
