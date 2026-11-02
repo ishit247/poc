@@ -38,6 +38,35 @@ const outletBody = z.object({
   counters: z.array(z.string().regex(/^[A-Za-z0-9-]{1,20}$/)).min(1).max(20).default(['C1']),
 }).strict();
 const managerParams = z.object({ id: uuid, uid: uuid });
+// Same ranges as the database checks on catalog_item (and item.hsn_code, item_price): 4-8 digit HSN/SAC, 0-40% GST.
+const templateBody = z.object({
+  name: z.string().trim().min(1).max(100),
+  categories: z.array(z.object({
+    name: z.string().trim().min(1).max(100),
+    items: z.array(z.object({
+      name: z.string().trim().min(1).max(100),
+      hsnCode: z.string().regex(/^[0-9]{4,8}$/).optional(),
+      gstRateBp: z.number().int().min(0).max(4000),
+      pricePaise: z.number().int().min(0).max(100000000),
+    }).strict()).min(1).max(500),
+  }).strict()).min(1).max(50),
+}).strict();
+const seedBody = z.object({ templateId: uuid }).strict();
+
+interface TemplateItem { id: string; name: string; hsnCode: string | null; gstRateBp: number; pricePaise: number; sortOrder: number }
+interface Template { id: string; name: string; categories: { id: string; name: string; sortOrder: number; items: TemplateItem[] }[] }
+
+/** A live template with its categories and items in order, or null. */
+async function loadTemplate(c: import('pg').PoolClient, id: string): Promise<Template | null> {
+  const t = (await c.query('SELECT id, name FROM catalog_template WHERE id = $1 AND deleted_at IS NULL', [id])).rows[0];
+  if (!t) return null;
+  const cats = (await c.query('SELECT id, name, sort_order AS "sortOrder" FROM catalog_category WHERE template_id = $1 ORDER BY sort_order, name', [id])).rows;
+  const items = (await c.query(
+    `SELECT id, category_id AS "categoryId", name, hsn_code AS "hsnCode", gst_rate_bp::int AS "gstRateBp",
+            price_paise::int AS "pricePaise", sort_order AS "sortOrder"
+       FROM catalog_item WHERE template_id = $1 ORDER BY sort_order, name`, [id])).rows;
+  return { ...t, categories: cats.map((k) => ({ ...k, items: items.filter((i) => i.categoryId === k.id) })) };
+}
 
 const bad = (reply: FastifyReply) => reply.code(400).send({ error: 'invalid request' });
 const notFound = (reply: FastifyReply) => reply.code(404).send({ error: 'not found' });
@@ -287,6 +316,103 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     });
     await withPlatform(async (c) => platformAudit(c, { adminId: a.adminId, action: 'outlet.create', tenantId, entity: 'outlet', entityId: out.id, detail: { name: body.data.name, counters: codes } }));
     return reply.code(201).send(out);
+  });
+
+  // --- catalog templates (0011, docs/catalog-templates.md): copied into a tenant once, never linked -----------------
+  app.get('/platform/catalog-templates', { config: any }, async () =>
+    withPlatform(async (c) => (await c.query(
+      `SELECT t.id, t.name, t.created_at AS "createdAt",
+              (SELECT count(*)::int FROM catalog_category k WHERE k.template_id = t.id) AS categories,
+              (SELECT count(*)::int FROM catalog_item i WHERE i.template_id = t.id) AS items
+         FROM catalog_template t WHERE t.deleted_at IS NULL ORDER BY t.name`)).rows));
+
+  app.get('/platform/catalog-templates/:id', { config: any }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    if (!params.success) return bad(reply);
+    const tpl = await withPlatform((c) => loadTemplate(c, params.data.id));
+    return tpl ?? notFound(reply);
+  });
+
+  app.post('/platform/catalog-templates', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
+    const body = templateBody.safeParse(req.body);
+    if (!body.success) return bad(reply);
+    const a = req.admin!;
+    try {
+      const out = await withPlatform(async (c) => {
+        const t = (await c.query('INSERT INTO catalog_template (name) VALUES ($1) RETURNING id', [body.data.name])).rows[0];
+        for (const [ci, cat] of body.data.categories.entries()) {
+          const k = (await c.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat.name, ci])).rows[0];
+          for (const [ii, it] of cat.items.entries()) {
+            await c.query(
+              `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, gst_rate_bp, price_paise, sort_order)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [t.id, k.id, it.name, it.hsnCode ?? null, it.gstRateBp, it.pricePaise, ii]);
+          }
+        }
+        await platformAudit(c, { adminId: a.adminId, action: 'catalog.create', entity: 'catalog_template', entityId: t.id, detail: { name: body.data.name } });
+        return loadTemplate(c, t.id);
+      });
+      return reply.code(201).send(out);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code === '23505') return reply.code(409).send({ error: 'template name taken' });
+      if (code === '23514') return bad(reply); // HSN or GST rate outside the table checks
+      throw e;
+    }
+  });
+
+  app.delete('/platform/catalog-templates/:id', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    if (!params.success) return bad(reply);
+    const a = req.admin!;
+    const done = await withPlatform(async (c) => {
+      const r = await c.query('UPDATE catalog_template SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id', [params.data.id]);
+      if (r.rowCount === 0) return false;
+      await platformAudit(c, { adminId: a.adminId, action: 'catalog.delete', entity: 'catalog_template', entityId: params.data.id });
+      return true;
+    });
+    return done ? { ok: true } : notFound(reply);
+  });
+
+  // The console role cannot write tenant tables and the tenant role cannot read the catalog, so this reads the template
+  // as the console, then writes the tenant's rows through the same stamped path the tenant API uses.
+  app.post('/platform/tenants/:id/seed-catalog', { config: { ...owner, ...strict(10) } }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    const body = seedBody.safeParse(req.body);
+    if (!params.success || !body.success) return bad(reply);
+    const a = req.admin!;
+    const tenantId = params.data.id;
+    const { tpl, known } = await withPlatform(async (c) => ({
+      known: (await c.query('SELECT 1 FROM tenant WHERE id = $1', [tenantId])).rowCount === 1,
+      tpl: await loadTemplate(c, body.data.templateId),
+    }));
+    if (!known || !tpl) return notFound(reply);
+
+    const seeded = await withTenant(tenantId, async (c) => {
+      const has = await c.query(
+        `SELECT (EXISTS (SELECT 1 FROM category WHERE deleted_at IS NULL) OR EXISTS (SELECT 1 FROM item WHERE deleted_at IS NULL)) AS has`);
+      if (has.rows[0].has) return null;
+      let items = 0;
+      for (const cat of tpl.categories) {
+        const k = (await c.query('INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [tenantId, cat.name, cat.sortOrder])).rows[0];
+        for (const it of cat.items) {
+          const row = (await c.query(
+            'INSERT INTO item (tenant_id, category_id, name, hsn_code, sort_order, source_catalog_item_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+            [tenantId, k.id, it.name, it.hsnCode, it.sortOrder, it.id])).rows[0];
+          // Counter price only: aggregator prices differ per channel and outlet, so they are the manager's to set.
+          await c.query(
+            "INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'counter', $3, $4)",
+            [tenantId, row.id, it.pricePaise, it.gstRateBp]);
+          items++;
+        }
+      }
+      const detail = { templateId: tpl.id, template: tpl.name, categories: tpl.categories.length, items, platformAdminId: a.adminId };
+      await audit(c, { tenantId, actorKind: 'system', action: 'platform.catalog.seed', entity: 'tenant', entityId: tenantId, detail });
+      return { categories: tpl.categories.length, items };
+    });
+    if (!seeded) return reply.code(409).send({ error: 'tenant already has a menu' });
+    await withPlatform(async (c) => platformAudit(c, { adminId: a.adminId, action: 'catalog.seed', tenantId, entity: 'catalog_template', entityId: tpl.id, detail: { template: tpl.name, ...seeded } }));
+    return reply.code(201).send(seeded);
   });
 
   // --- support impersonation (0009): read-only, 30 minutes, reason required, owner only ----------------------------

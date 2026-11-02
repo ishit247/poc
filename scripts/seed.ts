@@ -244,5 +244,25 @@ for (const [email, name, role] of [['owner@platform.test', 'Platform Owner', 'ow
     'INSERT INTO platform_admin (email, name, role, password_hash, totp_secret) VALUES ($1, $2, $3, $4, $5)',
     [email, name, role, passwordHash, DEV_TOTP_SECRET]);
 }
+
+// Operator catalog template (docs/catalog-templates.md): HSN/SAC and GST per item, prices tax-exclusive paise.
+// Sample figures for development only; the seeded tenants above keep their own menus and are not linked to it.
+{
+  const tpl = await client.query("INSERT INTO catalog_template (name) VALUES ('School cafeteria (sample)') RETURNING id");
+  const catalog = {
+    Snacks: [['Samosa', '21069099', 500, 1500], ['Veg Sandwich', '21069099', 500, 4000], ['Idli (2 pc)', '19059020', 500, 3000]],
+    Drinks: [['Tea', '996331', 500, 1000], ['Cold Coffee', '21011190', 1800, 6000], ['Bottled Water', '22011010', 0, 2000]],
+  } as const;
+  let catSort = 0;
+  for (const [cat, items] of Object.entries(catalog)) {
+    const k = await client.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [tpl.rows[0].id, cat, catSort++]);
+    let itemSort = 0;
+    for (const [name, hsn, gst, price] of items) {
+      await client.query(
+        'INSERT INTO catalog_item (template_id, category_id, name, hsn_code, gst_rate_bp, price_paise, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [tpl.rows[0].id, k.rows[0].id, name, hsn, gst, price, itemSort++]);
+    }
+  }
+}
 await client.end();
-console.log('seeded tenants A and B and two platform operators');
+console.log('seeded tenants A and B, two platform operators and a sample catalog template');

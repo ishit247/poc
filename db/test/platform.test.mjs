@@ -11,7 +11,7 @@ const appPool = new pg.Pool({ connectionString: process.env.APP_DATABASE_URL ?? 
 const platPool = new pg.Pool({ connectionString: process.env.PLATFORM_DATABASE_URL ?? 'postgres://app_platform:app_platform@localhost:55432/pos' });
 test.after(() => Promise.all([appPool.end(), platPool.end()]));
 
-const PLATFORM_TABLES = ['platform_admin', 'platform_session', 'platform_audit'];
+const PLATFORM_TABLES = ['platform_admin', 'platform_session', 'platform_audit', 'catalog_template', 'catalog_category', 'catalog_item'];
 
 async function rolledBack(pool, fn) {
   const c = await pool.connect();
@@ -52,6 +52,9 @@ test('the console role holds exactly the granted rights, on every table', async 
     platform_admin: ['SELECT', 'INSERT', 'UPDATE'],
     platform_session: ['SELECT', 'INSERT', 'UPDATE'],
     platform_audit: ['SELECT', 'INSERT'],
+    catalog_template: ['SELECT', 'INSERT', 'UPDATE'],
+    catalog_category: ['SELECT', 'INSERT'],
+    catalog_item: ['SELECT', 'INSERT'],
     tenant: ['SELECT', 'INSERT', 'UPDATE'],
     outlet: ['SELECT'],
     device: ['SELECT'],
