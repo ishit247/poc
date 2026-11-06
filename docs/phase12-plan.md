@@ -170,6 +170,57 @@ a moved item's response carries **only its new code**.
 - Not tested: that deleting an *item* tombstones its tag links (one line in `DELETE /items/:id`; no mutant). No manager screen
   to set diet or tags yet.
 
+## Step 4 notes (server: ingest of running orders)
+
+- **Shape: a table visit.** The sale opened by `order.opened` is the visit's **root** (`sale.order_root_id = id`). A sale split
+  off for lines that arrived after a payment carries the root's id in `order_root_id` too. At most one sale of a visit is
+  open (`sale_one_open_per_order`). A whole sale (v1 `sale.created`, an online order) has `order_root_id` NULL.
+- **The server's rows are the fold, by construction** (`apps/api/src/order-ingest.ts`). After every order event the server
+  folds *all* the visit's applied order events (renamed to the root) with the shared `foldOrder`, then rewrites the visit's
+  one open sale to hold `openLines(fold, closed)` (new, pure, in `packages/shared/src/order.ts`): a line with a row on a
+  paid, refunded or void sale is settled there, and only its live quantity beyond what the closed sales took stays open,
+  **under the same lineId**. Money comes from the same `totals()` as the tablet, at the tenant's current settings. Every
+  change to a visit runs under a row lock on its root, taken before any other sale row (also in `saleOf`, so a payment
+  and a line event cannot deadlock).
+- **Ingest rules** (reason codes in brackets):
+  - `order.opened`: staff of this outlet [`unknown_user`], a live table of this outlet [`unknown_table`]; a second order on
+    a busy table is applied and flagged `table_shared`; an identical re-queued open is applied as a no-op, anything else
+    claiming the id is refused [`sale_exists`].
+  - Line events and moves, from **any device of the sale's outlet** (D18) [`wrong_outlet`], by staff of the outlet
+    [`unknown_user`]; the visit must not be void [`sale_void`]. An add for an unknown item is refused [`unknown_item`];
+    an unavailable one is flagged `sold_unavailable`. A second, *different* add under one lineId is refused
+    [`line_conflict`] (an identical one is applied and changes nothing). A change or removal whose add has not arrived
+    is **deferred** (`line_not_yet_received`), or refused if that add was refused [`line_rejected`]. A change or removal
+    of a settled line is refused [`already_paid`, or `sale_void`], and the rejection is in the ledger and the audit.
+    A move needs an open sale in the visit [`not_open`].
+  - `payment.taken` v2 is for order sales only [`not_an_order`]; v1 is for whole sales only [`order_needs_v2_payment`].
+    The check runs against the paying sale's rows with `checkPayment`: a line not on it is deferred if never seen, refused if
+    it is on another sale of the visit [`line_not_on_sale`]. A total that fits the tenant's settings is paid; one that fits
+    other rounding settings (the manager changed them while the tablet was offline) is paid and flagged `settings_differ`;
+    anything else is refused [`payment_total_mismatch`]. **The payment wins**: the paid sale's lines become the paid lines
+    at the paid quantities (a removed one comes back), each override is audited `order.payment_overrode` and the sale
+    flagged `payment_overrode`; unpaid live lines leave the sale and land on a new split flagged `late_lines` (audited
+    `order.split`). Removed, unpaid lines stay on the paid sale as history.
+  - Ingest's version check is now per type (`KNOWN` in `ingest.ts`): v1 for the six old types, v1 and v2 for
+    `payment.taken`, v2 for the order events. The ledger records each event's own version.
+- **Schema** (`0004_trading.sql`, edited in place): `sale.order_root_id` (immutable; an order needs a table and the counter
+  channel); `total_paise >= 0` and `> 0` unless open or void; `|round_off| <= 50`; `table_id` frozen once not open.
+  `sale_line` gains `line_id` (unique per sale), `added_by/at`, `removed_by/at`, and `line_total = unit x qty`. UPDATE
+  and DELETE are granted again but refused by the `sale_line_guard` trigger unless the sale is open, and what a line *is*
+  (item, name, price, rate, who added it) never changes. A deferred trigger keeps an order's subtotal and tax equal to
+  the sums of its live lines. The ledger's entity index now leads with `entity_id` (order events come from many devices).
+- Reports (`items`, `unavailable`) and `GET /orders/:id` leave removed lines out.
+- **Decided here, worth a look:**
+  - The unpaid excess of a raised line stays on the split **under its own lineId**, not a new one. It follows from the
+    decided rule that a change to a paid line after payment is refused, but it means that excess can be paid or voided,
+    not edited. A new lineId would need server-made events; it can come later if waiters need it.
+  - **Paying and voiding stay with the device that opened the visit** (`wrong_device`, as before); a split takes the
+    root's device. Paying another device's order needs a "paid on device" column (receipt numbers are per device);
+    that belongs with 12b (step 7).
+- **Open until later steps:** no tablet hears about a split until 12b (step 7). Until then an open split blocks day close
+  like any open order; a cashier or manager voids it with `POST /orders/:id/void`. The tablet's shift-close auto-void
+  covers only its own orders. There is still no gap check on device sequence numbers (PLAN 7.5).
+
 ## Steps
 
 | # | Step | Verification | State |
@@ -178,7 +229,7 @@ a moved item's response carries **only its new code**.
 | 2 | API: manager routes for tables and codes, menu pull carries codes and tables, permission and scope declarations | **done 2026-11-06.** After `up:fresh`: API 204/204 (7 new in `apps/api/test/tables.test.ts`), DB 39/39, tablet 25/25, shared 41/41, typecheck clean. 11 mutants `tblapi-*`/`codeapi-*`, 11/11 caught (two re-run after a test edit). No browser (no screen yet) | done, uncommitted |
 | 2b | Tags and diet (D17): `item.diet`, `tag`, `item_tag` (versioned, RLS, pulled), manager routes, resolver carries them to the tablet, filter row (UI in step 6) | **done 2026-11-06.** After `up:fresh`: DB 22/22 (the `tags`, `tables` and `rls` files; 4 new in `db/test/tags.test.mjs`), API 209/209 (5 new in `apps/api/test/tags.test.ts`), tablet 25/25, typecheck clean. 12 mutants `tag-*`/`tagapi-*`, 12/12 caught (one survivor, the cross-tenant link key, led to a test fix and was re-run). No browser (no screen yet) | done, uncommitted |
 | 3 | Shared: v2 event types, the fold (`foldOrder`) with property tests (any order of delivery gives the same lines) | **done 2026-11-06.** Shared 53/53 (12 new in `test/order.test.ts`, 3 of them properties over 400 seeds each). Typecheck clean (shared, api, counter, admin). After `up:fresh`: API 204/204 (unchanged). 14 mutants `order-*`/`payv2-*`, 14/14 caught. After the "payment wins" change: shared 54/54, typecheck clean, the 9 payment mutants (6 new) 9/9 caught; the 9 fold mutants were not re-run (their code did not change). 18 step 3 mutants in all. No browser (no UI) | done, uncommitted |
-| 4 | Server: relax `sale`/`sale_line` for open orders, ingest v1 and v2, payment rules above, N-1 | fault-injection suite extended (duplicate, reorder, drop response, two devices adding, late line after payment, remove after payment) plus mutants | not started |
+| 4 | Server: relax `sale`/`sale_line` for open orders, ingest v1 and v2, payment rules above, N-1 | **done 2026-11-06.** After `up:fresh`: DB 45/45 (2 new in `db/test/trading.test.mjs`), API 222/222 (13 new in `apps/api/test/running-orders.test.ts`: duplicate and doubled batch, reorder and deferral, two devices adding concurrently, late line after payment, remove/change after payment, the payment winning, settings drift, v1/v2 mixing, void, move, and a property over 12 seeded two-device histories delivered in random order with retries: server rows = `foldOrder`), shared 55/55, tablet 25/25, typecheck clean. 52 mutants run (43 new `order-*`/`ro-*`, plus the retargeted and touched ingest ones): 50 caught at first; `ro-pay-keeps-unpaid` survived, which exposed a missing case (a whole line that reached the server before the payment, but was not in it). That test was added and the mutant re-run and caught; `ro-removed-counts-as-taken` was an equivalent mutant and was dropped. No browser (no UI) | done, uncommitted |
 | 5 | Tablet: local open orders as line events (Dexie version bump), table state, hold/move | tablet unit tests against fake-indexeddb and the real API | not started |
 | 6 | UI: Sell redesign per the prototype (table strip and full map, code search with Add button, Popular row, one-tap Cash/UPI, quick cash, auto-return) | **real browser at 1024x768 and 768x1024**, offline toggle | not started |
 | 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | not started |
@@ -209,9 +260,13 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1, 2, 2b and 3 are done and verified. Next is **step 4**
-(HIGH; a fresh session on a HIGH model is a good place to start). Read "Step 3 notes" and "Payment against a changing
-order" before step 4.
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 4 and 2b are done and verified. Next is **step 5**
+(tablet: HIGH for the local-database design, then STANDARD; a fresh session is a good place to start). Read "Step 4
+notes" first: the tablet must write `order.*` events with non-decreasing `at` per device, pay with `payment.taken` v2
+(`lines` at the quantities shown), and keep v1 `sale.created` working for old outboxes. The server's reason codes are
+listed there. Step 4 work is uncommitted (`git status`).
+
+The notes below were written for step 4 and are kept for reference.
 
 - Code to read first: `packages/shared/src/events.ts` (v1 events), `apps/api/src/ingest.ts` (`decide`, `saleOf`, `applySale`,
   `applyPayment`), `db/migrations/0004_trading.sql` (`sale`, `sale_line`, `sale_guard`, the payments trigger),

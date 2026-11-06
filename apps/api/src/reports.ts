@@ -59,7 +59,7 @@ async function items(c: pg.PoolClient, a: Args): Promise<ReportResult> {
     `WITH b AS (${PAID})
      SELECT b.outlet, ${byItem ? 'l.name_snapshot AS label, cat.name AS category' : 'cat.name AS label'},
             sum(l.qty)::bigint AS qty, sum(l.line_total_paise)::bigint AS net, sum(l.tax_paise)::bigint AS tax
-       FROM b JOIN sale_line l ON l.sale_id = b.id JOIN item i ON i.id = l.item_id JOIN category cat ON cat.id = i.category_id
+       FROM b JOIN sale_line l ON l.sale_id = b.id AND l.removed_at IS NULL JOIN item i ON i.id = l.item_id JOIN category cat ON cat.id = i.category_id
       GROUP BY b.outlet, ${byItem ? 'l.item_id, l.name_snapshot, cat.name' : 'cat.id, cat.name'} ORDER BY net DESC, label`, [a.outletIds, a.from, a.to]);
   const columns = [OUTLET, text('label', byItem ? 'Item' : 'Category'), ...(byItem ? [text('category', 'Category')] : []),
     int('qty', 'Quantity'), money('net', 'Before tax'), money('tax', 'Tax')];
@@ -105,7 +105,7 @@ async function unavailable(c: pg.PoolClient, a: Args): Promise<ReportResult> {
   const r = await c.query(
     `SELECT o.name AS outlet, s.business_date::text AS date, COALESCE(s.receipt_no, oo.external_order_id, '') AS ref, s.channel, s.status,
             s.total_paise::bigint AS total, u.name AS "by",
-            (SELECT string_agg(DISTINCT l.name_snapshot, ', ') FROM sale_line l WHERE l.sale_id = s.id) AS items
+            (SELECT string_agg(DISTINCT l.name_snapshot, ', ') FROM sale_line l WHERE l.sale_id = s.id AND l.removed_at IS NULL) AS items
        FROM sale s JOIN outlet o ON o.id = s.outlet_id JOIN app_user u ON u.id = s.created_by
        LEFT JOIN online_order oo ON oo.sale_id = s.id
       WHERE s.outlet_id = ANY($1::uuid[]) AND s.business_date BETWEEN $2::date AND $3::date

@@ -4,7 +4,7 @@
 //   applied    - done; the tablet may drop it from its outbox
 //   duplicate  - seen before (a retry after a lost response); same as applied
 //   rejected   - will never be accepted as sent; the tablet parks it for a human (a reason is given)
-//   deferred   - cannot be judged yet (its sale has not arrived); keep it and retry
+//   deferred   - cannot be judged yet (its sale, or an order line it names, has not arrived); keep it and retry
 //
 // Facts are never rewritten and a real sale is not thrown away over policy: a sale whose arithmetic is
 // internally consistent is accepted even if the manager changed a setting while the tablet was offline;
@@ -12,11 +12,13 @@
 // an unknown person or item) is rejected.
 import type pg from 'pg';
 import {
-  EVENT_SCHEMA_VERSION, OutboxEvent, exclusiveLine, expectedCash, paise, roundOffFor,
+  OutboxEvent, exclusiveLine, expectedCash, paise, roundOffFor,
   type GstRounding, type PaymentTaken, type PrintReprinted, type SaleCreated, type SaleVoided, type ShiftClosed, type ShiftOpened, type TradingSettings,
 } from '@pos/shared';
 import { audit } from './audit.js';
 import { withTenant } from './db.js';
+import { applyOrderChange, applyOrderOpened, lockVisit, payOrder, settleVisit } from './order-ingest.js';
+import { Defer, Reject, RejectUnrecorded } from './sync-outcome.js';
 
 export interface Envelope { eventId: string; seq: number; createdAt: string; payload: unknown }
 export type Status = 'applied' | 'duplicate' | 'rejected' | 'deferred';
@@ -26,16 +28,17 @@ export interface DevicePrincipal { tenantId: string; deviceId: string; outletId:
 const SKEW_MS = 5 * 60_000;
 const MODES: GstRounding[] = ['half_up', 'up', 'down'];
 
-class Reject extends Error { constructor(readonly reason: string) { super(reason); } }
-class Defer extends Error {}
-/** Rejected without a ledger row: the answer may change once the server (or the device) is upgraded. */
-class RejectUnrecorded extends Reject {}
+// Event versions this server ingests, per type (PLAN 7.8, N-1). An event's version is the version of its own shape.
+const KNOWN: Record<string, readonly number[]> = {
+  'sale.created': [1], 'payment.taken': [1, 2], 'print.reprinted': [1], 'shift.opened': [1], 'shift.closed': [1], 'sale.voided': [1],
+  'order.opened': [2], 'order.line_added': [2], 'order.line_changed': [2], 'order.line_removed': [2], 'order.moved': [2],
+};
 
 export async function ingest(p: DevicePrincipal, e: Envelope, settings: TradingSettings): Promise<Result> {
   try {
     return await withTenant(p.tenantId, (c) => decide(c, p, e, settings));
   } catch (err) {
-    if (err instanceof Defer) return { eventId: e.eventId, status: 'deferred', reason: 'sale_not_yet_received' };
+    if (err instanceof Defer) return { eventId: e.eventId, status: 'deferred', reason: err.reason };
     if (err instanceof RejectUnrecorded) return { eventId: e.eventId, status: 'rejected', reason: err.reason };
     throw err;
   }
@@ -56,8 +59,9 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
 
   const head = e.payload as { type?: unknown; schemaVersion?: unknown } | null;
   const type = typeof head?.type === 'string' ? head.type : '';
-  if (!['sale.created', 'payment.taken', 'print.reprinted', 'shift.opened', 'shift.closed', 'sale.voided'].includes(type)) throw new RejectUnrecorded('unknown_event_type');
-  if (head?.schemaVersion !== EVENT_SCHEMA_VERSION) throw new RejectUnrecorded('unsupported_schema_version');
+  if (!Object.hasOwn(KNOWN, type)) throw new RejectUnrecorded('unknown_event_type');
+  const version = head?.schemaVersion;
+  if (typeof version !== 'number' || !KNOWN[type]!.includes(version)) throw new RejectUnrecorded('unsupported_schema_version');
 
   let reason: string | null = null;
   const parsed = OutboxEvent.safeParse(e.payload);
@@ -68,12 +72,13 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
     if (p.revokedAt && new Date(e.createdAt) > p.revokedAt) throw new Reject('after_revocation');
     const ev = parsed.data;
     if (ev.type === 'sale.created') await applySale(c, p, e, ev, settings);
-    else if (ev.type === 'payment.taken') await applyPayment(c, p, ev);
+    else if (ev.type === 'payment.taken') await applyPayment(c, p, ev, settings);
     else if (ev.type === 'shift.opened') await applyShiftOpened(c, p, ev);
     else if (ev.type === 'shift.closed') await applyShiftClosed(c, p, ev);
     else if (ev.type === 'sale.voided') await applyVoid(c, p, ev);
     else if (ev.type === 'print.reprinted') await applyReprint(c, p, ev);
-    else throw new Error(`no handler for ${ev.type}`); // order.* events are turned away above until step 4 handles them
+    else if (ev.type === 'order.opened') await applyOrderOpened(c, p, e, ev, (d) => businessDay(c, p, d));
+    else await applyOrderChange(c, p, e, ev, settings);
     await c.query('RELEASE SAVEPOINT ev');
   } catch (err) {
     await c.query('ROLLBACK TO SAVEPOINT ev');
@@ -89,7 +94,7 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
   await c.query(
     `INSERT INTO sync_event (tenant_id, id, device_id, seq, type, entity_id, schema_version, created_at_device, outcome, reason, payload)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [p.tenantId, e.eventId, p.deviceId, e.seq, type, entityId, EVENT_SCHEMA_VERSION, e.createdAt, reason ? 'rejected' : 'applied', reason, JSON.stringify(e.payload)]);
+    [p.tenantId, e.eventId, p.deviceId, e.seq, type, entityId, version, e.createdAt, reason ? 'rejected' : 'applied', reason, JSON.stringify(e.payload)]);
 
   if (reason) {
     await audit(c, { tenantId: p.tenantId, actorKind: 'device', actorId: p.deviceId, action: 'sync.rejected', entity: 'sync_event', entityId: e.eventId, detail: { type, reason } });
@@ -174,15 +179,21 @@ async function applySale(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, ev: 
 
 /** The sale an event is about, locked. Not here yet: wait for it, unless it was turned away (then waiting is forever). */
 async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string) {
-  const sale = (await c.query('SELECT device_id, status, total_paise, receipt_no FROM sale WHERE id = $1 FOR UPDATE', [saleId])).rows[0];
+  // A running order's root is locked first, as every order event does (order-ingest.ts), so the two never deadlock.
+  const root = (await c.query('SELECT order_root_id FROM sale WHERE id = $1', [saleId])).rows[0]?.order_root_id as string | null | undefined;
+  if (root) await lockVisit(c, root);
+  const sale = (await c.query('SELECT device_id, status, total_paise, receipt_no, order_root_id FROM sale WHERE id = $1 FOR UPDATE', [saleId])).rows[0];
   if (!sale) {
+    // An order may have been opened on another device of the outlet (D18), so its refusal is looked up from any device.
     const refused = await c.query(
-      `SELECT 1 FROM sync_event WHERE device_id = $1 AND entity_id = $2 AND type = 'sale.created' AND outcome = 'rejected'`, [p.deviceId, saleId]);
+      `SELECT 1 FROM sync_event WHERE entity_id = $2
+          AND ((type = 'sale.created' AND device_id = $1) OR type = 'order.opened') AND outcome = 'rejected'`, [p.deviceId, saleId]);
     if (refused.rowCount) throw new Reject('sale_rejected');
     throw new Defer();
   }
+  // Paying and voiding stay with the device that holds the order (D18 changes who may add lines, not who takes money).
   if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');
-  return sale;
+  return sale as { device_id: string; status: string; total_paise: string; receipt_no: string | null; order_root_id: string | null };
 }
 
 /** Only a paid sale has a receipt to print again. The audit entry is the trail a manager reads. */
@@ -243,12 +254,17 @@ async function applyShiftClosed(c: pg.PoolClient, p: DevicePrincipal, ev: ShiftC
     [ev.shiftId, ev.at, ev.countedCashPaise, expected]);
 }
 
-async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTaken): Promise<void> {
+async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTaken, s: TradingSettings): Promise<void> {
   const sale = await saleOf(c, p, ev.saleId);
+  // A running order is paid line by line (v2); a whole sale by its total (v1). No tablet writes the other pairing.
+  if (sale.order_root_id && ev.schemaVersion !== 2) throw new Reject('order_needs_v2_payment');
+  if (!sale.order_root_id && ev.schemaVersion === 2) throw new Reject('not_an_order');
   if (sale.status === 'void') throw new Reject('sale_void');
   if (sale.status !== 'open') throw new Reject('already_paid');
 
-  if (ev.payments.reduce((a, x) => a + x.amountPaise, 0) !== Number(sale.total_paise)) throw new Reject('payments_not_total');
+  let orderFlags: string[] = [];
+  if (ev.schemaVersion === 2) orderFlags = await payOrder(c, p, ev.saleId, sale.order_root_id!, ev, s);
+  else if (ev.payments.reduce((a, x) => a + x.amountPaise, 0) !== Number(sale.total_paise)) throw new Reject('payments_not_total');
   const code = (await c.query('SELECT code FROM counter WHERE id = $1', [p.counterId])).rows[0]?.code as string | undefined;
   if (ev.receiptNo !== `${code}-${ev.businessDate.replaceAll('-', '')}-${ev.receiptSeq}`) throw new Reject('bad_receipt_no');
 
@@ -262,11 +278,14 @@ async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTak
     `UPDATE sale SET status = 'paid', receipt_no = $2, receipt_seq = $3, business_date = $4, business_day_id = $5, shift_id = $7,
                      flags = CASE WHEN $6 AND NOT 'late_arrival' = ANY(flags) THEN array_append(flags, 'late_arrival') ELSE flags END
                              || CASE WHEN $8 THEN ARRAY['after_shift_close'] ELSE '{}'::text[] END
+                             || $9::text[]
       WHERE id = $1`,
-    [ev.saleId, ev.receiptNo, ev.receiptSeq, ev.businessDate, day.id, day.closed, ev.shiftId ?? null, afterClose]);
+    [ev.saleId, ev.receiptNo, ev.receiptSeq, ev.businessDate, day.id, day.closed, ev.shiftId ?? null, afterClose, orderFlags]);
   for (const x of ev.payments) {
     await c.query(
       `INSERT INTO payment (tenant_id, sale_id, method, amount_paise, tendered_paise, change_paise, upi_ref) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [p.tenantId, ev.saleId, x.method, x.amountPaise, x.tenderedPaise, x.changePaise, x.upiRef]);
   }
+  // What the payment did not cover is split off onto a new open order on the same table (D18), never lost.
+  if (sale.order_root_id) await settleVisit(c, p, sale.order_root_id, s);
 }

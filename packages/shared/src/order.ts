@@ -133,6 +133,31 @@ export function foldOrder(saleId: string, events: readonly OrderEnvelope[]): Ord
 
 export const liveLines = (f: OrderFold): FoldedLine[] => f.lines.filter((l) => l.removedAt === null);
 
+/** A line row on a CLOSED (paid, refunded or void) sale of the same table visit. */
+export interface ClosedLine {
+  lineId: string;
+  qty: number;
+  removed: boolean;
+}
+
+/**
+ * What the table visit's one open sale holds, given the fold of ALL its events and the rows its closed sales froze.
+ * A line with a row on a closed sale is settled there; only the live quantity beyond what the closed sales took (raised
+ * on another device before the payment arrived) is still open, under the same lineId. Every other line is open exactly
+ * as folded, removed ones included. Pure: the server writes the result (step 4), and the same rule can run on a tablet.
+ */
+export function openLines(f: OrderFold, closed: readonly ClosedLine[]): FoldedLine[] {
+  const frozen = new Set(closed.map((r) => r.lineId));
+  const taken = new Map<string, number>();
+  for (const r of closed) if (!r.removed) taken.set(r.lineId, (taken.get(r.lineId) ?? 0) + r.qty);
+  const out: FoldedLine[] = [];
+  for (const l of f.lines) {
+    if (!frozen.has(l.lineId)) out.push(l);
+    else if (l.removedAt === null && l.qty > (taken.get(l.lineId) ?? 0)) out.push({ ...l, qty: l.qty - (taken.get(l.lineId) ?? 0) });
+  }
+  return out;
+}
+
 type TotalSettings = Pick<TradingSettings, 'gstRounding' | 'billRoundTo'>;
 
 /** The order's money: the same totals() a counter sale uses, over the live lines only. */

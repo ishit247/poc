@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  foldOrder, orderTotals, checkPayment, liveLines, exclusiveLine, OutboxEvent, OrderEvent as OrderEventSchema,
+  foldOrder, orderTotals, checkPayment, liveLines, openLines, exclusiveLine, OutboxEvent, OrderEvent as OrderEventSchema,
   type OrderEnvelope, type OrderEvent, type FoldedLine,
 } from '../src/index.ts';
 
@@ -120,6 +120,26 @@ test('order payment: the payment wins over a removal or a change that reached th
   assert.deepEqual(ok.paid.map((l) => [l.lineId, l.qty, l.removedAt]), [[uid(101), 2, null], [uid(102), 1, null], [uid(103), 3, null]]);
   assert.deepEqual(ok.late.map((l) => [l.line.lineId, l.qty, l.partial]), [[uid(102), 3, true]]); // the extra 3 of line 2
   assert.deepEqual(ok.overridden, [{ lineId: uid(101), kind: 'removed', foldQty: 2 }, { lineId: uid(103), kind: 'reduced', foldQty: 1 }]);
+});
+
+test('open lines: settled lines stay settled; only unpaid lines and the excess of a raised line stay open', () => {
+  // Lines: 1 x2 (paid at 2), 2 raised to 4 (paid at 1), 3 removed before payment (kept on the paid sale), 4 x1 unpaid,
+  // 5 removed and never paid, 6 lowered to 1 but paid at 3 (the payment won), 7 on a voided split.
+  const f = foldOrder(SALE, [
+    env('A', 1, add(1, 2, 0)), env('A', 2, add(2, 1, 1, 500)), env('A', 3, add(3, 1, 2)), env('A', 4, add(4, 1, 3)),
+    env('A', 5, add(5, 1, 4)), env('A', 6, add(6, 3, 5)), env('A', 7, add(7, 2, 6)),
+    env('B', 1, change(2, 4, 10)), env('B', 2, remove(3, 11)), env('B', 3, remove(5, 12)), env('B', 4, change(6, 1, 13)),
+  ]);
+  const closed = [
+    { lineId: uid(101), qty: 2, removed: false }, { lineId: uid(102), qty: 1, removed: false }, { lineId: uid(103), qty: 1, removed: true },
+    { lineId: uid(106), qty: 3, removed: false }, { lineId: uid(107), qty: 2, removed: false },
+  ];
+  const open = openLines(f, closed);
+  assert.deepEqual(open.map((l) => [l.lineId, l.qty, l.removedAt !== null]), [[uid(102), 3, false], [uid(104), 1, false], [uid(105), 1, true]]);
+  // Nothing settled yet: everything is open exactly as folded.
+  assert.deepEqual(openLines(f, []), f.lines);
+  // A remainder split, later paid too: the line is fully taken and nothing of it stays open.
+  assert.deepEqual(openLines(f, [...closed, { lineId: uid(102), qty: 3, removed: false }]).map((l) => l.lineId), [uid(104), uid(105)]);
 });
 
 test('order events: v2 shapes parse; payment v1 and v2 both accepted; v2 must add up and name its lines', () => {

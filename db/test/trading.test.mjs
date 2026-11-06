@@ -106,8 +106,10 @@ test('a paid sale cannot be edited, deleted or have its lines/payments changed (
     await fails(c, "UPDATE sale SET status = 'open' WHERE id = $1", [s], /cannot go from paid to open/);
     await fails(c, 'UPDATE sale SET created_by = (SELECT id FROM app_user WHERE role = \'waiter\' LIMIT 1) WHERE id = $1', [s], /identity is immutable/);
     await fails(c, 'DELETE FROM sale WHERE id = $1', [s], /permission denied/);
-    await fails(c, 'UPDATE sale_line SET qty = 9 WHERE sale_id = $1', [s], /permission denied/);
-    await fails(c, 'DELETE FROM sale_line WHERE sale_id = $1', [s], /permission denied/);
+    await fails(c, 'UPDATE sale_line SET qty = 9, line_total_paise = 9450 WHERE sale_id = $1', [s], /line of a paid sale cannot be changed/);
+    await fails(c, 'UPDATE sale_line SET removed_at = now(), removed_by = $2 WHERE sale_id = $1', [s, x.cashier], /line of a paid sale cannot be changed/);
+    await fails(c, 'DELETE FROM sale_line WHERE sale_id = $1', [s], /line of a paid sale cannot be changed/);
+    await fails(c, 'TRUNCATE sale_line', [], /permission denied/);
     await fails(c, 'UPDATE payment SET amount_paise = 1 WHERE sale_id = $1', [s], /permission denied/);
     await fails(c, 'DELETE FROM payment WHERE sale_id = $1', [s], /permission denied/);
     // The allowed moves: paid -> refunded, and open -> void.
@@ -115,6 +117,83 @@ test('a paid sale cannot be edited, deleted or have its lines/payments changed (
     const o = await newSale(c, x);
     await c.query("UPDATE sale SET status = 'void', void_reason = 'cancelled' WHERE id = $1", [o]);
     await fails(c, "UPDATE sale SET status = 'paid' WHERE id = $1", [o], /cannot go from void to paid/);
+  });
+});
+
+// A running order (phase 12): root sale on the outlet's default table, money 0 until lines are written.
+const newOrder = async (c, x, root = null) => {
+  const t = (await c.query('SELECT id FROM dining_table WHERE outlet_id = $1 AND is_default AND deleted_at IS NULL', [x.outlet])).rows[0].id;
+  return (await c.query(
+    `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, table_id, order_root_id, status, menu_version,
+                       subtotal_paise, tax_paise, total_paise, created_at_device)
+     SELECT g, $1, $2, '2026-03-01', $3, $4, $5, COALESCE($6::uuid, g), 'open', 1, 0, 0, 0, now() FROM gen_random_uuid() g RETURNING id`,
+    [A, x.outlet, x.device, x.cashier, t, root])).rows[0].id;
+};
+const orderLine = (c, x, sale, qty = 1) =>
+  c.query(`INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
+           VALUES ($1,$2,$3,'Tea',1000,0,$4,$5,0) RETURNING line_id`, [A, sale, x.item, qty, 1000 * qty]).then((r) => r.rows[0].line_id);
+
+test('running orders: an open order\'s lines change; its money must be the sum of its live lines, checked at commit', async () => {
+  await inTx(async (c, x) => {
+    const o = await newOrder(c, x);
+    const l = await orderLine(c, x, o, 2);
+    await c.query('UPDATE sale SET subtotal_paise = 2000, total_paise = 2000 WHERE id = $1', [o]);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+    await c.query('SET CONSTRAINTS ALL DEFERRED');
+    // Quantity changes and a removal, with the money kept in step: allowed while open.
+    await c.query('UPDATE sale_line SET qty = 3, line_total_paise = 3000 WHERE line_id = $1', [l]);
+    await c.query('UPDATE sale SET subtotal_paise = 3000, total_paise = 3000 WHERE id = $1', [o]);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+    await c.query('SET CONSTRAINTS ALL DEFERRED');
+    await c.query('UPDATE sale_line SET removed_at = now(), removed_by = $2 WHERE line_id = $1', [l, x.cashier]);
+    await c.query('UPDATE sale SET subtotal_paise = 0, total_paise = 0 WHERE id = $1', [o]);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+    // What a line is never changes, open or not.
+    await fails(c, "UPDATE sale_line SET unit_price_paise = 1, line_total_paise = 3 WHERE line_id = $1", [l], /immutable/);
+    await fails(c, "UPDATE sale_line SET name_snapshot = 'Coffee' WHERE line_id = $1", [l], /immutable/);
+    // A line's money is price x qty.
+    await fails(c, 'UPDATE sale_line SET qty = 4 WHERE line_id = $1', [l], /check constraint/);
+  });
+  await inTx(async (c, x) => {
+    // Money out of step with the lines is refused at commit.
+    const o = await newOrder(c, x);
+    await orderLine(c, x, o, 2);
+    await c.query('SAVEPOINT chk');
+    await assert.rejects(c.query('SET CONSTRAINTS ALL IMMEDIATE'), /not the sum of its live lines/);
+    await c.query('ROLLBACK TO chk');
+  });
+  await inTx(async (c, x) => {
+    // A line quietly removed without the money following is refused too.
+    const o = await newOrder(c, x);
+    const l = await orderLine(c, x, o, 1);
+    await c.query('UPDATE sale SET subtotal_paise = 1000, total_paise = 1000 WHERE id = $1', [o]);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+    await c.query('SET CONSTRAINTS ALL DEFERRED');
+    await c.query('DELETE FROM sale_line WHERE line_id = $1', [l]);
+    await assert.rejects(c.query('SET CONSTRAINTS ALL IMMEDIATE'), /not the sum of its live lines/);
+  });
+});
+
+test('running orders: an empty order may be open or void, never paid; one open sale per table visit; the root is fixed', async () => {
+  await inTx(async (c, x) => {
+    const o = await newOrder(c, x);
+    // Empty and paid: refused (money that changed hands is never 0).
+    await fails(c, "UPDATE sale SET status = 'paid', receipt_no = 'C1-20260301-0040', receipt_seq = 40 WHERE id = $1", [o], /check constraint/);
+    // An order always has a table.
+    await fails(c, `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, order_root_id, menu_version,
+                    subtotal_paise, tax_paise, total_paise, created_at_device) VALUES (gen_random_uuid(), $1, $2, '2026-03-01', $3, $4, $5, 1, 0, 0, 0, now())`,
+      [A, x.outlet, x.device, x.cashier, o], /check constraint/);
+    // A second open sale in the same visit.
+    await fails(c, `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, table_id, order_root_id, menu_version,
+                    subtotal_paise, tax_paise, total_paise, created_at_device)
+                    SELECT gen_random_uuid(), tenant_id, outlet_id, business_date, device_id, created_by, table_id, id, 1, 0, 0, 0, now() FROM sale WHERE id = $1`,
+      [o], /sale_one_open_per_order/);
+    await fails(c, 'UPDATE sale SET order_root_id = NULL WHERE id = $1', [o], /identity is immutable/);
+    // Round-off is at most half the largest step.
+    await fails(c, 'UPDATE sale SET round_off_paise = 51, total_paise = 51 WHERE id = $1', [o], /check constraint/);
+    // An empty order can be voided; then its table can change no more.
+    await c.query("UPDATE sale SET status = 'void', void_reason = 'x' WHERE id = $1", [o]);
+    await fails(c, 'UPDATE sale SET table_id = NULL WHERE id = $1', [o], /cannot be edited/);
   });
 });
 

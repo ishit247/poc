@@ -53,7 +53,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       if (!s.rows[0]) return null;
       const lines = await c.query(
         `SELECT item_id AS "itemId", name_snapshot AS name, unit_price_paise AS "unitPricePaise", gst_rate_bp AS "gstRateBp",
-                qty, line_total_paise AS "lineTotalPaise", tax_paise AS "taxPaise" FROM sale_line WHERE sale_id = $1`, [ps.data.id]);
+                qty, line_total_paise AS "lineTotalPaise", tax_paise AS "taxPaise" FROM sale_line WHERE sale_id = $1 AND removed_at IS NULL`, [ps.data.id]);
       return { ...s.rows[0], lines: lines.rows };
     });
     return out ?? notFound(reply);

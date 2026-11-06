@@ -99,16 +99,24 @@ CREATE TABLE sale (
   receipt_seq     int CHECK (receipt_seq > 0),
   device_seq      bigint,
   menu_version    bigint NOT NULL,
+  -- A running order (PLAN D15, phase 12): the first sale of a table visit is its own root; a sale split off for
+  -- lines that arrived after a payment points at that root. NULL: a whole sale (v1 `sale.created`, online order).
+  order_root_id   uuid,
   subtotal_paise  bigint NOT NULL CHECK (subtotal_paise >= 0),
   tax_paise       bigint NOT NULL CHECK (tax_paise >= 0),
-  round_off_paise bigint NOT NULL DEFAULT 0,   -- signed bill round-off (tenant_setting.bill_round_to)
-  total_paise     bigint NOT NULL CHECK (total_paise > 0),
+  round_off_paise bigint NOT NULL DEFAULT 0 CHECK (abs(round_off_paise) <= 50), -- signed; the largest step is 100, to nearest
+  -- An open order may be empty (0); money that changed hands never is.
+  total_paise     bigint NOT NULL CHECK (total_paise >= 0),
   created_at_device timestamptz NOT NULL,
   received_at     timestamptz NOT NULL DEFAULT now(),
   void_reason     text,
   flags           text[] NOT NULL DEFAULT '{}',
   UNIQUE (tenant_id, id),
   CHECK (total_paise = subtotal_paise + tax_paise + round_off_paise),
+  CHECK (total_paise > 0 OR status IN ('open', 'void')),
+  -- A running order always sits on a table and is rung up at a counter.
+  CHECK (order_root_id IS NULL OR (table_id IS NOT NULL AND channel = 'counter')),
+  FOREIGN KEY (tenant_id, order_root_id)   REFERENCES sale(tenant_id, id),
   -- The receipt number is assigned at payment (PLAN 9), so only paid/refunded counter sales carry one.
   -- An online order (PLAN 11) is created by the server, not drawn from a tablet's gap-free series: it never
   -- has one, and the platform's order id is its reference.
@@ -127,6 +135,9 @@ CREATE TABLE sale (
 -- Invariant 5: a receipt number is unique per device per business day.
 CREATE UNIQUE INDEX sale_receipt_uq ON sale (device_id, business_date, receipt_seq) WHERE receipt_seq IS NOT NULL;
 CREATE INDEX sale_creator_open_ix ON sale (created_by) WHERE status = 'open';
+-- One table visit has at most one open sale: lines that arrive after a payment all land on the same split.
+CREATE UNIQUE INDEX sale_one_open_per_order ON sale (order_root_id) WHERE status = 'open' AND order_root_id IS NOT NULL;
+CREATE INDEX sale_order_root_ix ON sale (order_root_id) WHERE order_root_id IS NOT NULL;
 SELECT app.enable_tenant_rls('sale');
 -- Paid sales are never deleted (invariant 4); they are voided or refunded.
 REVOKE DELETE, TRUNCATE ON sale FROM pos_app;
@@ -135,6 +146,9 @@ CREATE TABLE sale_line (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id        uuid NOT NULL REFERENCES tenant(id),
   sale_id          uuid NOT NULL,
+  -- The tablet's line id for a running-order line (`order.line_added`); generated for a whole sale's lines. One
+  -- logical line may have a row on a paid sale and a row for its unpaid excess on the split, so unique per sale.
+  line_id          uuid NOT NULL DEFAULT gen_random_uuid(),
   item_id          uuid NOT NULL,
   name_snapshot    text NOT NULL,
   unit_price_paise bigint NOT NULL CHECK (unit_price_paise >= 0),
@@ -142,12 +156,44 @@ CREATE TABLE sale_line (
   qty              int NOT NULL CHECK (qty > 0),
   line_total_paise bigint NOT NULL CHECK (line_total_paise >= 0),
   tax_paise        bigint NOT NULL CHECK (tax_paise >= 0),
+  -- Who rang the line up, and who took it off (a removed line is kept so reports can show it). Order lines only.
+  added_by         uuid,
+  added_at         timestamptz,
+  removed_by       uuid,
+  removed_at       timestamptz,
+  UNIQUE (sale_id, line_id),
+  CHECK (line_total_paise = unit_price_paise * qty),
+  CHECK ((added_by IS NULL) = (added_at IS NULL)),
+  CHECK ((removed_by IS NULL) = (removed_at IS NULL)),
   FOREIGN KEY (tenant_id, sale_id) REFERENCES sale(tenant_id, id),
-  FOREIGN KEY (tenant_id, item_id) REFERENCES item(tenant_id, id)
+  FOREIGN KEY (tenant_id, item_id) REFERENCES item(tenant_id, id),
+  FOREIGN KEY (tenant_id, added_by)   REFERENCES app_user(tenant_id, id),
+  FOREIGN KEY (tenant_id, removed_by) REFERENCES app_user(tenant_id, id)
 );
 SELECT app.enable_tenant_rls('sale_line');
--- Lines are facts: written once with the sale. REVOKE withholds (default privileges grant all four).
-REVOKE UPDATE, DELETE, TRUNCATE ON sale_line FROM pos_app;
+-- A running order's lines change while it is open (quantity, removal, moving to a split); once the sale has left
+-- 'open' they are facts. UPDATE and DELETE are granted for that, and the guard below refuses them on any sale that
+-- is not open. TRUNCATE is withheld (default privileges grant it).
+REVOKE TRUNCATE ON sale_line FROM pos_app;
+
+CREATE FUNCTION app.sale_line_guard() RETURNS trigger
+LANGUAGE plpgsql AS
+$$
+DECLARE st text;
+BEGIN
+  SELECT status INTO st FROM sale WHERE id = OLD.sale_id;
+  IF st IS DISTINCT FROM 'open' THEN
+    RAISE EXCEPTION 'a line of a % sale cannot be changed', st;
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  IF (NEW.tenant_id, NEW.sale_id, NEW.line_id, NEW.item_id, NEW.name_snapshot, NEW.unit_price_paise, NEW.gst_rate_bp, NEW.added_by, NEW.added_at)
+     IS DISTINCT FROM (OLD.tenant_id, OLD.sale_id, OLD.line_id, OLD.item_id, OLD.name_snapshot, OLD.unit_price_paise, OLD.gst_rate_bp, OLD.added_by, OLD.added_at) THEN
+    RAISE EXCEPTION 'what a line is (item, name, price, rate, who added it) is immutable';
+  END IF;
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER sale_line_guard BEFORE UPDATE OR DELETE ON sale_line FOR EACH ROW EXECUTE FUNCTION app.sale_line_guard();
 
 CREATE TABLE payment (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -190,7 +236,8 @@ CREATE TABLE sync_event (
 );
 -- A device numbers its events 1, 2, 3...; one number is one event.
 CREATE UNIQUE INDEX sync_event_device_seq_uq ON sync_event (device_id, seq);
-CREATE INDEX sync_event_entity_ix ON sync_event (device_id, entity_id) WHERE entity_id IS NOT NULL;
+-- Entity first: a running order's events come from every device at the outlet (phase 12, D18).
+CREATE INDEX sync_event_entity_ix ON sync_event (entity_id, device_id) WHERE entity_id IS NOT NULL;
 SELECT app.enable_tenant_rls('sync_event');
 REVOKE UPDATE, DELETE, TRUNCATE ON sync_event FROM pos_app;
 
@@ -201,11 +248,11 @@ LANGUAGE plpgsql AS
 $$
 BEGIN
   IF NEW.tenant_id <> OLD.tenant_id OR NEW.id <> OLD.id OR NEW.outlet_id <> OLD.outlet_id
-     OR NEW.device_id <> OLD.device_id OR NEW.created_by <> OLD.created_by THEN
+     OR NEW.device_id <> OLD.device_id OR NEW.created_by <> OLD.created_by OR NEW.order_root_id IS DISTINCT FROM OLD.order_root_id THEN
     RAISE EXCEPTION 'sale identity is immutable';
   END IF;
-  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.tax_paise, NEW.round_off_paise, NEW.total_paise, NEW.receipt_no, NEW.receipt_seq, NEW.business_date)
-       IS DISTINCT FROM (OLD.subtotal_paise, OLD.tax_paise, OLD.round_off_paise, OLD.total_paise, OLD.receipt_no, OLD.receipt_seq, OLD.business_date) THEN
+  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.tax_paise, NEW.round_off_paise, NEW.total_paise, NEW.receipt_no, NEW.receipt_seq, NEW.business_date, NEW.table_id)
+       IS DISTINCT FROM (OLD.subtotal_paise, OLD.tax_paise, OLD.round_off_paise, OLD.total_paise, OLD.receipt_no, OLD.receipt_seq, OLD.business_date, OLD.table_id) THEN
     RAISE EXCEPTION 'a % sale cannot be edited', OLD.status;
   END IF;
   IF NEW.status <> OLD.status AND NOT (
@@ -242,3 +289,33 @@ CREATE CONSTRAINT TRIGGER sale_payments_ck AFTER INSERT OR UPDATE ON sale
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.sale_payments_ck();
 CREATE CONSTRAINT TRIGGER payment_sale_ck AFTER INSERT ON payment
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.payment_sale_ck();
+
+-- A running order's money is a cache of its live lines (phase 12): subtotal and tax are their sums, open or paid.
+-- (A whole v1 sale's arithmetic is checked at ingest, where the device's own rounding is known.) Deferred to commit,
+-- like the payments check, so lines and the sale can be rewritten in any order within one transaction.
+CREATE FUNCTION app.assert_order_lines(sid uuid) RETURNS void
+LANGUAGE plpgsql AS
+$$
+DECLARE s record; net bigint; tax bigint;
+BEGIN
+  SELECT id, order_root_id, subtotal_paise, tax_paise INTO s FROM sale WHERE id = sid;
+  IF s.id IS NULL OR s.order_root_id IS NULL THEN RETURN; END IF;
+  SELECT COALESCE(sum(line_total_paise), 0), COALESCE(sum(tax_paise), 0) INTO net, tax
+    FROM sale_line WHERE sale_id = s.id AND removed_at IS NULL;
+  IF (net, tax) IS DISTINCT FROM (s.subtotal_paise, s.tax_paise) THEN
+    RAISE EXCEPTION 'order % money (% + % tax) is not the sum of its live lines (% + % tax)', s.id, s.subtotal_paise, s.tax_paise, net, tax;
+  END IF;
+END
+$$;
+CREATE FUNCTION app.sale_order_lines_ck() RETURNS trigger LANGUAGE plpgsql AS
+$$ BEGIN PERFORM app.assert_order_lines(NEW.id); RETURN NULL; END $$;
+CREATE FUNCTION app.line_order_lines_ck() RETURNS trigger LANGUAGE plpgsql AS
+$$ BEGIN
+  IF TG_OP <> 'INSERT' THEN PERFORM app.assert_order_lines(OLD.sale_id); END IF;
+  IF TG_OP <> 'DELETE' THEN PERFORM app.assert_order_lines(NEW.sale_id); END IF;
+  RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER sale_order_lines_ck AFTER INSERT OR UPDATE ON sale
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.sale_order_lines_ck();
+CREATE CONSTRAINT TRIGGER line_order_lines_ck AFTER INSERT OR UPDATE OR DELETE ON sale_line
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.line_order_lines_ck();
