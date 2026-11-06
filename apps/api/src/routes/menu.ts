@@ -7,7 +7,9 @@ import type { Principal } from '../scope.js';
 import { ITEM_DESCRIPTION_MAX, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_TYPES } from '@pos/shared';
 import { checkImage, lockItemImages, purgeItemImage, releaseItemImage, serveItemImage, storeItemImage } from '../itemImages.js';
 
-const ITEM_COLS = 'id, category_id AS "categoryId", name, code, hsn_code AS "hsnCode", description, image_sha256 AS "imageSha256", sort_order AS "sortOrder"';
+const ITEM_COLS = 'id, category_id AS "categoryId", name, code, hsn_code AS "hsnCode", description, diet, image_sha256 AS "imageSha256", sort_order AS "sortOrder", ' +
+  `COALESCE((SELECT array_agg(it.tag_id ORDER BY it.tag_id) FROM item_tag it WHERE it.item_id = item.id AND it.deleted_at IS NULL), '{}') AS "tagIds"`;
+const TAG_COLS = 'id, name, sort_order AS "sortOrder"';
 
 const uuid = z.string().uuid();
 const channel = z.enum(['counter', 'zomato', 'swiggy']);
@@ -29,7 +31,12 @@ const categoryBody = z.object({ name, code: quickCode.optional(), sortOrder: sor
 const categoryPatch = categoryBody.partial().strict().refine((b) => Object.keys(b).length > 0);
 const hsn = z.string().regex(/^[0-9]{4,8}$/).nullable();
 const description = z.string().trim().min(1).max(ITEM_DESCRIPTION_MAX).nullable();
-const itemBody = z.object({ categoryId: uuid, name, code: quickCode.optional(), hsnCode: hsn.optional(), description: description.optional(), sortOrder: sortOrder.optional() }).strict();
+const diet = z.enum(['veg', 'egg', 'non_veg']).nullable();
+const tagName = z.string().trim().min(1).max(30);
+const tagBody = z.object({ name: tagName, sortOrder: sortOrder.optional() }).strict();
+const tagPatch = tagBody.partial().strict().refine((b) => Object.keys(b).length > 0);
+const itemTagsBody = z.object({ tagIds: z.array(uuid).max(50) }).strict();
+const itemBody = z.object({ categoryId: uuid, name, code: quickCode.optional(), hsnCode: hsn.optional(), description: description.optional(), diet: diet.optional(), sortOrder: sortOrder.optional() }).strict();
 const itemPatch = itemBody.partial().strict().refine((b) => Object.keys(b).length > 0);
 const priceBody = z.object({
   pricePaise: z.number().int().min(0).max(100_000_000),
@@ -65,12 +72,13 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
   app.get('/menu', { config: mgr }, async (req) => {
     const p = req.principal!;
     return withTenant(p.tenantId, async (c) => {
-      const [cats, items, prices] = await Promise.all([
+      const [cats, items, prices, tags] = await Promise.all([
         c.query('SELECT id, name, code, sort_order AS "sortOrder" FROM category WHERE deleted_at IS NULL ORDER BY sort_order, name'),
         c.query(`SELECT ${ITEM_COLS} FROM item WHERE deleted_at IS NULL ORDER BY sort_order, name`),
         c.query('SELECT item_id AS "itemId", channel, price_paise::int AS "pricePaise", gst_rate_bp AS "gstRateBp" FROM item_price WHERE deleted_at IS NULL'),
+        c.query(`SELECT ${TAG_COLS} FROM tag WHERE deleted_at IS NULL ORDER BY sort_order, name`),
       ]);
-      return { categories: cats.rows, items: items.rows, prices: prices.rows };
+      return { categories: cats.rows, items: items.rows, prices: prices.rows, tags: tags.rows };
     });
   });
 
@@ -142,8 +150,8 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
       const row = await withTenant(p.tenantId, async (c) => {
         if (!(await liveExists(c, 'category', b.data.categoryId))) return null;
         const r = await c.query(
-          `INSERT INTO item (tenant_id, category_id, name, code, hsn_code, description, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${ITEM_COLS}`,
-          [p.tenantId, b.data.categoryId, b.data.name, b.data.code ?? null, b.data.hsnCode ?? null, b.data.description ?? null, b.data.sortOrder ?? 0]);
+          `INSERT INTO item (tenant_id, category_id, name, code, hsn_code, description, diet, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${ITEM_COLS}`,
+          [p.tenantId, b.data.categoryId, b.data.name, b.data.code ?? null, b.data.hsnCode ?? null, b.data.description ?? null, b.data.diet ?? null, b.data.sortOrder ?? 0]);
         await audit(c, { ...actor(p), action: 'item.create', entity: 'item', entityId: r.rows[0].id });
         return r.rows[0];
       });
@@ -160,7 +168,7 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const b = itemPatch.safeParse(req.body);
     if (!ids.success || !b.success) return bad(reply);
     const p = req.principal!;
-    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', code: 'code', hsnCode: 'hsn_code', description: 'description', sortOrder: 'sort_order' }, 2);
+    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', code: 'code', hsnCode: 'hsn_code', description: 'description', diet: 'diet', sortOrder: 'sort_order' }, 2);
     // A move to another category may change the item's code (kept if free there, else the next free one). The row
     // returned carries the code the item has now; the old one is not reported.
     try {
@@ -193,12 +201,94 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
       const released = await releaseItemImage(c, p.tenantId, r.rows[0].image_sha256);
       // Tombstone the prices too, so devices drop them in the same pull.
       await c.query('UPDATE item_price SET deleted_at = now() WHERE item_id = $1 AND deleted_at IS NULL', [ids.data.id]);
+      await c.query('UPDATE item_tag SET deleted_at = now() WHERE item_id = $1 AND deleted_at IS NULL', [ids.data.id]);
       await audit(c, { ...actor(p), action: 'item.delete', entity: 'item', entityId: ids.data.id });
       return { released };
     });
     if (!out) return notFound(reply);
     await purgeItemImage(p.tenantId, out.released);
     return { ok: true };
+  });
+
+  // --- tags (PLAN D17) -------------------------------------------------------
+  const nameTaken = (e: unknown) => (e as { code?: string; constraint?: string }).code === '23505' && (e as { constraint?: string }).constraint === 'tag_name_live_uq';
+
+  app.get('/tags', { config: mgr }, async (req) =>
+    withTenant(req.principal!.tenantId, async (c) => ({ tags: (await c.query(`SELECT ${TAG_COLS} FROM tag WHERE deleted_at IS NULL ORDER BY sort_order, name`)).rows })));
+
+  app.post('/tags', { config: mgr }, async (req, reply) => {
+    const b = tagBody.safeParse(req.body);
+    if (!b.success) return bad(reply);
+    const p = req.principal!;
+    try {
+      const row = await withTenant(p.tenantId, async (c) => {
+        const r = await c.query(`INSERT INTO tag (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING ${TAG_COLS}`, [p.tenantId, b.data.name, b.data.sortOrder ?? 0]);
+        await audit(c, { ...actor(p), action: 'tag.create', entity: 'tag', entityId: r.rows[0].id });
+        return r.rows[0];
+      });
+      return reply.code(201).send(row);
+    } catch (e) {
+      if (nameTaken(e)) return reply.code(409).send({ error: 'tag name in use' });
+      throw e;
+    }
+  });
+
+  app.patch('/tags/:id', { config: mgr }, async (req, reply) => {
+    const ids = idParams.safeParse(req.params);
+    const b = tagPatch.safeParse(req.body);
+    if (!ids.success || !b.success) return bad(reply);
+    const p = req.principal!;
+    const set = setClause(b.data, { name: 'name', sortOrder: 'sort_order' }, 2);
+    try {
+      const row = await withTenant(p.tenantId, async (c) => {
+        const r = await c.query(`UPDATE tag SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING ${TAG_COLS}`, [ids.data.id, ...set.values]);
+        if (r.rowCount) await audit(c, { ...actor(p), action: 'tag.update', entity: 'tag', entityId: ids.data.id });
+        return r.rows[0];
+      });
+      return row ?? notFound(reply);
+    } catch (e) {
+      if (nameTaken(e)) return reply.code(409).send({ error: 'tag name in use' });
+      throw e;
+    }
+  });
+
+  // Removing a tag tombstones its item links in the same transaction, so devices drop both in one pull.
+  app.delete('/tags/:id', { config: mgr }, async (req, reply) => {
+    const ids = idParams.safeParse(req.params);
+    if (!ids.success) return bad(reply);
+    const p = req.principal!;
+    const ok = await withTenant(p.tenantId, async (c) => {
+      const r = await c.query('UPDATE tag SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL', [ids.data.id]);
+      if (!r.rowCount) return false;
+      await c.query('UPDATE item_tag SET deleted_at = now() WHERE tag_id = $1 AND deleted_at IS NULL', [ids.data.id]);
+      await audit(c, { ...actor(p), action: 'tag.delete', entity: 'tag', entityId: ids.data.id });
+      return true;
+    });
+    return ok ? { ok: true } : notFound(reply);
+  });
+
+  // Replaces an item's whole tag set. Unknown, removed or another tenant's tag ids make the request invalid (RLS hides them).
+  app.put('/items/:id/tags', { config: mgr }, async (req, reply) => {
+    const ids = idParams.safeParse(req.params);
+    const b = itemTagsBody.safeParse(req.body);
+    if (!ids.success || !b.success) return bad(reply);
+    const p = req.principal!;
+    const want = [...new Set(b.data.tagIds)];
+    const out = await withTenant(p.tenantId, async (c) => {
+      if (!(await liveExists(c, 'item', ids.data.id))) return 'missing' as const;
+      const live = await c.query('SELECT id FROM tag WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL', [want]);
+      if (live.rowCount !== want.length) return 'bad-tag' as const;
+      await c.query('UPDATE item_tag SET deleted_at = now() WHERE item_id = $1 AND deleted_at IS NULL AND NOT (tag_id = ANY($2::uuid[]))', [ids.data.id, want]);
+      await c.query(
+        `INSERT INTO item_tag (tenant_id, item_id, tag_id)
+         SELECT $1, $2, t FROM unnest($3::uuid[]) t
+          WHERE NOT EXISTS (SELECT 1 FROM item_tag x WHERE x.item_id = $2 AND x.tag_id = t AND x.deleted_at IS NULL)`,
+        [p.tenantId, ids.data.id, want]);
+      await audit(c, { ...actor(p), action: 'item.tags', entity: 'item', entityId: ids.data.id });
+      return (await c.query(`SELECT ${ITEM_COLS} FROM item WHERE id = $1`, [ids.data.id])).rows[0];
+    });
+    if (out === 'bad-tag') return bad(reply);
+    return out === 'missing' ? notFound(reply) : out;
   });
 
   // --- pictures ------------------------------------------------------------

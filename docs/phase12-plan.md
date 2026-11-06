@@ -151,13 +151,32 @@ a moved item's response carries **only its new code**.
 - **Decided after review (2026-11-06): the payment wins** over a change or removal that reached the server first (see
   "Payment against a changing order"). The event shape and `checkPayment` were changed to match, in this step.
 
+## Step 2b notes (diet and tags)
+
+- Migration `0003_menu.sql` edited in place: `item.diet` (`veg`, `egg`, `non_veg`, or NULL), `tag` (name unique per tenant,
+  any case, among live tags; 1 to 30 characters, no padding), `item_tag` (surrogate id, composite keys so both ends are the
+  same tenant's, one live link per item and tag). Both tables are versioned, RLS, soft delete only.
+- Manager routes in `routes/menu.ts` (scope `tenant`, permission `manager`): `GET/POST /tags`, `PATCH/DELETE /tags/:id`,
+  `PUT /items/:id/tags` (replaces the whole set; an unknown, removed or foreign tag id is 400 and changes nothing).
+  Deleting a tag, or an item, tombstones its links in the same transaction. A duplicate name is 409 `tag name in use`.
+  Items (and `GET /menu`, which also lists `tags`) now carry `diet` and `tagIds`; `diet` is accepted on create and patch.
+- Pull carries `diet` on item rows and new `tag` and `item_tag` rows (tenant-wide, like the menu).
+- **The shared resolver is untouched, on purpose.** Tags and diet never affect price, GST, codes or the cart, and the server
+  prices orders with the same `resolveMenu`. The tablet's `loadMenu` (`apps/counter/src/menu.ts`) carries `diet` and `tagIds`
+  in `extras` and a sorted `tags` list; the filter row itself is step 6.
+- Seeds: tenant A has tags Snack, Hot; tenant B has Quick bite, Spicy, Cold; Tea has no diet mark (unset is valid).
+- `scripts/validate.mjs` `db` stage now also runs `tables.test.mjs` and `tags.test.mjs` (tables was missing from it).
+- `apps/api/test/menu.test.ts` ("pull pages") lists the pulled tables by hand; `tag` and `item_tag` added.
+- Not tested: that deleting an *item* tombstones its tag links (one line in `DELETE /items/:id`; no mutant). No manager screen
+  to set diet or tags yet.
+
 ## Steps
 
 | # | Step | Verification | State |
 |---|---|---|---|
 | 1 | Schema: `category.code`, `item.code`, `dining_table`, `outlet.table_mode`, `sale.table_id`, seeds, RLS on every new table, catalog import assigns codes (originals fixed in place, then `up:fresh`) | **done 2026-11-06.** After `up:fresh`: DB 39/39 (10 new in `db/test/tables.test.mjs`, plus the every-table RLS test now covering `dining_table`), API 197/197. 11 mutants (`tbl-*`, `code-*` in `scripts/mutation-checks.mjs`), 11/11 caught. No browser (no UI yet) | done, uncommitted |
 | 2 | API: manager routes for tables and codes, menu pull carries codes and tables, permission and scope declarations | **done 2026-11-06.** After `up:fresh`: API 204/204 (7 new in `apps/api/test/tables.test.ts`), DB 39/39, tablet 25/25, shared 41/41, typecheck clean. 11 mutants `tblapi-*`/`codeapi-*`, 11/11 caught (two re-run after a test edit). No browser (no screen yet) | done, uncommitted |
-| 2b | Tags and diet (D17): `item.diet`, `tag`, `item_tag` (versioned, RLS, pulled), manager routes, resolver carries them to the tablet, filter row (UI in step 6) | DB and API tests on real Postgres, scope tests, mutants | not started |
+| 2b | Tags and diet (D17): `item.diet`, `tag`, `item_tag` (versioned, RLS, pulled), manager routes, resolver carries them to the tablet, filter row (UI in step 6) | **done 2026-11-06.** After `up:fresh`: DB 22/22 (the `tags`, `tables` and `rls` files; 4 new in `db/test/tags.test.mjs`), API 209/209 (5 new in `apps/api/test/tags.test.ts`), tablet 25/25, typecheck clean. 12 mutants `tag-*`/`tagapi-*`, 12/12 caught (one survivor, the cross-tenant link key, led to a test fix and was re-run). No browser (no screen yet) | done, uncommitted |
 | 3 | Shared: v2 event types, the fold (`foldOrder`) with property tests (any order of delivery gives the same lines) | **done 2026-11-06.** Shared 53/53 (12 new in `test/order.test.ts`, 3 of them properties over 400 seeds each). Typecheck clean (shared, api, counter, admin). After `up:fresh`: API 204/204 (unchanged). 14 mutants `order-*`/`payv2-*`, 14/14 caught. After the "payment wins" change: shared 54/54, typecheck clean, the 9 payment mutants (6 new) 9/9 caught; the 9 fold mutants were not re-run (their code did not change). 18 step 3 mutants in all. No browser (no UI) | done, uncommitted |
 | 4 | Server: relax `sale`/`sale_line` for open orders, ingest v1 and v2, payment rules above, N-1 | fault-injection suite extended (duplicate, reorder, drop response, two devices adding, late line after payment, remove after payment) plus mutants | not started |
 | 5 | Tablet: local open orders as line events (Dexie version bump), table state, hold/move | tablet unit tests against fake-indexeddb and the real API | not started |
@@ -190,8 +209,8 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1, 2 and 3 are done and verified. Next is **step 4**
-(HIGH). Step 2b (STANDARD) is independent and can go first. Read "Step 3 notes" and "Payment against a changing
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1, 2, 2b and 3 are done and verified. Next is **step 4**
+(HIGH; a fresh session on a HIGH model is a good place to start). Read "Step 3 notes" and "Payment against a changing
 order" before step 4.
 
 - Code to read first: `packages/shared/src/events.ts` (v1 events), `apps/api/src/ingest.ts` (`decide`, `saleOf`, `applySale`,

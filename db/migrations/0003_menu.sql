@@ -112,6 +112,8 @@ CREATE TABLE item (
   hsn_code    text CHECK (hsn_code ~ '^[0-9]{4,8}$'),
   -- Plain text shown on the counter tile. Travels in pull (small).
   description text CHECK (length(description) BETWEEN 1 AND 300),
+  -- Diet mark (PLAN D17): exclusive, shown as a green or red dot. NULL = not stated. Never affects price, GST or codes.
+  diet        text CHECK (diet IN ('veg', 'egg', 'non_veg')),
   -- Which picture, by content hash. The bytes live in item_image and are NOT in pull: a tablet fetches a hash it
   -- does not hold yet, once, and keeps it. No foreign key: item_image rows are immutable and cleaned up in code.
   image_sha256 text CHECK (image_sha256 ~ '^[0-9a-f]{64}$'),
@@ -146,6 +148,36 @@ BEGIN
 END
 $$;
 CREATE TRIGGER assign_item_code BEFORE INSERT OR UPDATE OF category_id ON item FOR EACH ROW EXECUTE FUNCTION app.assign_item_code();
+
+-- Tags (PLAN D17): free per-tenant labels (Chinese, South Indian, Jain, Spicy), many per item. They only filter the
+-- counter's menu; they never touch price, GST, codes or the cart. Versioned and pulled like the menu; soft delete only.
+CREATE TABLE tag (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  uuid NOT NULL REFERENCES tenant(id),
+  name       text NOT NULL CHECK (length(name) BETWEEN 1 AND 30 AND name = btrim(name)),
+  sort_order int NOT NULL DEFAULT 0,
+  version    bigint NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  UNIQUE (tenant_id, id)
+);
+SELECT app.make_versioned('tag');
+CREATE UNIQUE INDEX tag_name_live_uq ON tag (tenant_id, lower(name)) WHERE deleted_at IS NULL;
+
+-- An item carries a tag while a live row says so. Both ends must be the same tenant's (composite foreign keys).
+CREATE TABLE item_tag (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  uuid NOT NULL REFERENCES tenant(id),
+  item_id    uuid NOT NULL,
+  tag_id     uuid NOT NULL,
+  version    bigint NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  FOREIGN KEY (tenant_id, item_id) REFERENCES item(tenant_id, id),
+  FOREIGN KEY (tenant_id, tag_id)  REFERENCES tag(tenant_id, id)
+);
+SELECT app.make_versioned('item_tag');
+CREATE UNIQUE INDEX item_tag_live_uq ON item_tag (item_id, tag_id) WHERE deleted_at IS NULL;
 
 -- Item pictures, content-addressed: one row per distinct image per tenant, however many items use it. This table is the
 -- INDEX only; the bytes live in the S3-compatible object store (Garage) under t/<tenant_id>/<sha256>. The browser

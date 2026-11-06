@@ -192,6 +192,7 @@ test('pull pages without gaps or duplicates across the page boundary', async () 
     UNION ALL SELECT version::int FROM outlet_item WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM outlet WHERE id = $1
     UNION ALL SELECT version::int FROM dining_table WHERE outlet_id = $1
+    UNION ALL SELECT version::int FROM tag UNION ALL SELECT version::int FROM item_tag
     UNION ALL SELECT version::int FROM tenant_setting
     UNION ALL SELECT version::int FROM tenant_logo
     UNION ALL SELECT version::int FROM outlet_price WHERE outlet_id = $1

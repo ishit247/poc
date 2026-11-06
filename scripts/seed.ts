@@ -115,13 +115,24 @@ for (const t of Object.values(SEED)) {
   await client.query("INSERT INTO item_image (tenant_id, sha256, content_type, byte_size) VALUES ($1, $2, 'image/png', $3)", [t.id, picSha, pic.length]);
   const withPicture = t.key === 'a' ? ['Samosa'] : ['Samosa', 'Tea'];
   const blurb: Record<string, string> = { Samosa: `${t.name}: crisp potato samosa`, 'Veg Sandwich': 'Grilled, with chutney', Tea: 'Hot masala chai' };
+  // Diet marks and tags (PLAN D17). Tenant-distinct tag sets so a leak shows; Tea has no diet mark on purpose (unset is valid).
+  const diet: Record<string, string> = { Samosa: 'veg', 'Veg Sandwich': 'veg', 'Cold Coffee': 'veg' };
+  const tagNames = t.key === 'a' ? ['Snack', 'Hot'] : ['Quick bite', 'Spicy', 'Cold'];
+  const tagsOf: Record<string, string[]> = t.key === 'a'
+    ? { Samosa: ['Snack', 'Hot'], 'Veg Sandwich': ['Snack'], Tea: ['Hot'] }
+    : { Samosa: ['Quick bite', 'Spicy'], 'Veg Sandwich': ['Quick bite'], 'Cold Coffee': ['Cold'] };
+  const tagIds: Record<string, string> = {};
+  for (const [i, n] of tagNames.entries()) {
+    tagIds[n] = (await client.query('INSERT INTO tag (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, n, i])).rows[0].id;
+  }
   let sort = 0;
   for (const [cat, items] of Object.entries(menu)) {
     const c = await client.query('INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat, sort++]);
     for (const [name, price, gst] of items) {
-      const it = await client.query('INSERT INTO item (tenant_id, category_id, name, description, image_sha256) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-        [t.id, c.rows[0].id, name, blurb[name] ?? null, withPicture.includes(name) ? picSha : null]);
+      const it = await client.query('INSERT INTO item (tenant_id, category_id, name, description, diet, image_sha256) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+        [t.id, c.rows[0].id, name, blurb[name] ?? null, diet[name] ?? null, withPicture.includes(name) ? picSha : null]);
       itemIds[name] = it.rows[0].id;
+      for (const tn of tagsOf[name] ?? []) await client.query('INSERT INTO item_tag (tenant_id, item_id, tag_id) VALUES ($1, $2, $3)', [t.id, it.rows[0].id, tagIds[tn]]);
       await client.query("INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'counter', $3, $4)", [t.id, it.rows[0].id, price, gst]);
       // Aggregator price differs from the counter price (Q10 is open; the model allows it).
       if (name === 'Samosa') {

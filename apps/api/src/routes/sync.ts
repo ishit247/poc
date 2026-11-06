@@ -18,8 +18,16 @@ const PULL_SQL = `
   UNION ALL
   SELECT 'item', id, version, deleted_at IS NOT NULL,
          jsonb_build_object('categoryId', category_id, 'name', name, 'code', code, 'hsnCode', hsn_code, 'description', description,
-                            'imageSha256', image_sha256, 'sortOrder', sort_order)
+                            'diet', diet, 'imageSha256', image_sha256, 'sortOrder', sort_order)
     FROM item WHERE version > $1
+  UNION ALL
+  SELECT 'tag', id, version, deleted_at IS NOT NULL,
+         jsonb_build_object('name', name, 'sortOrder', sort_order)
+    FROM tag WHERE version > $1
+  UNION ALL
+  SELECT 'item_tag', id, version, deleted_at IS NOT NULL,
+         jsonb_build_object('itemId', item_id, 'tagId', tag_id)
+    FROM item_tag WHERE version > $1
   UNION ALL
   SELECT 'item_price', id, version, deleted_at IS NOT NULL,
          jsonb_build_object('itemId', item_id, 'channel', channel, 'pricePaise', price_paise, 'gstRateBp', gst_rate_bp)

@@ -415,6 +415,23 @@ const MUTANTS = [
     ['codeapi-conflict-is-500', 'apps/api/src/routes/menu.ts', "return 'code in use';", 'return null;'],
     ['codeapi-full-is-500', 'apps/api/src/routes/menu.ts', "return 'no free code';", 'return null;'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('tables.test.ts'))),
+  // --- diet and tags (phase 12 step 2b; db/test/tags.test.mjs, apps/api/test/tags.test.ts)
+  ...[
+    ['tag-name-not-unique', MENU, 'CREATE UNIQUE INDEX tag_name_live_uq', 'CREATE INDEX tag_name_live_uq'],
+    ['tag-link-not-unique', MENU, 'CREATE UNIQUE INDEX item_tag_live_uq', 'CREATE INDEX item_tag_live_uq'],
+    ['tag-not-versioned', MENU, "SELECT app.make_versioned('tag');", "SELECT app.enable_tenant_rls('tag');"],
+    ['tag-link-not-versioned', MENU, "SELECT app.make_versioned('item_tag');", "SELECT app.enable_tenant_rls('item_tag');"],
+    ['tag-diet-unchecked', MENU, "CHECK (diet IN ('veg', 'egg', 'non_veg')),", ','],
+    ['tag-link-cross-tenant', MENU, 'FOREIGN KEY (tenant_id, tag_id)  REFERENCES tag(tenant_id, id)', 'FOREIGN KEY (tag_id) REFERENCES tag(id)'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, { cwd: '.', cmd: ['node', '--test', 'db/test/tags.test.mjs'] })),
+  ...[
+    ['tagapi-delete-leaves-links', 'apps/api/src/routes/menu.ts', "await c.query('UPDATE item_tag SET deleted_at = now() WHERE tag_id = $1 AND deleted_at IS NULL', [ids.data.id]);", ''],
+    ['tagapi-put-accepts-any-tag', 'apps/api/src/routes/menu.ts', "if (live.rowCount !== want.length) return 'bad-tag' as const;", ''],
+    ['tagapi-put-keeps-old-links', 'apps/api/src/routes/menu.ts', "await c.query('UPDATE item_tag SET deleted_at = now() WHERE item_id = $1 AND deleted_at IS NULL AND NOT (tag_id = ANY($2::uuid[]))', [ids.data.id, want]);", ''],
+    ['tagapi-name-conflict-is-500', 'apps/api/src/routes/menu.ts', "=== 'tag_name_live_uq'", "=== 'nope'"],
+    ['tagapi-pull-no-diet', SYNC, "'diet', diet, ", ''],
+    ['tagapi-pull-no-links', SYNC, 'FROM item_tag WHERE version > $1', 'FROM item_tag WHERE version > $1 AND false'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('tags.test.ts'))),
   // --- running-order fold and v2 events (phase 12 step 3; packages/shared/test/order.test.ts). Pure code: no database.
   ...[
     ['order-arrival-order', ORDER, 'const sorted = [...unique.values()].sort(compareOrderEvents);', 'const sorted = [...unique.values()];'],
