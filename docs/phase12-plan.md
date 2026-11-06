@@ -287,6 +287,101 @@ a moved item's response carries **only its new code**.
 - Test lesson: IndexedDB live queries repaint a moment after a click, so the script waits 400 ms before reading the cart.
   Step 8 should use proper polling assertions.
 
+## Step 7 notes (12b: other devices' open orders)
+
+- **Cursor (`order_visit`, in `0004_trading.sql`, edited in place).** One row per table visit (root sale id, outlet,
+  version). A **deferred** constraint trigger on `sale` (order sales only) stamps it with the tenant's commit-ordered
+  `app.next_version` at commit. So a device that pulled to N never misses a later commit below N (as with the menu),
+  and the tenant's version row is locked only between the stamp and the commit, not for the whole ingest. A trigger on
+  `sale` alone sees every change: a line write always comes with a sale write (money is a cache of the lines), and
+  status changes are sale writes, whether from ingest or `POST /orders/:id/void`. The app role may only read it (REVOKE).
+  Not the plan's "updated_version on sale": `sale` is not versioned, and making it so would put every sale write in the
+  tenant behind one lock for the whole transaction.
+- **`GET /sync/orders?cursor=&fresh=`** (scope outlet, permission device; `routes/sync.ts`). One statement, so one
+  snapshot. Each changed visit of the device's own outlet is sent **whole**: every *applied* order event (any device),
+  the lines its closed sales took (`closed`), the open sale's id and device, and every sale's status. A visit with no
+  open sale is sent with `open: null`. `fresh=1` (a tablet that holds no visits yet, for every page of its first pass)
+  skips closed visits. That can't be inferred from cursor 0, because page 2 of a first pass has a cursor above 0; a
+  test caught exactly that. 100 visits a page.
+- **`GET /sync/orders/stream`**: payload-free SSE ("changed"), same pattern as the online queue. `hub.ts` is keyed by topic
+  (`orders:<outlet>`). Published after `/sync/push` applies anything, and after the online void route.
+- **Tablet (Dexie version 5, `visits` table keyed by root, indexed by open sale id).** The pulled visit is stored as sent,
+  so the cursor can move past it safely. What the screen shows is derived (`refold` in `apps/counter/src/order.ts`):
+  `openLines(foldOrder(server events ∪ this device's kept events), closed)`, the server's own construction. Copies
+  collapse by (deviceId, seq), so the echo of our own pushed event is not a second line.
+  - Another device's order is a **view** on the `visits` row (`ownerDeviceId` set), **never a `sales` row**: shift close
+    voids every open `sales` row, and receipts and cash totals read `sales`. Anyone may add, change, remove or move its
+    lines (D18; events name the visit's root). Pay is refused ("take payment there"); the Sell screen disables Cash and UPI
+    and says so.
+  - This device's own visit stays a `sales` row; lines other devices added appear in it, so the payment lists them.
+  - **A split** the server made after our payment (late lines) becomes a new open `sales` row on this device (id = the
+    split, `rootId` = the root). Paying it names the split; its events name the root; kept events are filed under the
+    root, so payment and shift close now delete by root.
+  - **A closing this device has not sent yet wins**: if the local row is paid or void, a pull that still shows the visit open
+    changes nothing. When the closing lands the visit changes, so the next pull brings the result (closed, or a split).
+  - A sale this device shows open that the server says is void (a manager, online) is voided here.
+  - The fold-anomaly guard is now "throw if every event is this device's own (a bug); otherwise show it" (`anomalies` on the
+    row). The server refuses conflicting adds, so this should not happen.
+  - Pulled payloads go through `OrderEvent.parse`; a page that does not parse is not applied (cursor unchanged).
+- **When it pulls**: after every sync (push, menu pull, orders pull), on the stream's nudge, and on reconnect. `pullOrders`
+  runs one at a time, so an older page can't be written over a newer one. New in `App.tsx`: a sync 0.8 s after the outbox
+  grows. Before this, an order change waited for the 60 s timer, which would have made the map up to a minute stale on
+  other devices. `sync` is now single-flight.
+- **Not built in step 7: paying another device's order.** Built in step 7b (below). Voiding another device's order is
+  still not supported.
+- **Known gaps:** the Orders tab lists this device's open orders only; a table with two orders still shows only the first (step 6
+  gap); this device's own *rejected* order events stay folded into its row (as before step 7); a parked rejected payment
+  leaves the local row paid while the server's stays open (as before).
+- **Not mutation-tested:** the trigger being *deferred* (an immediate trigger makes the late-commit test hang, not fail),
+  the publish from the online void route, `pullOrders` running one at a time, the tablet's `fresh`/`ordersPrimed` logic
+  (covered by the browser run, not a mutant), and the lock-held-only-at-commit performance property.
+- **Found while verifying:**
+  - The SSE test left its streams open when an assertion failed, so `app.close()` waited forever and the `ov-no-nudge`
+    mutant hung the mutation run (caught, but never finished). Streams are now closed in `finally`, with
+    `closeAllConnections()`. Any future test of a hijacked stream must do the same.
+  - Stopping `mutation-checks.mjs` from outside (not Ctrl-C) leaves the current mutant in the source. After a stop, check
+    the mutated line is back before anything else.
+  - The step 3 tablet contract test opened on the default table and moved to "the first non-default table". The API suite
+    leaves about 17 open orders on School 1's default table, so after the API suite it saw `table_shared`. Step 5's 37/37
+    had run straight after a fresh seed. It now uses two tables of its own.
+  - The every-table RLS test needs tenant B rows in `order_visit`: the seed adds one empty, voided past table visit per
+    outlet (no table is left busy).
+  - The browser scripts need a fresh seed (the API suite changes seeded PINs): run `fresh`, then the browser scripts.
+
+## Step 7b notes (paying another device's order)
+
+- **Rule.** A table order (`order_root_id` set) may be paid by a cashier on **any device of its outlet**. The money and
+  the receipt belong to the device that paid: the receipt number is from the payer's own series, the payment is in the
+  payer's shift (so the payer's drawer count balances), and `sale.paid_device_id` records the payer. A whole (v1) sale is
+  still paid where it was rung up. **Voiding stays with the opener** (`wrong_device`); a reprint is of the payer's receipt,
+  so it is the payer's (`wrong_device` elsewhere). A device of another outlet is refused (`wrong_outlet`).
+- **Schema** (`0004_trading.sql`, `0001_tenancy.sql`, edited in place):
+  - `sale.paid_device_id`, set by ingest on every payment.
+  - A foreign key to `device(tenant_id, outlet_id, id)`, which is a new unique key on `device`. The payer must be a
+    device of the sale's own outlet; a device's outlet never changes.
+  - It is frozen once the sale leaves `open`, and is only set with a receipt.
+  - The receipt uniqueness is now `(COALESCE(paid_device_id, device_id), business_date, receipt_seq)`. NULL reads as the
+    opener, for rows written before (fixtures). Use the same COALESCE wherever "whose receipt series" is meant.
+- **Changed to follow the payer:** the day-close receipt-gap check (`dayclose.ts`) and the sales-by-counter report
+  (`reports.ts`): the counter that took the money is credited. Shift expected cash already followed the payer (payments
+  are joined by `sale.shift_id`, the payer's shift).
+- **Two devices paying one order.** The visit's root lock serializes them; the second is refused `already_paid`, and the
+  first payment stands (tested both ways). The tablet that lost still shows its row paid with a receipt it printed,
+  and a parked rejected event. This is the "parked rejected payment" gap from step 7, now possible across devices: the
+  counted drawer is over by that amount and the manager sees the rejection. Only cashiers pay, so it needs two cashiers
+  to take the same table's money while one is offline.
+- **Tablet** (`sale.ts` `payOrder`, `order.ts`):
+  - Paying a view makes it this device's paid `sales` row (no `ownerDeviceId`) on this device's receipt counter, and
+    drops the view. Kept events are deleted by root as before.
+  - `refold` now returns nothing when this device holds a paid or void row with that sale id, *whoever opened the visit*.
+    So a pull that comes before the payment lands cannot reopen the view.
+  - On the opener's tablet, a pull showing its open sale as paid (by another device) **deletes** its row. A paid row of
+    this device would never be open, so the money and receipt are not this device's. Unpaid lines it added later come
+    back as its own split, as before.
+  - The Sell screen enables Cash and UPI on another device's order and says the receipt and drawer will be this counter's.
+- **Known gaps:** the opener's Sell screen just finds the table free when its order was paid elsewhere (no "paid at C2"
+  note); voiding another device's order is still not possible; the tablet does not undo a payment the server refused.
+
 ## Steps
 
 | # | Step | Verification | State |
@@ -298,7 +393,8 @@ a moved item's response carries **only its new code**.
 | 4 | Server: relax `sale`/`sale_line` for open orders, ingest v1 and v2, payment rules above, N-1 | **done 2026-11-06.** After `up:fresh`: DB 45/45 (2 new in `db/test/trading.test.mjs`), API 222/222 (13 new in `apps/api/test/running-orders.test.ts`: duplicate and doubled batch, reorder and deferral, two devices adding concurrently, late line after payment, remove/change after payment, the payment winning, settings drift, v1/v2 mixing, void, move, and a property over 12 seeded two-device histories delivered in random order with retries: server rows = `foldOrder`), shared 55/55, tablet 25/25, typecheck clean. 52 mutants run (43 new `order-*`/`ro-*`, plus the retargeted and touched ingest ones): 50 caught at first; `ro-pay-keeps-unpaid` survived, which exposed a missing case (a whole line that reached the server before the payment, but was not in it). That test was added and the mutant re-run and caught; `ro-removed-counts-as-taken` was an equivalent mutant and was dropped. No browser (no UI) | done, uncommitted |
 | 5 | Tablet: local open orders as line events (Dexie version bump), table state, hold/move | **done 2026-11-06.** After `up:fresh`: tablet 37/37 (11 new in `apps/counter/test/order.test.ts`, one a property over 60 seeded histories; 1 new real-API contract in `test/push.test.ts`), counter typecheck clean. 14 mutants `tab-ord-*`/`tab-pay-*`/`tab-shift-*`, 14/14 caught (two re-run after a guard fix, see notes). API, DB and shared suites not re-run (no server or shared code changed). No browser (no screen yet) | done, uncommitted |
 | 6 | UI: Sell redesign per the prototype (table strip and full map, code search with Add button, Popular row, one-tap Cash/UPI, quick cash, auto-return) | **real browser at 1024x768 and 768x1024**, offline toggle | **done 2026-11-06, browser-verified.** `node scripts/browser-sell.mjs` (Playwright, installed Edge, Docker stack on :8080 rebuilt): 27/27 at 1024x768 and 768x1024, log in `.validation/browser-sell.log`, screenshots in `.validation/screens/`. Covers code search and Add, hold/resume, edit and quick-cash pay of a running order, UPI, a sale offline, restaurant table strip and map, no sideways scroll, no page errors. Tablet tests 37/37, typecheck clean. No mutants (UI, not a guard) | done, uncommitted |
-| 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | not started |
+| 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | **done 2026-11-06, browser-verified.** `node scripts/browser-tables.mjs` (two Edge contexts, two devices: cashier 1024x768, waiter 768x1024, map mode, Docker stack rebuilt): 24/24, log in `.validation/browser-tables.log`. Covers the other device's order appearing with no sync pressed (under 1 s), adds both ways with the same total, an offline device's line arriving on reconnect, payment refused on the other device's order, paying its own order with the other device's line, the table freeing on both. `browser-sell.mjs` re-run 27/27. After `up:fresh`: DB 45/45, API 230/230 (8 new in `apps/api/test/orders-pull.test.ts`), tablet 49/49 (11 new in `test/visits.test.ts`, one a property over 40 seeds; 1 new two-device real-API contract in `test/push.test.ts`), typecheck clean. 20 mutants (`ov-*`, `vis-*`, 3 retargeted `tab-*`), 20/20 caught. Shared not re-run (unchanged) | done, uncommitted |
+| 7b | Paying another device's order: any cashier device of the outlet pays a table order, on its own receipt series and shift (`sale.paid_device_id`) | two-browser test | **done 2026-11-06, browser-verified.** `scripts/browser-tables.mjs` 29/29: the counter pays the waiter tablet's order (3 lines, one added offline), the table frees on the waiter's tablet, the counter's next receipt is the next number in its series, and the server row says paid on the counter, on its receipt. `browser-sell.mjs` 27/27. After `up:fresh`: DB 46/46 (1 new), API 234/234 (4 new in `running-orders.test.ts`: payer's receipt/shift/cash, void and reprint rules, both paying, per-payer series and day-close gaps, counter report, another outlet), tablet 51/51 (2 new in `visits.test.ts`; the two-device contract now pays across devices against the real API), typecheck clean. 19 mutants (`pd-*`, `vis-*`, 2 retargeted phase 4 ones), 19/19 caught. Shared not re-run (unchanged) | done, uncommitted |
 | 8 | Playwright run of the whole counter flow against the new screens (the check owed since phase 4) | run recorded in the progress doc | not started |
 
 ### Model per step (see "Model usage plan" in CLAUDE.md; the assistant reminds you before a HIGH step)
@@ -326,8 +422,12 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 6 and 2b are done and verified. Next is **step 7** (12b, HIGH: outlet open-orders pull and SSE nudge; start on
-a HIGH model in a fresh session). Read "Step 5 notes" ("For step 7") and "Step 6 notes". Steps 4 to 6 are uncommitted.
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 7, 2b and 7b are done and verified (7 and 7b with
+a two-browser run). Steps 4 to 7b are uncommitted.
+
+Next is **step 8** (the full counter-flow browser run; STANDARD). Read "Step 7b notes" for what is still open: voiding
+another device's order, and two cashiers paying one table while one is offline (the second payment is refused, but the
+losing tablet keeps its local receipt).
 
 The notes below were written for step 4 and are kept for reference.
 

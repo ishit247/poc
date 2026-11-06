@@ -82,6 +82,26 @@ test('payments must sum to the total of a paid sale (invariant 3), checked at co
   });
 });
 
+test('7b: the paying device is one of the sale\'s outlet, and receipt numbers are unique per PAYING device per day', async () => {
+  await inTx(async (c, x) => {
+    const second = (await c.query(
+      `INSERT INTO device (tenant_id, outlet_id, counter_id, credential_hash) SELECT $1, $2, counter_id, 'x' FROM device WHERE id = $3 RETURNING id`,
+      [A, x.outlet, x.device])).rows[0].id;
+    const far = (await c.query('SELECT id FROM device WHERE outlet_id <> $1 LIMIT 1', [x.outlet])).rows[0].id;
+    const paidBy = async (device, seq) => {
+      const s = await newSale(c, x);
+      await c.query("UPDATE sale SET status = 'paid', receipt_no = $3, receipt_seq = $4, paid_device_id = $2 WHERE id = $1", [s, device, `C1-20260301-${seq}`, seq]);
+    };
+    await fails(c, "UPDATE sale SET status = 'paid', receipt_no = 'C1-20260301-40', receipt_seq = 40, paid_device_id = $2 WHERE id = $1",
+      [await newSale(c, x), far], /foreign key/);
+    await paidBy(second, 41);                                        // rung up on x.device, paid on `second`: second's #41
+    await newSale(c, x, { status: 'paid', seq: 41, no: 'C1-20260301-41' }); // x.device's own #41: another series, accepted
+    await c.query('SAVEPOINT dup');
+    await assert.rejects(paidBy(second, 41), /sale_receipt_uq/);     // second's #41 twice
+    await c.query('ROLLBACK TO dup');
+  });
+});
+
 test('payment rows: change only on cash, tendered = amount + change', async () => {
   await inTx(async (c, x) => {
     const s = await newSale(c, x);
@@ -103,6 +123,7 @@ test('a paid sale cannot be edited, deleted or have its lines/payments changed (
     await fails(c, 'UPDATE sale SET total_paise = 1, subtotal_paise = 1 WHERE id = $1', [s], /cannot be edited/);
     await fails(c, 'UPDATE sale SET round_off_paise = 5, total_paise = total_paise + 5 WHERE id = $1', [s], /cannot be edited/);
     await fails(c, 'UPDATE sale SET receipt_seq = 21 WHERE id = $1', [s], /cannot be edited/);
+    await fails(c, 'UPDATE sale SET paid_device_id = $2 WHERE id = $1', [s, x.device], /cannot be edited/); // whose receipt it is (7b)
     await fails(c, "UPDATE sale SET status = 'open' WHERE id = $1", [s], /cannot go from paid to open/);
     await fails(c, 'UPDATE sale SET created_by = (SELECT id FROM app_user WHERE role = \'waiter\' LIMIT 1) WHERE id = $1', [s], /identity is immutable/);
     await fails(c, 'DELETE FROM sale WHERE id = $1', [s], /permission denied/);

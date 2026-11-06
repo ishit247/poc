@@ -30,10 +30,11 @@ export async function closeShift(args: { device: DeviceInfo; actor: Actor; count
     if (!shift) throw new Error('There is no open shift to close.');
     if (shift.userId !== args.actor.id) throw new Error(`This shift belongs to ${shift.userName}.`);
     // Orders still unpaid when the drawer closes are abandoned (PLAN 9). Voided before the close so the server sees them in order.
+    // Only THIS device's: another device's open orders are views in `visits`, never `sales` rows, and are left alone.
     for (const s of await db.sales.filter((x) => x.status === 'open').toArray()) {
       await queue({ type: 'sale.voided', schemaVersion: EVENT_SCHEMA_VERSION, saleId: s.id, reason: 'abandoned_at_shift_close', at });
       await db.sales.put({ ...s, status: 'void' });
-      await db.orderEvents.where('saleId').equals(s.id).delete();
+      await db.orderEvents.where('saleId').equals(s.rootId ?? s.id).delete();
     }
     await queue({ type: 'shift.closed', schemaVersion: EVENT_SCHEMA_VERSION, shiftId: shift.id, countedCashPaise: args.countedCashPaise, at });
     await db.shifts.put({ ...shift, closedAt: at, countedCashPaise: args.countedCashPaise });

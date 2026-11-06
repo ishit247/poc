@@ -77,8 +77,9 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
 async function receiptGaps(c: pg.PoolClient, outletId: string, date: string) {
   const r = await c.query(
     `SELECT g.device_id AS "deviceId", ct.code AS counter, array_agg(n ORDER BY n) AS missing
-       FROM (SELECT device_id, max(receipt_seq) AS top, array_agg(receipt_seq) AS have
-               FROM sale WHERE outlet_id = $1 AND business_date = $2 AND receipt_seq IS NOT NULL GROUP BY device_id) g
+       FROM (SELECT COALESCE(paid_device_id, device_id) AS device_id, max(receipt_seq) AS top, array_agg(receipt_seq) AS have
+               FROM sale WHERE outlet_id = $1 AND business_date = $2 AND receipt_seq IS NOT NULL
+              GROUP BY COALESCE(paid_device_id, device_id)) g
        JOIN device d ON d.id = g.device_id JOIN counter ct ON ct.id = d.counter_id
        CROSS JOIN LATERAL generate_series(1, g.top) n
       WHERE NOT n = ANY(g.have) GROUP BY g.device_id, ct.code ORDER BY ct.code`, [outletId, date]);

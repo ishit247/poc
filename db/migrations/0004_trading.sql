@@ -110,6 +110,10 @@ CREATE TABLE sale (
   created_at_device timestamptz NOT NULL,
   received_at     timestamptz NOT NULL DEFAULT now(),
   void_reason     text,
+  -- The device that took the payment, whose receipt series the number is from (phase 12 step 7b: any device of the
+  -- outlet may pay a table order). Set by ingest on every payment; NULL on rows written before it (fixtures) reads as
+  -- device_id. Use COALESCE(paid_device_id, device_id) wherever a receipt series is meant.
+  paid_device_id  uuid,
   flags           text[] NOT NULL DEFAULT '{}',
   UNIQUE (tenant_id, id),
   CHECK (total_paise = subtotal_paise + tax_paise + round_off_paise),
@@ -124,6 +128,8 @@ CREATE TABLE sale (
               THEN (status IN ('paid', 'refunded')) = (receipt_no IS NOT NULL AND receipt_seq IS NOT NULL) OR status = 'void'
               ELSE receipt_no IS NULL AND receipt_seq IS NULL END),
   CHECK (status <> 'void' OR void_reason IS NOT NULL),
+  CHECK (paid_device_id IS NULL OR receipt_seq IS NOT NULL),
+  FOREIGN KEY (tenant_id, outlet_id, paid_device_id) REFERENCES device(tenant_id, outlet_id, id),
   FOREIGN KEY (tenant_id, outlet_id)       REFERENCES outlet(tenant_id, id),
   FOREIGN KEY (tenant_id, business_day_id) REFERENCES business_day(tenant_id, id),
   FOREIGN KEY (tenant_id, shift_id)        REFERENCES shift(tenant_id, id),
@@ -132,8 +138,8 @@ CREATE TABLE sale (
   -- The table must belong to the sale's own outlet (NULL skips the check).
   FOREIGN KEY (tenant_id, outlet_id, table_id) REFERENCES dining_table(tenant_id, outlet_id, id)
 );
--- Invariant 5: a receipt number is unique per device per business day.
-CREATE UNIQUE INDEX sale_receipt_uq ON sale (device_id, business_date, receipt_seq) WHERE receipt_seq IS NOT NULL;
+-- Invariant 5: a receipt number is unique per device per business day: per the device that PAID (step 7b).
+CREATE UNIQUE INDEX sale_receipt_uq ON sale ((COALESCE(paid_device_id, device_id)), business_date, receipt_seq) WHERE receipt_seq IS NOT NULL;
 CREATE INDEX sale_creator_open_ix ON sale (created_by) WHERE status = 'open';
 -- One table visit has at most one open sale: lines that arrive after a payment all land on the same split.
 CREATE UNIQUE INDEX sale_one_open_per_order ON sale (order_root_id) WHERE status = 'open' AND order_root_id IS NOT NULL;
@@ -251,8 +257,8 @@ BEGIN
      OR NEW.device_id <> OLD.device_id OR NEW.created_by <> OLD.created_by OR NEW.order_root_id IS DISTINCT FROM OLD.order_root_id THEN
     RAISE EXCEPTION 'sale identity is immutable';
   END IF;
-  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.tax_paise, NEW.round_off_paise, NEW.total_paise, NEW.receipt_no, NEW.receipt_seq, NEW.business_date, NEW.table_id)
-       IS DISTINCT FROM (OLD.subtotal_paise, OLD.tax_paise, OLD.round_off_paise, OLD.total_paise, OLD.receipt_no, OLD.receipt_seq, OLD.business_date, OLD.table_id) THEN
+  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.tax_paise, NEW.round_off_paise, NEW.total_paise, NEW.receipt_no, NEW.receipt_seq, NEW.business_date, NEW.table_id, NEW.paid_device_id)
+       IS DISTINCT FROM (OLD.subtotal_paise, OLD.tax_paise, OLD.round_off_paise, OLD.total_paise, OLD.receipt_no, OLD.receipt_seq, OLD.business_date, OLD.table_id, OLD.paid_device_id) THEN
     RAISE EXCEPTION 'a % sale cannot be edited', OLD.status;
   END IF;
   IF NEW.status <> OLD.status AND NOT (
@@ -319,3 +325,37 @@ CREATE CONSTRAINT TRIGGER sale_order_lines_ck AFTER INSERT OR UPDATE ON sale
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.sale_order_lines_ck();
 CREATE CONSTRAINT TRIGGER line_order_lines_ck AFTER INSERT OR UPDATE OR DELETE ON sale_line
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.line_order_lines_ck();
+
+-- The open-orders pull (phase 12 step 7, "12b"): one row per table visit, stamped with the tenant's commit-ordered
+-- version (app.next_version, see 0003) every time any sale of the visit is written. A device that has pulled up to
+-- version N can never later miss a visit change below N, for the same reason the menu pull cannot.
+-- Every change to a visit writes its sale row (lines are a cache the sale's money must match, so a line write always
+-- comes with a sale write; status changes are sale writes), so a trigger on `sale` alone sees every change, from
+-- ingest or from a route. The stamp is DEFERRED to commit: the tenant's version row is locked only for the moment
+-- between the stamp and the commit, not for the whole ingest transaction.
+CREATE TABLE order_visit (
+  tenant_id uuid NOT NULL REFERENCES tenant(id),
+  root_id   uuid PRIMARY KEY,
+  outlet_id uuid NOT NULL,
+  version   bigint NOT NULL,
+  FOREIGN KEY (tenant_id, root_id)   REFERENCES sale(tenant_id, id),
+  FOREIGN KEY (tenant_id, outlet_id) REFERENCES outlet(tenant_id, id)
+);
+CREATE INDEX order_visit_pull_ix ON order_visit (outlet_id, version);
+SELECT app.enable_tenant_rls('order_visit');
+-- Only the trigger below writes it; the app role reads. REVOKE is what withholds (default privileges grant all four).
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON order_visit FROM pos_app;
+
+CREATE FUNCTION app.stamp_order_visit() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS
+$$
+BEGIN
+  INSERT INTO order_visit (tenant_id, root_id, outlet_id, version)
+  VALUES (NEW.tenant_id, NEW.order_root_id, NEW.outlet_id, app.next_version(NEW.tenant_id))
+  ON CONFLICT (root_id) DO UPDATE SET version = EXCLUDED.version;
+  RETURN NULL;
+END
+$$;
+REVOKE EXECUTE ON FUNCTION app.stamp_order_visit() FROM PUBLIC;
+CREATE CONSTRAINT TRIGGER sale_stamp_order_visit AFTER INSERT OR UPDATE ON sale
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.order_root_id IS NOT NULL) EXECUTE FUNCTION app.stamp_order_visit();

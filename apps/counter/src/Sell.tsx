@@ -4,7 +4,7 @@ import { addItem, formatRupees, paise, setQty, totals, type Cart, type MenuEntry
 import { db, type DeviceInfo, type LocalSale } from './db.ts';
 import type { MenuView } from './menu.ts';
 import { createSale, payOrder, type Actor } from './sale.ts';
-import { addToOrder, openOrder, setLineQty, tableMode, tableStates } from './order.ts';
+import { addToOrder, openOrder, orderById, setLineQty, tableMode, tableStates } from './order.ts';
 import { useItemImageUrl } from './itemImages.ts';
 import { PayDialog } from './PayDialog.tsx';
 import { Receipt } from './Receipt.tsx';
@@ -47,8 +47,9 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
 
   const mode = useLive(tableMode, 'default' as 'default' | 'map');
   const states = useLive(tableStates, []);
-  const order = useLive(async () => (orderId ? (await db.sales.get(orderId)) ?? null : null), null as LocalSale | null, [orderId]);
+  const order = useLive(async () => (orderId ? (await orderById(orderId)) ?? null : null), null as LocalSale | null, [orderId]);
   const activeOrder = order && order.status === 'open' ? order : null;
+  const otherDevice = !!activeOrder?.ownerDeviceId; // another device's order: it may be added to and paid here (step 7b)
   const defaultTable = states.find((s) => s.table.isDefault)?.table;
 
   // The items this counter sells most, from its own sales: nothing to maintain, and empty on a new counter.
@@ -248,6 +249,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           {roundOff !== 0 && (<><dt>Round off</dt><dd data-testid="round-off">{roundOff < 0 ? '−' : '+'}₹{rs(Math.abs(roundOff))}</dd></>)}
           <dt className="total">Total</dt><dd className="total" data-testid="total">₹{rs(total)}</dd>
         </dl>
+        {otherDevice && <p className="warn" data-testid="other-device">Opened on another device. Paid here, it goes on this counter's receipt and drawer.</p>}
         {actor.role === 'cashier' && (
           <div className="payrow">
             <button data-testid="pay-cash" className="primary" disabled={lines.length === 0} onClick={() => setPaying('cash')}>Cash ₹{rs(total)}</button>

@@ -42,7 +42,8 @@ async function takePayment(device: DeviceInfo, sale: LocalSale, tenders: Tender[
     // v2: exactly the lines on screen, at the quantities on screen, for the total on screen. The payment wins on the
     // server (step 4), so what is listed here is what the receipt says, whatever another device did meanwhile.
     await queue({ ...common, schemaVersion: ORDER_SCHEMA_VERSION, lines: sale.lines.map((l) => ({ lineId: l.lineId!, qty: l.qty })), totalPaise: sale.totalPaise });
-    await db.orderEvents.where('saleId').equals(sale.id).delete(); // settled: the paid sale row is the record now
+    // Settled: the paid sale row is the record now. Kept events are filed under the visit's root (a split's id differs).
+    await db.orderEvents.where('saleId').equals(sale.rootId ?? sale.id).delete();
   } else {
     await queue({ ...common, schemaVersion: EVENT_SCHEMA_VERSION });
   }
@@ -74,14 +75,29 @@ export async function createSale(args: {
   });
 }
 
-/** A cashier pays an order that a waiter (or they) saved earlier. */
+/**
+ * A cashier pays an order that a waiter (or they) saved earlier, on this device or another one of the outlet (step 7b).
+ * Another device's order is a view on its `visits` row; once paid HERE it becomes this device's `sales` row: the receipt
+ * is from this device's series and the cash is in this drawer, which is what the server records too (`paid_device_id`,
+ * this shift). The view is dropped, and `refold` never brings it back while this row is paid.
+ */
 export async function payOrder(args: { device: DeviceInfo; actor: Actor; saleId: string; tenders: Tender[]; now?: Date }): Promise<LocalSale> {
   if (args.actor.role !== 'cashier') throw new Error('only a cashier takes payment');
-  return db.transaction('rw', [db.sales, db.outbox, db.meta, db.shifts, db.orderEvents], async () => {
-    const sale = await db.sales.get(args.saleId);
+  return db.transaction('rw', [db.sales, db.outbox, db.meta, db.shifts, db.orderEvents, db.visits], async () => {
+    const own = await db.sales.get(args.saleId);
+    const visit = own ? undefined : await db.visits.where('openSaleId').equals(args.saleId).first();
+    let sale: LocalSale | undefined = own;
+    if (!own && visit?.view) {
+      const { ownerDeviceId: _owner, ...rest } = visit.view;
+      sale = rest;
+    }
     if (!sale || sale.status !== 'open') throw new Error('that order is not open');
     const paid = await takePayment(args.device, sale, args.tenders, businessDate(args.device.timezone, args.now ?? new Date()), await drawerFor(args.actor));
     await db.sales.put(paid);
+    if (visit) {
+      const { view: _view, ...kept } = visit;
+      await db.visits.put(kept);
+    }
     return paid;
   });
 }

@@ -22,8 +22,9 @@ const money = (key: string, label: string, sum = true): Col => ({ key, label, ki
 const OUTLET = text('outlet', 'Outlet');
 
 // Paid sales in range: the base every sales report reads. A refunded or void sale is reported by `voids`.
+// `device_id` here is the counter that took the money (a table order may be paid on another device, step 7b).
 const PAID = `
-  SELECT s.id, s.device_id, s.created_by, s.channel, s.business_date, s.total_paise, s.tax_paise, s.created_at_device,
+  SELECT s.id, COALESCE(s.paid_device_id, s.device_id) AS device_id, s.created_by, s.channel, s.business_date, s.total_paise, s.tax_paise, s.created_at_device,
          o.name AS outlet, o.timezone
     FROM sale s JOIN outlet o ON o.id = s.outlet_id
    WHERE s.outlet_id = ANY($1::uuid[]) AND s.business_date BETWEEN $2::date AND $3::date AND s.status = 'paid'`;

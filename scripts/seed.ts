@@ -202,6 +202,14 @@ for (const t of Object.values(SEED)) {
                          subtotal_paise, tax_paise, total_paise, created_at_device)
        VALUES (gen_random_uuid(), $1, $2, '2026-01-02', $3, $4, 'open', 1, 1000, 50, 1050, '2026-01-02T09:00:00Z') RETURNING id`,
       [t.id, outletId, deviceIds[n], waiterIds[n]]);
+    // A past table visit, voided (empty, so its money is zero): every tenant then has an order_visit row (phase 12
+    // step 7), and no table is left occupied for the tests and browser runs that seat T1.
+    await client.query(
+      `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, status, void_reason, menu_version, table_id, order_root_id,
+                         subtotal_paise, tax_paise, total_paise, created_at_device)
+       SELECT v.id, $1, $2, '2026-01-02', $3, $4, 'void', 'abandoned_at_shift_close', 1, dt.id, v.id, 0, 0, 0, '2026-01-02T08:00:00Z'
+         FROM (SELECT gen_random_uuid() AS id) v, dining_table dt WHERE dt.outlet_id = $2 AND dt.is_default AND dt.deleted_at IS NULL`,
+      [t.id, outletId, deviceIds[n], waiterIds[n]]);
     await client.query(
       `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
        VALUES ($1, $2, $3, 'Tea', 1000, 500, 1, 1000, 50)`, [t.id, open.rows[0].id, itemIds['Tea']]);

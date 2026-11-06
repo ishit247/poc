@@ -34,21 +34,22 @@ class Tab {
   seq = 0;
   receipt = 0;
   constructor(readonly app: App, readonly cred: string, readonly deviceId: string, readonly outletId: string,
-              readonly cashierId: string, readonly waiterId: string, readonly teaId: string, readonly tableId: string) {}
+              readonly cashierId: string, readonly waiterId: string, readonly teaId: string, readonly tableId: string,
+              readonly counterCode = 'C1') {}
 
-  static async enrol(app: App, email = 'a1@example.test', outletName = 'School 1 Canteen'): Promise<Tab> {
+  static async enrol(app: App, email = 'a1@example.test', outletName = 'School 1 Canteen', counterCode = 'C1'): Promise<Tab> {
     const mgr = (await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(A) }, payload: { email, password: 'dev-password-123' } })).json().token as string;
     const o = await withTenant(A, async (c) =>
-      (await c.query(`SELECT o.id, (SELECT id FROM counter WHERE outlet_id = o.id AND code = 'C1') AS counter_id,
+      (await c.query(`SELECT o.id, (SELECT id FROM counter WHERE outlet_id = o.id AND code = $2) AS counter_id,
                              (SELECT id FROM dining_table WHERE outlet_id = o.id AND is_default AND deleted_at IS NULL) AS table_id
-                        FROM outlet o WHERE o.name = $1`, [outletName])).rows[0]);
+                        FROM outlet o WHERE o.name = $1`, [outletName, counterCode])).rows[0]);
     const code = (await app.inject({ method: 'POST', url: '/enrolment-codes', headers: bearer(mgr), payload: { outletId: o.id, counterId: o.counter_id } })).json().code;
     const cred = (await app.inject({ method: 'POST', url: '/enrol', payload: { code } })).json().credential as string;
     const id = (sql: string, args: unknown[]) => withTenant(A, async (c) => (await c.query(sql, args)).rows[0].id as string);
     return new Tab(app, cred, cred.split('.')[1]!, o.id,
       await id('SELECT id FROM app_user WHERE name = $1', [`${outletName} cashier`]),
       await id('SELECT id FROM app_user WHERE name = $1', [`${outletName} waiter`]),
-      await id("SELECT id FROM item WHERE name = 'Tea'", []), o.table_id);
+      await id("SELECT id FROM item WHERE name = 'Tea'", []), o.table_id, counterCode);
   }
   /** A second tablet at the same outlet (another counter's device, or a waiter's). */
   static async second(app: App): Promise<Tab> { return Tab.enrol(app); }
@@ -78,7 +79,7 @@ class Tab {
   }
   pay(saleId: string, lines: [string, number][], totalPaise: number) {
     const n = ++this.receipt;
-    return this.ev({ type: 'payment.taken', schemaVersion: 2, saleId, businessDate: DATE, receiptNo: `C1-${DATE.replaceAll('-', '')}-${n}`, receiptSeq: n,
+    return this.ev({ type: 'payment.taken', schemaVersion: 2, saleId, businessDate: DATE, receiptNo: `${this.counterCode}-${DATE.replaceAll('-', '')}-${n}`, receiptSeq: n,
       payments: [{ method: 'cash', amountPaise: totalPaise, tenderedPaise: totalPaise, changePaise: 0, upiRef: null }],
       lines: lines.map(([lineId, qty]) => ({ lineId, qty })), totalPaise });
   }
@@ -433,4 +434,100 @@ test('property: any delivery order, with retries, leaves the server\'s order equ
     assert.equal(row.table_id, f.tableId, `seed ${seed}: table`);
     assert.equal(row.total, totals(liveLines(f), s0).total, `seed ${seed}: total`);
   }
+});
+
+// --- Step 7b: a table order paid on another device of its outlet.
+const shiftOpened = (t: Tab, shiftId: string) =>
+  t.ev({ type: 'shift.opened', schemaVersion: 1, shiftId, userId: t.cashierId, openingCashPaise: 0, at: tick() });
+const shiftClosed = (t: Tab, shiftId: string, countedCashPaise: number) =>
+  t.ev({ type: 'shift.closed', schemaVersion: 1, shiftId, countedCashPaise, at: tick() });
+/** `t.pay`, in `shiftId`'s drawer. */
+const payIn = (t: Tab, shiftId: string, saleId: string, ls: [string, number][], total: number) => {
+  const e = t.pay(saleId, ls, total);
+  e.payload.shiftId = shiftId;
+  return e;
+};
+
+test('7b: a table order is paid on another device of its outlet: that device\'s receipt, shift and cash; void stays with the opener, reprint with the payer', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const table = await a.newTable();
+  const [s, l1, s2, sh] = ids(4);
+  assert.deepEqual(statuses(await a.push([a.open(s!, { tableId: table }), a.add(s!, l1!, 2), a.open(s2!, { tableId: await a.newTable() })])), ['applied', 'applied', 'applied']);
+  const total = await totalOf([[1000, 2]]);
+
+  assert.deepEqual(statuses(await b.push([shiftOpened(b, sh!), payIn(b, sh!, s!, [[l1!, 2]], total)])), ['applied', 'applied']);
+  const row = await withTenant(A, async (c) => (await c.query(
+    'SELECT status, device_id, paid_device_id, shift_id, receipt_seq FROM sale WHERE id = $1', [s])).rows[0]);
+  assert.deepEqual(row, { status: 'paid', device_id: a.deviceId, paid_device_id: b.deviceId, shift_id: sh, receipt_seq: 1 });
+  assert.deepEqual(await splits(s!), [], 'paid in full');
+
+  // The cash is in B's drawer: B's count of exactly that balances.
+  assert.deepEqual(statuses(await b.push([shiftClosed(b, sh!, total)])), ['applied']);
+  const shift = await withTenant(A, async (c) => (await c.query('SELECT expected_cash_paise::int AS e, variance_paise::int AS v FROM shift WHERE id = $1', [sh])).rows[0]);
+  assert.deepEqual(shift, { e: total, v: 0 });
+
+  // The receipt is B's: B reprints it, A cannot. Voiding A's other open order stays with A.
+  const reprint = (t: Tab) => t.ev({ type: 'print.reprinted', schemaVersion: 1, saleId: s, reprintedBy: t.cashierId, at: tick() });
+  assert.deepEqual(statuses(await a.push([reprint(a)])), ['rejected:wrong_device']);
+  assert.deepEqual(statuses(await b.push([reprint(b)])), ['applied']);
+  const voidIt = (t: Tab) => t.ev({ type: 'sale.voided', schemaVersion: 1, saleId: s2, reason: 'abandoned_at_shift_close', at: tick() });
+  assert.deepEqual(statuses(await b.push([voidIt(b)])), ['rejected:wrong_device']);
+  assert.deepEqual(statuses(await a.push([voidIt(a)])), ['applied']);
+
+  // The opener, not knowing, pays too: refused, the first payment stands.
+  assert.deepEqual(statuses(await a.push([a.pay(s!, [[l1!, 2]], total)])), ['rejected:already_paid']);
+  assert.equal((await sale(s!)).status, 'paid');
+});
+
+test('7b: receipt numbers run per paying device: one series across the orders it pays, and the opener\'s own series is untouched', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app), c = await Tab.second(app);
+  const [s1, l1, s2, l2, s3, l3, s4, l4] = ids(8);
+  await a.push([a.open(s1!, { tableId: await a.newTable() }), a.add(s1!, l1!, 1), a.open(s4!, { tableId: await a.newTable() }), a.add(s4!, l4!, 1)]);
+  await c.push([c.open(s2!, { tableId: await c.newTable() }), c.add(s2!, l2!, 1), c.open(s3!, { tableId: await c.newTable() }), c.add(s3!, l3!, 1)]);
+  const total = await totalOf([[1000, 1]]);
+
+  // B pays A's order (B's #1) and C's (B's #2): no gap in B's series, none charged to A or C.
+  assert.deepEqual(statuses(await b.push([b.pay(s1!, [[l1!, 1]], total), b.pay(s2!, [[l2!, 1]], total)])), ['applied', 'applied']);
+  // A's own #1 is A's: not a clash with B's #1 although both are on A's orders.
+  assert.deepEqual(statuses(await a.push([a.pay(s4!, [[l4!, 1]], total)])), ['applied']);
+  // B's #2 again, on C's other order: the same receipt twice in B's series, refused.
+  b.receipt = 1;
+  const dup = await b.push([b.pay(s3!, [[l3!, 1]], total)]);
+  assert.match(dup[0]!.reason ?? '', /^database:sale_receipt_uq$/);
+
+  const mgr = (await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(A) }, payload: { email: 'a1@example.test', password: 'dev-password-123' } })).json().token as string;
+  const dc = await app.inject({ method: 'GET', url: `/outlets/${a.outletId}/day-close?date=${DATE}`, headers: bearer(mgr) });
+  assert.equal(dc.statusCode, 200, dc.body);
+  const gaps = (dc.json().receiptGaps as { deviceId: string; missing: number[] }[]).filter((g) => [a.deviceId, b.deviceId, c.deviceId].includes(g.deviceId));
+  assert.deepEqual(gaps, [], 'each device\'s series is whole');
+});
+
+test('7b: the sales-by-counter report credits the counter that took the money', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), c2 = await Tab.enrol(app, 'a1@example.test', 'School 1 Canteen', 'C2');
+  const [s, l1] = ids(2);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 7, { price: 1300 })]);
+  const total = await totalOf([[1300, 7]]);
+  const mgr = (await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(A) }, payload: { email: 'a1@example.test', password: 'dev-password-123' } })).json().token as string;
+  const byCounter = async () => {
+    const r = await app.inject({ method: 'GET', url: `/reports/sales?${new URLSearchParams({ from: DATE, to: DATE, outletId: a.outletId, by: 'counter' })}`, headers: bearer(mgr) });
+    assert.equal(r.statusCode, 200, r.body);
+    return Object.fromEntries((r.json().rows as { label: string; gross: number }[]).map((x) => [x.label, Number(x.gross)]));
+  };
+  const before = await byCounter();
+  assert.deepEqual(statuses(await c2.push([c2.pay(s!, [[l1!, 7]], total)])), ['applied']);
+  const after = await byCounter();
+  assert.equal((after.C2 ?? 0) - (before.C2 ?? 0), total, 'C2 took the money');
+  assert.equal((after.C1 ?? 0) - (before.C1 ?? 0), 0, 'not C1, where the order was rung up');
+});
+
+test('7b: a device of another outlet cannot pay the order', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), far = await Tab.enrol(app, 'a2@example.test', 'School 2 Canteen');
+  const [s, l1] = ids(2);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 1)]);
+  assert.deepEqual(statuses(await far.push([far.pay(s!, [[l1!, 1]], await totalOf([[1000, 1]]))])), ['rejected:wrong_outlet']);
+  assert.equal((await sale(s!)).status, 'open');
 });

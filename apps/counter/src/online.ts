@@ -1,6 +1,7 @@
 // Online orders are online-only (PLAN 10.7). The server session lives in memory and is gone on reload; nothing
 // here touches the outbox or the local database. A signed-in cashier asks the server for a session with the
 // same PIN they just used offline.
+import { watchStream } from './stream.ts';
 
 export interface OnlineOrder {
   id: string; saleId: string; outletId: string; channel: 'zomato' | 'swiggy'; externalOrderId: string;
@@ -35,35 +36,9 @@ export async function call<T>(token: string, path: string, init: { method?: stri
   return { status: r.status, body: (await r.json().catch(() => ({}))) as T };
 }
 
-/**
- * Listens for "the queue changed" and calls `onChange`. Reads the stream with fetch because EventSource cannot send
- * the session header. Reconnects after a pause; `onLive` says whether the stream is up, so the screen can fall back
- * to polling while it is not. Returns a function that stops everything.
- */
+/** Listens for "the queue changed" and calls `onChange` (see watchStream). Returns a function that stops it. */
 export function watchQueue(token: string, onChange: () => void, onLive: (live: boolean) => void): () => void {
-  const ac = new AbortController();
-  let stopped = false;
-  void (async () => {
-    while (!stopped) {
-      try {
-        const r = await fetch('/api/online-orders/stream', { headers: { authorization: `Bearer ${token}` }, signal: ac.signal });
-        if (!r.ok || !r.body) throw new Error(String(r.status));
-        onLive(true);
-        onChange(); // anything that changed while the stream was down
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (dec.decode(value).includes('event: changed')) onChange();
-        }
-      } catch { /* fall through to the pause */ }
-      if (stopped) return;
-      onLive(false);
-      await new Promise((res) => setTimeout(res, 5000));
-    }
-  })();
-  return () => { stopped = true; ac.abort(); };
+  return watchStream('/online-orders/stream', `Bearer ${token}`, onChange, onLive);
 }
 
 /** "2:05" until the deadline, or "overdue". */

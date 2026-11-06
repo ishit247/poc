@@ -2,7 +2,7 @@
 // with no network lives here: the pulled catalogue and staff, the receipt counter, open
 // orders, and the outbox of events waiting to sync (push is phase 4).
 import Dexie, { type Table } from 'dexie';
-import type { OrderEvent, OutboxEvent, PinAttemptState, ReceiptCounter, PaymentRecord } from '@pos/shared';
+import type { ClosedLine, OrderEvent, OutboxEvent, PinAttemptState, ReceiptCounter, PaymentRecord } from '@pos/shared';
 
 export interface DeviceInfo {
   credential: string;
@@ -34,6 +34,18 @@ export interface LocalSale {
   kind?: 'whole' | 'order';
   /** The table an order sits on (the outlet's default table in a cafe). Null or absent for a whole sale. */
   tableId?: string | null;
+  /**
+   * The table visit an order belongs to: the sale `order.opened` created (D15). Absent means the order is its own root.
+   * A split (lines that reached the server after a payment) is a new sale id under the same root; its events name the root.
+   */
+  rootId?: string;
+  /**
+   * Set only on a view of ANOTHER device's order (a `visits` row): that device takes payment for it, and voids it.
+   * Such an order never lives in `sales`, so shift close, receipts and cash totals cannot touch it.
+   */
+  ownerDeviceId?: string;
+  /** Fold anomalies seen while merging another device's events: shown, not merged away (should not happen). */
+  anomalies?: string[];
   /** For an order, the LIVE lines only, each with its lineId; removed lines stay in the fold, not here. */
   lines: { lineId?: string; itemId: string; name: string; unitPaise: number; gstRateBp: number; qty: number; netPaise: number; taxPaise: number }[];
   subtotalPaise: number;
@@ -74,6 +86,23 @@ export interface OutboxRow {
  */
 export interface OrderEventRow { deviceId: string; seq: number; saleId: string; payload: OrderEvent }
 
+/**
+ * A table visit as the server last sent it (`/sync/orders`, phase 12 step 7): every order event it has applied, from
+ * any device (saleId renamed to the root), and the lines its closed sales took. Stored as pulled, so the cursor can
+ * move past it safely; what the screen shows is derived from it and this device's own unsent events (order.ts).
+ */
+export interface VisitRow {
+  rootId: string;
+  /** The visit's open sale on the server: the root, or a split. */
+  openSaleId: string;
+  /** The device that opened the visit: it alone takes payment (a split keeps the root's device). */
+  ownerDeviceId: string;
+  events: { deviceId: string; seq: number; payload: OrderEvent }[];
+  closed: ClosedLine[];
+  /** Another device's order as this device shows it. Absent when this device owns it (then it is a `sales` row). */
+  view?: LocalSale;
+}
+
 /** The tenant's logo, cached so the header and receipt show it with no network. Keyed by content hash. */
 export interface LogoRow { sha: string; type: string; bytes: ArrayBuffer }
 
@@ -87,7 +116,10 @@ export type MetaValue =
   | { key: 'lastPull'; value: string }
   | { key: 'lastPush'; value: string }
   /** The latest time stamped on an order event. Order event times never go backwards on one device (the fold needs it). */
-  | { key: 'eventClock'; value: string };
+  | { key: 'eventClock'; value: string }
+  /** The open-orders pull: cursor, and whether a first full pass has finished (until then, closed visits are skipped). */
+  | { key: 'orderCursor'; value: number }
+  | { key: 'ordersPrimed'; value: boolean };
 
 class CounterDb extends Dexie {
   meta!: Table<MetaValue, string>;
@@ -99,6 +131,7 @@ class CounterDb extends Dexie {
   shifts!: Table<LocalShift, string>;
   itemImages!: Table<ItemImageRow, string>;
   orderEvents!: Table<OrderEventRow, [string, number]>;
+  visits!: Table<VisitRow, string>;
 
   constructor() {
     super('counter');
@@ -114,6 +147,8 @@ class CounterDb extends Dexie {
     this.version(3).stores({ itemImages: 'sha' });
     // Phase 12: running orders. Existing sales need no upgrade: no `kind` means a whole sale, no `tableId` is no table.
     this.version(4).stores({ sales: 'id, status, createdBy, tableId', orderEvents: '[deviceId+seq], saleId' });
+    // Phase 12 step 7: other devices' open orders, as pulled. New table only; nothing to upgrade.
+    this.version(5).stores({ visits: 'rootId, openSaleId' });
   }
 }
 

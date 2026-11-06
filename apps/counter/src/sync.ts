@@ -4,6 +4,8 @@
 import { db, getMeta, type DeviceInfo } from './db.ts';
 import { syncLogo } from './logo.ts';
 import { syncItemImages } from './itemImages.ts';
+import { applyVisits, localSettings, type PulledVisit } from './order.ts';
+import { watchStream } from './stream.ts';
 
 interface Change { type: string; id: string; version: number; deleted: boolean; data: Record<string, any> }
 
@@ -47,6 +49,47 @@ export async function pull(device: DeviceInfo): Promise<number> {
     }
   }
   throw new Error('pull did not terminate');
+}
+
+/**
+ * The open-orders pull (phase 12 step 7): the outlet's table visits that changed since our cursor, applied page by
+ * page with the cursor in the same transaction (see `pull`). Runs one at a time: a nudge arriving during a pull
+ * waits for it, so an older page can never be written over a newer one.
+ */
+let ordersRun: Promise<number> = Promise.resolve(0);
+export function pullOrders(device: DeviceInfo): Promise<number> {
+  const run = ordersRun.catch(() => 0).then(() => pullOrdersNow(device));
+  ordersRun = run;
+  return run;
+}
+
+async function pullOrdersNow(device: DeviceInfo): Promise<number> {
+  let cursor = (await getMeta('orderCursor')) ?? 0;
+  // Until a first full pass ends, this tablet holds no visits, so closed ones are of no use to it (the server skips them).
+  const fresh = !(await getMeta('ordersPrimed'));
+  let applied = 0;
+  for (let page = 0; page < 200; page++) {
+    const r = await fetch(`/api/sync/orders?cursor=${cursor}${fresh ? '&fresh=1' : ''}`, {
+      headers: { authorization: `Device ${device.credential}`, 'x-app-version': __APP_VERSION__ },
+    });
+    if (!r.ok) throw new Error(`orders pull failed: ${r.status}`);
+    const j = (await r.json()) as { cursor: number; hasMore: boolean; visits: PulledVisit[] };
+    const settings = await localSettings();
+    await db.transaction('rw', [db.visits, db.sales, db.orderEvents, db.entities, db.meta], async () => {
+      await applyVisits(device, j.visits, settings);
+      await db.meta.put({ key: 'orderCursor', value: j.cursor });
+      if (!j.hasMore) await db.meta.put({ key: 'ordersPrimed', value: true });
+    });
+    applied += j.visits.length;
+    cursor = j.cursor;
+    if (!j.hasMore) return applied;
+  }
+  throw new Error('orders pull did not terminate');
+}
+
+/** Pulls open orders whenever the server says one at this outlet changed. Returns a function that stops it. */
+export function watchOrders(device: DeviceInfo, onLive?: (live: boolean) => void): () => void {
+  return watchStream('/sync/orders/stream', `Device ${device.credential}`, () => { void pullOrders(device).catch(() => {}); }, onLive);
 }
 
 export interface PushSummary { sent: number; done: number; parked: number; deferred: number }

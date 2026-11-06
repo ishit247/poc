@@ -10,11 +10,20 @@
 //   device added is never bumped from here: a new line is added instead, so two waiters each adding "one more tea"
 //   both land (adds are a union; changes are last-wins). Setting a quantity is an explicit edit and is last-wins.
 // - Quantity 0 is a removal (`order.line_removed`), never a change to 0.
+//
+// Other devices' orders (step 7, "12b"). `/sync/orders` sends each changed visit whole (`visits` table). What this
+// device shows for a visit is, again by construction, the server's own computation: the shared fold of the events the
+// server applied PLUS this device's own kept events (unsent ones included; copies collapse by (deviceId, seq)), less
+// what the visit's closed sales took (`openLines`). Where that lands depends on who opened the visit:
+// - this device: a `sales` row (the root, or a split the server made after a payment), paid and voided here as before;
+// - another device: a `view` on the `visits` row, never a `sales` row, so shift close, receipts and cash totals here
+//   cannot touch it. Anyone may add, change or remove its lines (D18), and any cashier may pay it (step 7b: paying
+//   turns it into this device's paid `sales` row, see `payOrder`). Only its own device voids it.
 import {
-  addItem, foldOrder, liveLines, totals, ORDER_SCHEMA_VERSION,
-  type Cart, type MenuEntry, type OrderEvent, type TradingSettings,
+  addItem, foldOrder, liveLines, openLines, totals, DEFAULT_SETTINGS, OrderEvent, ORDER_SCHEMA_VERSION,
+  type Cart, type ClosedLine, type MenuEntry, type OrderEnvelope, type OrderOpened, type TradingSettings,
 } from '@pos/shared';
-import { db, getMeta, type DeviceInfo, type LocalSale } from './db.ts';
+import { db, getMeta, type DeviceInfo, type LocalSale, type VisitRow } from './db.ts';
 import { businessDate, queue, type Actor } from './sale.ts';
 
 export interface LocalTable { id: string; code: string; sortOrder: number; isDefault: boolean }
@@ -33,16 +42,36 @@ export async function tableMode(): Promise<'default' | 'map'> {
   return outlet?.data.tableMode === 'map' ? 'map' : 'default';
 }
 
-/** Each table with the open orders on it. Occupancy is derived from open orders, never stored (D14). */
+/** The open orders this device knows of: its own (`sales`) and other devices' (`visits` views). */
+async function openOrders(): Promise<LocalSale[]> {
+  const own = (await db.sales.where('status').equals('open').toArray()).filter((s) => s.kind === 'order');
+  const others = (await db.visits.toArray()).flatMap((v) => (v.view ? [v.view] : []));
+  return [...own, ...others];
+}
+
+/** Each table with the open orders on it, this device's and others'. Occupancy is derived from open orders, never stored (D14). */
 export async function tableStates(): Promise<{ table: LocalTable; orders: LocalSale[] }[]> {
-  const open = (await db.sales.where('status').equals('open').toArray()).filter((s) => s.kind === 'order');
+  const open = await openOrders();
   return (await tables()).map((table) => ({
     table,
     orders: open.filter((s) => s.tableId === table.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
   }));
 }
 
-const ALL = () => [db.sales, db.outbox, db.meta, db.orderEvents, db.entities];
+/** The order with this sale id: this device's own row, or its view of another device's order. */
+export async function orderById(saleId: string): Promise<LocalSale | undefined> {
+  return (await db.sales.get(saleId)) ?? (await db.visits.where('openSaleId').equals(saleId).first())?.view;
+}
+
+/** The tenant's trading settings as last pulled (the same source the Sell screen's menu uses). */
+export async function localSettings(): Promise<TradingSettings> {
+  const row = await db.entities.where('type').equals('tenant_setting').first();
+  return { ...DEFAULT_SETTINGS, ...(row?.data as Partial<TradingSettings> | undefined) };
+}
+
+const rootOf = (s: LocalSale) => s.rootId ?? s.id;
+
+const ALL = () => [db.sales, db.outbox, db.meta, db.orderEvents, db.entities, db.visits];
 
 /** A device time for the next order event: now, or the last one stamped if the clock went back. Call inside the transaction. */
 async function stamp(now: Date): Promise<string> {
@@ -58,29 +87,113 @@ async function write(device: DeviceInfo, payload: OrderEvent): Promise<void> {
   await db.orderEvents.add({ deviceId: device.deviceId, seq, saleId: payload.saleId, payload });
 }
 
-/** Rewrites the order's row from the fold of the events this device holds for it. */
-async function refold(sale: LocalSale, settings: TradingSettings): Promise<LocalSale> {
-  const events = await db.orderEvents.where('saleId').equals(sale.id).toArray();
-  const fold = foldOrder(sale.id, events.map((e) => ({ deviceId: e.deviceId, seq: e.seq, payload: e.payload })));
-  // Every event here was written by this file, so a conflict or orphan is a bug, not a race: stop before saving it.
-  if (fold.anomalies.length) throw new Error(`order ${sale.id} folded with anomalies: ${fold.anomalies.map((a) => a.kind).join(', ')}`);
-  const live = liveLines(fold);
+/** Every event this device knows for a visit, named by its root: as the server last sent them, plus this device's own kept copies. */
+async function visitEvents(rootId: string, visit: VisitRow | undefined): Promise<OrderEnvelope[]> {
+  const own = await db.orderEvents.where('saleId').equals(rootId).toArray();
+  return [...(visit?.events ?? []), ...own].map((e) => ({ deviceId: e.deviceId, seq: e.seq, payload: { ...e.payload, saleId: rootId } }));
+}
+
+/** A row for an open sale this device has not held before (another device's order, or a split): from the visit's opening. */
+async function fromOpened(saleId: string, opened: OrderOpened): Promise<LocalSale> {
+  const user = await db.entities.get(['user', opened.createdBy]);
+  return {
+    id: saleId, status: 'open', kind: 'order', tableId: opened.tableId, createdBy: opened.createdBy, createdByName: String(user?.data.name ?? ''),
+    channel: 'counter', businessDate: opened.businessDate, createdAt: opened.createdAtDevice, menuVersion: opened.menuVersion,
+    lines: [], subtotalPaise: 0, taxPaise: 0, roundOffPaise: 0, totalPaise: 0, receiptNo: null, receiptSeq: null, payments: [],
+  };
+}
+
+/**
+ * Rewrites what this device shows for a visit (see the top of this file). Returns the row or view, or undefined when
+ * there is nothing open to show: this device closed it and the server has not heard yet (the closing is in the outbox;
+ * when it lands the visit changes, so the pull sends it again), or the opening has not arrived. Call inside a transaction.
+ */
+async function refold(device: DeviceInfo, rootId: string, settings: TradingSettings): Promise<LocalSale | undefined> {
+  const visit = await db.visits.get(rootId);
+  const events = await visitEvents(rootId, visit);
+  const fold = foldOrder(rootId, events);
+  // Only this device's events, all written by this file: a conflict or orphan is a bug, not a race. Stop before saving it.
+  // With other devices' events in, show the order and its anomalies rather than lock the table (the server refuses
+  // conflicting adds, so this should not happen either).
+  const foreign = events.some((e) => e.deviceId !== device.deviceId);
+  if (fold.anomalies.length && !foreign) throw new Error(`order ${rootId} folded with anomalies: ${fold.anomalies.map((a) => a.kind).join(', ')}`);
+
+  const saleId = visit?.openSaleId ?? rootId;
+  const mine = (visit?.ownerDeviceId ?? device.deviceId) === device.deviceId;
+  const own = await db.sales.get(saleId);
+  // This device closed that sale (paid it, even if another device opened it: step 7b; or voided it) and the server has
+  // not heard yet. The closing wins; there is nothing open here to show.
+  if (own && own.status !== 'open') return undefined;
+  const existing = mine ? own : visit!.view;
+  const base = existing ?? (fold.opened ? await fromOpened(saleId, fold.opened) : undefined);
+  if (!base) return undefined;
+
+  const live = liveLines({ ...fold, lines: openLines(fold, visit?.closed ?? []) });
   const t = totals(live, settings);
+  const { anomalies: _stale, ownerDeviceId: _owner, ...rest } = base;
   const next: LocalSale = {
-    ...sale,
-    tableId: fold.tableId,
+    ...rest, id: saleId, rootId, tableId: fold.tableId ?? base.tableId,
     lines: live.map((l, i) => ({ lineId: l.lineId, itemId: l.itemId, name: l.name, unitPaise: l.unitPaise, gstRateBp: l.gstRateBp, qty: l.qty, netPaise: t.lines[i]!.net, taxPaise: t.lines[i]!.tax })),
     subtotalPaise: t.subtotal, taxPaise: t.tax, roundOffPaise: t.roundOff, totalPaise: t.total,
+    ...(fold.anomalies.length ? { anomalies: fold.anomalies.map((a) => a.kind) } : {}),
+    ...(mine ? {} : { ownerDeviceId: visit!.ownerDeviceId }),
   };
-  await db.sales.put(next);
+  if (mine) await db.sales.put(next);
+  else await db.visits.put({ ...visit!, view: next });
   return next;
 }
 
 async function openOrderRow(saleId: string): Promise<LocalSale> {
-  const sale = await db.sales.get(saleId);
+  const sale = await orderById(saleId);
   if (!sale || sale.kind !== 'order') throw new Error('That is not a table order.');
   if (sale.status !== 'open') throw new Error('That order is already closed.');
   return sale;
+}
+
+/** After a change: the refolded order. It is open (the change just added to it), so undefined here is a bug. */
+async function refolded(device: DeviceInfo, sale: LocalSale, settings: TradingSettings): Promise<LocalSale> {
+  const next = await refold(device, rootOf(sale), settings);
+  if (!next) throw new Error(`order ${sale.id} vanished while being changed`);
+  return next;
+}
+
+/** A visit as `/sync/orders` sends it. `open` null: the visit has no open sale any more. */
+export interface PulledVisit {
+  rootId: string;
+  version: number;
+  sales: { id: string; status: string; deviceId: string }[];
+  open: null | { saleId: string; deviceId: string; closed: ClosedLine[]; events: { deviceId: string; seq: number; payload: unknown }[] };
+}
+
+/**
+ * Applies one page of pulled visits. Call inside the transaction that also stores the cursor (sync.ts), so a crash
+ * cannot leave the cursor ahead of the data. A payload that does not parse throws, and the page is not applied.
+ */
+export async function applyVisits(device: DeviceInfo, visits: readonly PulledVisit[], settings: TradingSettings): Promise<void> {
+  for (const v of visits) {
+    for (const s of v.sales) {
+      const local = await db.sales.get(s.id);
+      if (local?.status !== 'open') continue;
+      // This device shows it open and the server voided it (a manager, online): void it here too.
+      if (s.status === 'void') await db.sales.put({ ...local, status: 'void' });
+      // Paid on another device (step 7b). Had this device paid it, its row would say so (a closing here is never undone),
+      // so the money and the receipt are that device's: drop the row, it is no order of ours any more.
+      else if (s.status === 'paid' || s.status === 'refunded') await db.sales.delete(s.id);
+    }
+    if (!v.open) {
+      await db.visits.delete(v.rootId);
+      const stillOpen = (await db.sales.where('status').equals('open').toArray()).some((s) => rootOf(s) === v.rootId);
+      if (!stillOpen) await db.orderEvents.where('saleId').equals(v.rootId).delete();
+      continue;
+    }
+    const held = await db.visits.get(v.rootId);
+    await db.visits.put({
+      rootId: v.rootId, openSaleId: v.open.saleId, ownerDeviceId: v.open.deviceId, closed: v.open.closed,
+      events: v.open.events.map((e) => ({ deviceId: e.deviceId, seq: e.seq, payload: OrderEvent.parse({ ...(e.payload as object), saleId: v.rootId }) })),
+      ...(held?.view && held.view.id === v.open.saleId ? { view: held.view } : {}),
+    });
+    await refold(device, v.rootId, settings);
+  }
 }
 
 async function liveTable(tableId: string): Promise<void> {
@@ -108,16 +221,18 @@ export async function openOrder(args: {
     if (!tableId) throw new Error('This counter has no tables yet. Sync, then try again.');
     await liveTable(tableId);
     const at = await stamp(now);
+    const id = crypto.randomUUID();
     const sale: LocalSale = {
-      id: crypto.randomUUID(), status: 'open', kind: 'order', tableId, createdBy: actor.id, createdByName: actor.name, channel: 'counter',
+      id, rootId: id, status: 'open', kind: 'order', tableId, createdBy: actor.id, createdByName: actor.name, channel: 'counter',
       businessDate: businessDate(device.timezone, now), createdAt: at, menuVersion,
       lines: [], subtotalPaise: 0, taxPaise: 0, roundOffPaise: 0, totalPaise: 0, receiptNo: null, receiptSeq: null, payments: [],
     };
+    await db.sales.put(sale);
     await write(device, { type: 'order.opened', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, tableId, createdBy: actor.id, businessDate: sale.businessDate, createdAtDevice: at, menuVersion });
     for (const l of cart) {
       await write(device, { type: 'order.line_added', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, lineId: crypto.randomUUID(), itemId: l.itemId, name: l.name, unitPaise: l.unitPaise, gstRateBp: l.gstRateBp, qty: l.qty, by: actor.id, at: await stamp(now) });
     }
-    return refold(sale, settings);
+    return refolded(device, sale, settings);
   });
 }
 
@@ -129,17 +244,18 @@ export async function addToOrder(args: {
   const priced = addItem([], entry, qty, settings)[0]!; // availability, quantity and the price snapshot, as at the counter
   return db.transaction('rw', ALL(), async () => {
     const sale = await openOrderRow(args.saleId);
+    const root = rootOf(sale);
     const at = await stamp(args.now ?? new Date());
-    const mine = new Set((await db.orderEvents.where('saleId').equals(sale.id).toArray())
+    const mine = new Set((await visitEvents(root, await db.visits.get(root)))
       .filter((e) => e.deviceId === device.deviceId && e.payload.type === 'order.line_added').map((e) => (e.payload as { lineId: string }).lineId));
     const same = sale.lines.find((l) => l.itemId === entry.itemId && mine.has(l.lineId!));
     if (same) {
       checkQty(same.qty + qty, settings);
-      await write(device, { type: 'order.line_changed', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, lineId: same.lineId!, qty: same.qty + qty, by: actor.id, at });
+      await write(device, { type: 'order.line_changed', schemaVersion: ORDER_SCHEMA_VERSION, saleId: root, lineId: same.lineId!, qty: same.qty + qty, by: actor.id, at });
     } else {
-      await write(device, { type: 'order.line_added', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, lineId: crypto.randomUUID(), itemId: priced.itemId, name: priced.name, unitPaise: priced.unitPaise, gstRateBp: priced.gstRateBp, qty: priced.qty, by: actor.id, at });
+      await write(device, { type: 'order.line_added', schemaVersion: ORDER_SCHEMA_VERSION, saleId: root, lineId: crypto.randomUUID(), itemId: priced.itemId, name: priced.name, unitPaise: priced.unitPaise, gstRateBp: priced.gstRateBp, qty: priced.qty, by: actor.id, at });
     }
-    return refold(sale, settings);
+    return refolded(device, sale, settings);
   });
 }
 
@@ -156,9 +272,9 @@ export async function setLineQty(args: {
     if (line.qty === qty) return sale;
     const at = await stamp(args.now ?? new Date());
     await write(device, qty === 0
-      ? { type: 'order.line_removed', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, lineId, by: actor.id, at }
-      : { type: 'order.line_changed', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, lineId, qty, by: actor.id, at });
-    return refold(sale, settings);
+      ? { type: 'order.line_removed', schemaVersion: ORDER_SCHEMA_VERSION, saleId: rootOf(sale), lineId, by: actor.id, at }
+      : { type: 'order.line_changed', schemaVersion: ORDER_SCHEMA_VERSION, saleId: rootOf(sale), lineId, qty, by: actor.id, at });
+    return refolded(device, sale, settings);
   });
 }
 
@@ -173,7 +289,7 @@ export async function moveOrder(args: {
     const sale = await openOrderRow(args.saleId);
     await liveTable(tableId);
     if (sale.tableId === tableId) return sale;
-    await write(device, { type: 'order.moved', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, tableId, by: actor.id, at: await stamp(args.now ?? new Date()) });
-    return refold(sale, settings);
+    await write(device, { type: 'order.moved', schemaVersion: ORDER_SCHEMA_VERSION, saleId: rootOf(sale), tableId, by: actor.id, at: await stamp(args.now ?? new Date()) });
+    return refolded(device, sale, settings);
   });
 }

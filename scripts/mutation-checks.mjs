@@ -26,6 +26,8 @@ const ORDER = 'packages/shared/src/order.ts';
 // `noDb`: the tests touch no database, so the fresh start before and after is skipped.
 const SHARED_ORDER = { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/order.test.ts'], noDb: true };
 const TABLET_ORDER = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/order.test.ts'], noDb: true };
+const TABLET_VISITS = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/visits.test.ts'], noDb: true };
+const PULL_TESTS = API_TESTS('orders-pull.test.ts');
 
 const staff = API_TESTS('staff.test.ts');
 const orders = API_TESTS('orders.test.ts');
@@ -78,7 +80,8 @@ const MUTANTS = [
     ['ingest-no-device-lock', "await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [p.deviceId]);", ''],
     ['ingest-defer-becomes-reject', 'throw new Defer();', "throw new Reject('sale_not_found');", true],
     ['ingest-sale-rejected-waits', "if (refused.rowCount) throw new Reject('sale_rejected');", ''],
-    ['ingest-pay-other-devices-sale', "if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');", ''],
+    // A whole (v1) sale is paid where it was rung up; only a table order may be paid elsewhere (7b).
+    ['ingest-pay-other-devices-sale', "if (as === 'pay' && sale.order_root_id) {", "if (as === 'pay') {"],
     ['ingest-after-revocation-accepted', 'if (p.revokedAt && new Date(e.createdAt) > p.revokedAt)', 'if (false)'],
     ['ingest-line-net-unchecked', "if (l.netPaise !== l.unitPaise * l.qty) throw new Reject('line_net_mismatch');", ''],
     ['ingest-line-tax-unchecked', "if (!taxes.includes(l.taxPaise)) throw new Reject('line_tax_mismatch');", ''],
@@ -134,7 +137,7 @@ const MUTANTS = [
   ].map(([id, from, to]) => M(id, 'packages/shared/src/receipt-text.ts', from, to, { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/receipt-text.test.ts'] })),
   ...[
     ['reprint-unpaid-ok', "if (sale.status !== 'paid' && sale.status !== 'refunded') throw new Reject('not_paid');", ''],
-    ['reprint-other-device', "if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');\n  return sale;", 'return sale;'],
+    ['reprint-other-device', "(as === 'receipt' ? sale.paid_device_id ?? sale.device_id : sale.device_id)", "(as === 'receipt' ? p.deviceId : sale.device_id)"],
     ['reprint-no-audit-trail', "action: 'sale.reprinted'", "action: 'sale.noop'"],
     ['reprint-unknown-user-ok', "[ev.reprintedBy, p.outletId]);\n  if (!who.rowCount) throw new Reject('unknown_user');", '[ev.reprintedBy, p.outletId]);'],
     ['reprint-type-not-accepted', "'payment.taken', 'print.reprinted', 'shift.opened'", "'payment.taken', 'shift.opened'"],
@@ -517,14 +520,59 @@ const MUTANTS = [
     ['tab-ord-any-table', "if (!(await db.entities.get(['dining_table', tableId]))) throw", 'if (false) throw'],
     ['tab-ord-closed-editable', "if (sale.status !== 'open') throw new Error('That order is already closed.');", ''],
     ['tab-ord-qty-uncapped', 'if (qty !== 0) checkQty(qty, settings);', ''],
-    ['tab-ord-table-not-refolded', 'tableId: fold.tableId,', 'tableId: sale.tableId,'],
+    ['tab-ord-table-not-refolded', 'tableId: fold.tableId ?? base.tableId,', 'tableId: base.tableId,'],
   ].map(([id, from, to]) => M(id, 'apps/counter/src/order.ts', from, to, TABLET_ORDER)),
   ...[
     ['tab-pay-v1-for-order', "if (sale.kind === 'order') {", 'if (false) {'],
     ['tab-pay-empty-order', "if (sale.kind === 'order' && sale.lines.length === 0) throw", 'if (false) throw'],
-    ['tab-pay-keeps-events', 'await db.orderEvents.where(\'saleId\').equals(sale.id).delete(); // settled', '// settled'],
+    ['tab-pay-keeps-events', "await db.orderEvents.where('saleId').equals(sale.rootId ?? sale.id).delete();", ''],
   ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, TABLET_ORDER)),
-  M('tab-shift-keeps-events', 'apps/counter/src/shift.ts', "await db.orderEvents.where('saleId').equals(s.id).delete();", '', TABLET_ORDER),
+  M('tab-shift-keeps-events', 'apps/counter/src/shift.ts', "await db.orderEvents.where('saleId').equals(s.rootId ?? s.id).delete();", '', TABLET_ORDER),
+  // --- phase 12 step 7 ("12b"): the open-orders pull, server side (orders-pull.test.ts)
+  M('ov-no-stamp', TRADING, 'WHEN (NEW.order_root_id IS NOT NULL) EXECUTE FUNCTION app.stamp_order_visit();', 'WHEN (false) EXECUTE FUNCTION app.stamp_order_visit();', PULL_TESTS),
+  ...[
+    ['ov-any-outlet', 'WHERE v.outlet_id = $1 AND v.version > $2', 'WHERE $1::uuid IS NOT NULL AND v.version > $2'],
+    ['ov-fresh-ignored', "AND (NOT $3 OR EXISTS (SELECT 1 FROM sale s WHERE s.order_root_id = v.root_id AND s.status = 'open'))", 'AND ($3 OR true)'],
+    ['ov-fresh-always', "q.data.fresh === '1'", 'true'],
+    ['ov-rejected-events-sent', "AND e.outcome = 'applied' AND e.type LIKE 'order.%'", "AND e.type LIKE 'order.%'"],
+    ['ov-open-sale-counted-closed', "WHERE s.order_root_id = p.root_id AND s.status <> 'open'), '[]'::jsonb),", "WHERE s.order_root_id = p.root_id), '[]'::jsonb),"],
+    ['ov-page-unordered', 'ORDER BY v.version', 'ORDER BY v.root_id'],
+    ['ov-no-nudge', "if (results.some((r) => r.status === 'applied')) publish(ordersTopic(p.outletId));", ''],
+  ].map(([id, from, to]) => M(id, SYNC, from, to, PULL_TESTS)),
+  // --- phase 12 step 7: other devices' orders on the tablet (visits.test.ts, fake-indexeddb, no database)
+  ...[
+    ['vis-all-mine', 'const mine = (visit?.ownerDeviceId ?? device.deviceId) === device.deviceId;', 'const mine = true;'],
+    ['vis-own-unsent-dropped', 'return [...(visit?.events ?? []), ...own].map(', 'return [...(visit?.events ?? []), ...(visit ? [] : own)].map('],
+    ['vis-pending-close-undone', "if (own && own.status !== 'open') return undefined;", ''],
+    ['vis-paid-view-reopens', "if (own && own.status !== 'open') return undefined;", "if (mine && own && own.status !== 'open') return undefined;"],
+    ['vis-paid-elsewhere-kept', "else if (s.status === 'paid' || s.status === 'refunded') await db.sales.delete(s.id);", ''],
+    ['vis-closed-lines-ignored', 'const live = liveLines({ ...fold, lines: openLines(fold, visit?.closed ?? []) });', 'const live = liveLines(fold);'],
+    ['vis-online-void-ignored', "if (s.status === 'void') await db.sales.put({ ...local, status: 'void' });", ''],
+    ['vis-foreign-anomaly-throws', 'if (fold.anomalies.length && !foreign) throw', 'if (fold.anomalies.length) throw'],
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/order.ts', from, to, TABLET_VISITS)),
+  ...[
+    ['vis-pay-keeps-root-events', "await db.orderEvents.where('saleId').equals(sale.rootId ?? sale.id).delete();", "await db.orderEvents.where('saleId').equals(sale.id).delete();"],
+    // step 7b: paying another device's order here
+    ['vis-view-not-payable', 'if (!own && visit?.view) {', 'if (false) {'],
+    ['vis-view-left-open', '      await db.visits.put(kept);', ''],
+    ['vis-view-keeps-owner', '      sale = rest;', '      sale = visit.view;'],
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, TABLET_VISITS)),
+  // --- phase 12 step 7b: a table order paid on another device of its outlet (running-orders.test.ts, trading.test.mjs)
+  ...[
+    ['pd-opener-only', "if (as === 'pay' && sale.order_root_id) {", 'if (false) {'],
+    ['pd-any-outlet', "if (sale.outlet_id !== p.outletId) throw new Reject('wrong_outlet');", ''],
+    ['pd-void-anywhere', "const sale = await saleOf(c, p, ev.saleId, 'opener');", "const sale = await saleOf(c, p, ev.saleId, 'pay');"],
+    ['pd-reprint-opener', "const sale = await saleOf(c, p, ev.saleId, 'receipt');", "const sale = await saleOf(c, p, ev.saleId, 'opener');"],
+    ['pd-payer-not-recorded', 'orderFlags, p.deviceId]);', 'orderFlags, null]);'],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('running-orders.test.ts'))),
+  M('pd-gaps-by-opener', 'apps/api/src/routes/dayclose.ts', 'COALESCE(paid_device_id, device_id)', 'device_id', API_TESTS('running-orders.test.ts'), true),
+  M('pd-report-by-opener', 'apps/api/src/reports.ts', 'COALESCE(s.paid_device_id, s.device_id) AS device_id', 's.device_id', API_TESTS('running-orders.test.ts')),
+  ...[
+    ['pd-receipt-uq-by-opener', 'ON sale ((COALESCE(paid_device_id, device_id)), business_date, receipt_seq)', 'ON sale (device_id, business_date, receipt_seq)'],
+    ['pd-payer-mutable', 'NEW.table_id, NEW.paid_device_id)', 'NEW.table_id, OLD.paid_device_id)'],
+    ['pd-payer-any-outlet', 'FOREIGN KEY (tenant_id, outlet_id, paid_device_id) REFERENCES device(tenant_id, outlet_id, id),', 'FOREIGN KEY (tenant_id, paid_device_id) REFERENCES device(tenant_id, id),'],
+  ].map(([id, from, to]) => M(id, TRADING, from, to, DB_TESTS)),
+  M('vis-shift-keeps-root-events', 'apps/counter/src/shift.ts', "await db.orderEvents.where('saleId').equals(s.rootId ?? s.id).delete();", "await db.orderEvents.where('saleId').equals(s.id).delete();", TABLET_VISITS),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });

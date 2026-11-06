@@ -177,12 +177,20 @@ async function applySale(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, ev: 
   }
 }
 
-/** The sale an event is about, locked. Not here yet: wait for it, unless it was turned away (then waiting is forever). */
-async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string) {
+/**
+ * The sale an event is about, locked. Not here yet: wait for it, unless it was turned away (then waiting is forever).
+ * `as` is who the event needs this device to be:
+ * - `pay`: a table order may be paid on any device of its outlet (step 7b; the receipt is from the payer's own series
+ *   and the money goes into the payer's shift). A whole sale is paid where it was rung up.
+ * - `opener`: voiding stays with the device that holds the order (D18 changes who may add lines and pay, not who voids).
+ * - `receipt`: a reprint is of the payer's receipt, so on the device that paid.
+ */
+async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string, as: 'pay' | 'opener' | 'receipt') {
   // A running order's root is locked first, as every order event does (order-ingest.ts), so the two never deadlock.
   const root = (await c.query('SELECT order_root_id FROM sale WHERE id = $1', [saleId])).rows[0]?.order_root_id as string | null | undefined;
   if (root) await lockVisit(c, root);
-  const sale = (await c.query('SELECT device_id, status, total_paise, receipt_no, order_root_id FROM sale WHERE id = $1 FOR UPDATE', [saleId])).rows[0];
+  const sale = (await c.query(
+    'SELECT device_id, outlet_id, paid_device_id, status, total_paise, receipt_no, order_root_id FROM sale WHERE id = $1 FOR UPDATE', [saleId])).rows[0];
   if (!sale) {
     // An order may have been opened on another device of the outlet (D18), so its refusal is looked up from any device.
     const refused = await c.query(
@@ -191,22 +199,25 @@ async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string) {
     if (refused.rowCount) throw new Reject('sale_rejected');
     throw new Defer();
   }
-  // Paying and voiding stay with the device that holds the order (D18 changes who may add lines, not who takes money).
-  if (sale.device_id !== p.deviceId) throw new Reject('wrong_device');
+  if (as === 'pay' && sale.order_root_id) {
+    if (sale.outlet_id !== p.outletId) throw new Reject('wrong_outlet');
+  } else if ((as === 'receipt' ? sale.paid_device_id ?? sale.device_id : sale.device_id) !== p.deviceId) {
+    throw new Reject('wrong_device');
+  }
   return sale as { device_id: string; status: string; total_paise: string; receipt_no: string | null; order_root_id: string | null };
 }
 
 /** Only a paid sale has a receipt to print again. The audit entry is the trail a manager reads. */
 /** Only an unpaid order can be voided by the tablet: if the payment got here first, the sale stands. */
 async function applyVoid(c: pg.PoolClient, p: DevicePrincipal, ev: SaleVoided): Promise<void> {
-  const sale = await saleOf(c, p, ev.saleId);
+  const sale = await saleOf(c, p, ev.saleId, 'opener');
   if (sale.status !== 'open') throw new Reject(sale.status === 'void' ? 'already_void' : 'not_open');
   await c.query(`UPDATE sale SET status = 'void', void_reason = $2 WHERE id = $1`, [ev.saleId, ev.reason]);
   await audit(c, { tenantId: p.tenantId, actorKind: 'device', actorId: p.deviceId, action: 'sale.voided', entity: 'sale', entityId: ev.saleId, detail: { reason: ev.reason, at: ev.at } });
 }
 
 async function applyReprint(c: pg.PoolClient, p: DevicePrincipal, ev: PrintReprinted): Promise<void> {
-  const sale = await saleOf(c, p, ev.saleId);
+  const sale = await saleOf(c, p, ev.saleId, 'receipt');
   if (sale.status !== 'paid' && sale.status !== 'refunded') throw new Reject('not_paid');
   const who = await c.query(
     `SELECT 1 FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id
@@ -255,7 +266,7 @@ async function applyShiftClosed(c: pg.PoolClient, p: DevicePrincipal, ev: ShiftC
 }
 
 async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTaken, s: TradingSettings): Promise<void> {
-  const sale = await saleOf(c, p, ev.saleId);
+  const sale = await saleOf(c, p, ev.saleId, 'pay');
   // A running order is paid line by line (v2); a whole sale by its total (v1). No tablet writes the other pairing.
   if (sale.order_root_id && ev.schemaVersion !== 2) throw new Reject('order_needs_v2_payment');
   if (!sale.order_root_id && ev.schemaVersion === 2) throw new Reject('not_an_order');
@@ -276,11 +287,12 @@ async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTak
   const day = await businessDay(c, p, ev.businessDate);
   await c.query(
     `UPDATE sale SET status = 'paid', receipt_no = $2, receipt_seq = $3, business_date = $4, business_day_id = $5, shift_id = $7,
+                     paid_device_id = $10,
                      flags = CASE WHEN $6 AND NOT 'late_arrival' = ANY(flags) THEN array_append(flags, 'late_arrival') ELSE flags END
                              || CASE WHEN $8 THEN ARRAY['after_shift_close'] ELSE '{}'::text[] END
                              || $9::text[]
       WHERE id = $1`,
-    [ev.saleId, ev.receiptNo, ev.receiptSeq, ev.businessDate, day.id, day.closed, ev.shiftId ?? null, afterClose, orderFlags]);
+    [ev.saleId, ev.receiptNo, ev.receiptSeq, ev.businessDate, day.id, day.closed, ev.shiftId ?? null, afterClose, orderFlags, p.deviceId]);
   for (const x of ev.payments) {
     await c.query(
       `INSERT INTO payment (tenant_id, sale_id, method, amount_paise, tendered_paise, change_paise, upi_ref) VALUES ($1,$2,$3,$4,$5,$6,$7)`,

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { DEFAULT_SETTINGS, type TradingSettings } from '@pos/shared';
 import { withTenant } from '../db.js';
 import { ingest } from '../ingest.js';
+import { ordersTopic, publish, subscribe } from '../hub.js';
 
 const PAGE = 500;
 const query = z.object({ cursor: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0) }).strict();
@@ -87,6 +88,42 @@ const PULL_SQL = `
   ORDER BY version
   LIMIT ${PAGE + 1}`;
 
+// The open-orders pull (phase 12 step 7, "12b"): the visits of THIS outlet that changed since the cursor, each sent
+// WHOLE (every applied order event of the visit, and the lines its closed sales took), so the tablet refolds it with
+// the same foldOrder/openLines as the server, together with its own unsent events. ONE statement, so the page is one
+// snapshot; versions are commit-ordered (order_visit, 0004), so a snapshot is a prefix of history.
+// A closed visit is sent with `open` null, so the tablet drops what it held. A tablet that holds no visits yet (its
+// first pass, every page of it until `hasMore` is false) says `fresh=1`, and closed visits are skipped: otherwise a
+// new tablet would page through the outlet's whole history. Not inferred from cursor 0: page 2 of a first pass has a
+// cursor above 0. Visits are small (tens of events), and a page holds at most ORDER_PAGE of them.
+const ORDER_PAGE = 100;
+const ordersQuery = query.extend({ fresh: z.enum(['0', '1']).optional() }).strict();
+const ORDERS_SQL = `
+  WITH page AS (
+    SELECT v.root_id, v.version,
+           (SELECT s.id FROM sale s WHERE s.order_root_id = v.root_id AND s.status = 'open') AS open_id
+      FROM order_visit v
+     WHERE v.outlet_id = $1 AND v.version > $2
+       AND (NOT $3 OR EXISTS (SELECT 1 FROM sale s WHERE s.order_root_id = v.root_id AND s.status = 'open'))
+     ORDER BY v.version
+     LIMIT ${ORDER_PAGE + 1}
+  )
+  SELECT p.root_id, p.version,
+         (SELECT jsonb_agg(jsonb_build_object('id', s.id, 'status', s.status, 'deviceId', s.device_id) ORDER BY s.received_at, s.id)
+            FROM sale s WHERE s.order_root_id = p.root_id) AS sales,
+         CASE WHEN p.open_id IS NULL THEN NULL ELSE jsonb_build_object(
+           'saleId', p.open_id,
+           'deviceId', (SELECT device_id FROM sale WHERE id = p.open_id),
+           'closed', COALESCE((SELECT jsonb_agg(jsonb_build_object('lineId', l.line_id, 'qty', l.qty, 'removed', l.removed_at IS NOT NULL))
+                                 FROM sale_line l JOIN sale s ON s.id = l.sale_id
+                                WHERE s.order_root_id = p.root_id AND s.status <> 'open'), '[]'::jsonb),
+           'events', COALESCE((SELECT jsonb_agg(jsonb_build_object('deviceId', e.device_id, 'seq', e.seq, 'payload', e.payload) ORDER BY e.device_id, e.seq)
+                                 FROM sync_event e
+                                WHERE e.entity_id IN (SELECT id FROM sale WHERE order_root_id = p.root_id)
+                                  AND e.outcome = 'applied' AND e.type LIKE 'order.%'), '[]'::jsonb)) END AS open
+    FROM page p
+   ORDER BY p.version`;
+
 const MAX_BATCH = 100;
 const pushBody = z.object({
   events: z.array(z.object({
@@ -118,7 +155,43 @@ export const syncRoutes: FastifyPluginAsync = async (app) => {
     // In the device's own order: a payment is judged after the sale it pays for.
     const results = [];
     for (const e of [...body.data.events].sort((a, b) => a.seq - b.seq)) results.push(await ingest(p, e, settings));
+    // After the commits: wake the outlet's other tablets. Over-telling is harmless (a pull with nothing new is cheap).
+    if (results.some((r) => r.status === 'applied')) publish(ordersTopic(p.outletId));
     return { results };
+  });
+
+  // Scope: an enrolled device gets the open table visits of ITS OWN outlet only (D18: any device of the outlet may
+  // change them); the outlet comes from the credential, never from the request.
+  app.get('/sync/orders', { config: { scope: 'outlet', permission: 'device' } }, async (req, reply) => {
+    const q = ordersQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'invalid request' });
+    const p = req.principal!;
+    if (p.kind !== 'device') return reply.code(403).send({ error: 'forbidden' });
+
+    const rows = await withTenant(p.tenantId, async (c) => (await c.query(ORDERS_SQL, [p.outletId, q.data.cursor, q.data.fresh === '1'])).rows);
+    const hasMore = rows.length > ORDER_PAGE;
+    const page = hasMore ? rows.slice(0, ORDER_PAGE) : rows;
+    const last = page[page.length - 1];
+    return {
+      cursor: last ? Number(last.version) : q.data.cursor,
+      hasMore,
+      visits: page.map((r) => ({ rootId: r.root_id, version: Number(r.version), sales: r.sales ?? [], open: r.open })),
+    };
+  });
+
+  // Server-sent "an order at your outlet changed"; the tablet then calls /sync/orders. Payload-free, so the stream
+  // can never carry what the reader may not see. Scope: the device's own outlet, from the credential.
+  app.get('/sync/orders/stream', { config: { scope: 'outlet', permission: 'device' } }, async (req, reply) => {
+    const p = req.principal!;
+    if (p.kind !== 'device') return reply.code(403).send({ error: 'forbidden' });
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    res.write('retry: 5000\nevent: ready\ndata: {}\n\n');
+    const unsubscribe = subscribe([ordersTopic(p.outletId)], () => res.write('event: changed\ndata: {}\n\n'));
+    const beat = setInterval(() => res.write(': ping\n\n'), 25_000);
+    req.raw.on('close', () => { clearInterval(beat); unsubscribe(); });
+    return reply;
   });
 
   // Scope: an enrolled device gets its tenant's catalogue, its own outlet's availability,

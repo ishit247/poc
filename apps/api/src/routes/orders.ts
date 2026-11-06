@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { withTenant } from '../db.js';
 import { audit } from '../audit.js';
+import { ordersTopic, publish } from '../hub.js';
 import type { Principal } from '../scope.js';
 
 const idParams = z.object({ id: z.string().uuid() });
@@ -66,14 +67,16 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     if (!ps.success || !b.success) return reply.code(400).send({ error: 'invalid request' });
     const p = req.principal!;
     if (p.kind !== 'user') return reply.code(403).send({ error: 'forbidden' });
-    const ok = await withTenant(p.tenantId, async (c) => {
+    const outletId = await withTenant(p.tenantId, async (c) => {
       const r = await c.query(
-        `UPDATE sale SET status = 'void', void_reason = $5 WHERE sale.id = $4 AND sale.status = 'open' AND ${ORDER_SCOPE} RETURNING sale.id`,
+        `UPDATE sale SET status = 'void', void_reason = $5 WHERE sale.id = $4 AND sale.status = 'open' AND ${ORDER_SCOPE} RETURNING sale.outlet_id`,
         [...scopeParams(p), ps.data.id, b.data.reason]);
-      if (!r.rowCount) return false;
+      if (!r.rowCount) return null;
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'order.void', entity: 'sale', entityId: ps.data.id, detail: { reason: b.data.reason } });
-      return true;
+      return r.rows[0].outlet_id as string;
     });
-    return ok ? { ok: true } : notFound(reply);
+    if (!outletId) return notFound(reply);
+    publish(ordersTopic(outletId)); // after the commit: the outlet's tablets drop the voided order from their table maps
+    return { ok: true };
   });
 };

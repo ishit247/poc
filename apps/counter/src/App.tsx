@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { liveQuery } from 'dexie';
 import { currentShift, db, getMeta, type DeviceInfo, type LocalShift } from './db.ts';
-import { enrol, pull, push } from './sync.ts';
+import { enrol, pull, pullOrders, push, watchOrders } from './sync.ts';
 import { loadMenu, type MenuView } from './menu.ts';
 import type { Actor } from './sale.ts';
 import { PinScreen } from './PinScreen.tsx';
@@ -96,20 +96,38 @@ function Counter({ device }: { device: DeviceInfo }) {
   const lastPull = useLive(async () => (await getMeta('lastPull')) ?? '', '');
 
   const refresh = useCallback(async () => setMenu(await loadMenu()), []);
-  const sync = useCallback(async () => {
-    // Push first (it shrinks the "waiting" count), but never let a failed push stop the menu from updating.
-    let pushed = true;
-    try { await push(device); } catch { pushed = false; }
-    try {
-      await pull(device);
-      setSyncError(pushed ? '' : 'Sales could not be sent just now. They are safe on this tablet and will be retried.');
-      setOnline(true);
-    } catch {
-      setSyncError('Could not reach the server.');
-      setOnline(false);
-    }
-    await refresh();
+  const running = useRef<Promise<void> | null>(null);
+  const sync = useCallback((): Promise<void> => {
+    // One at a time: the timer, the network coming back and a fresh order change can all ask at once.
+    running.current ??= (async () => {
+      // Push first (it shrinks the "waiting" count), but never let a failed push stop the menu from updating.
+      let pushed = true;
+      try { await push(device); } catch { pushed = false; }
+      try {
+        await pull(device);
+        await pullOrders(device); // other devices' open orders (phase 12 step 7)
+        setSyncError(pushed ? '' : 'Sales could not be sent just now. They are safe on this tablet and will be retried.');
+        setOnline(true);
+      } catch {
+        setSyncError('Could not reach the server.');
+        setOnline(false);
+      }
+      await refresh();
+    })().finally(() => { running.current = null; });
+    return running.current;
   }, [device, refresh]);
+
+  // Something new in the outbox (an order changed, a sale was made): send it soon, so the outlet's other devices see
+  // it within a second or two rather than at the next minute. A change made while a sync runs is caught when the
+  // count changes again as that sync drains the outbox.
+  useEffect(() => {
+    if (pending === 0 || !navigator.onLine) return;
+    const t = setTimeout(() => { void sync(); }, 800);
+    return () => clearTimeout(t);
+  }, [pending, sync]);
+
+  // The server nudges when an order at this outlet changes; the tablet then pulls open orders.
+  useEffect(() => watchOrders(device), [device]);
 
   useEffect(() => {
     void refresh();

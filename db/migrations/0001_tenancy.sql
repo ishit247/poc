@@ -66,6 +66,7 @@ CREATE TABLE device (
   revoked_at      timestamptz,
   app_version     text,
   UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, outlet_id, id),  -- lets sale.paid_device_id prove the payer is a device of the sale's outlet
   FOREIGN KEY (tenant_id, outlet_id)  REFERENCES outlet(tenant_id, id),
   FOREIGN KEY (tenant_id, counter_id) REFERENCES counter(tenant_id, id)
 );
