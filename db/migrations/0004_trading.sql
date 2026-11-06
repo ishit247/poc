@@ -62,6 +62,10 @@ CREATE TABLE shift (
   counted_cash_paise  bigint CHECK (counted_cash_paise >= 0),
   expected_cash_paise bigint,
   variance_paise      bigint,
+  -- Cash this drawer took for payments the server refused (phase 12 step 7d: the table was already paid on another
+  -- device, or its order voided there). It is in the drawer, so it is part of expected_cash_paise; kept here so day
+  -- close can say how much of the expected figure is money to refund or hand to a manager.
+  refused_cash_paise  bigint CHECK (refused_cash_paise >= 0),
   -- Set only when a manager closed the shift for the cashier (a lost tablet, a cashier who went home).
   closed_by           uuid,
   -- Versioned so a tablet can pull the closing of its own shift when a manager did it (PLAN 7.4).
@@ -76,7 +80,8 @@ CREATE TABLE shift (
   -- A closed shift carries its whole count; an open one carries none of it.
   CHECK ((closed_at IS NULL) = (counted_cash_paise IS NULL)),
   CHECK ((closed_at IS NULL) = (expected_cash_paise IS NULL)),
-  CHECK ((closed_at IS NULL) = (variance_paise IS NULL))
+  CHECK ((closed_at IS NULL) = (variance_paise IS NULL)),
+  CHECK ((closed_at IS NULL) = (refused_cash_paise IS NULL))
 );
 -- One drawer per tablet at a time.
 CREATE UNIQUE INDEX shift_one_open_per_device ON shift (device_id) WHERE closed_at IS NULL;

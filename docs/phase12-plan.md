@@ -355,6 +355,7 @@ a moved item's response carries **only its new code**.
   still paid where it was rung up. **Voiding stayed with the opener** (`wrong_device`; relaxed in step 7c for `order.voided`,
   the shift-close `sale.voided` still is); a reprint is of the payer's receipt,
   so it is the payer's (`wrong_device` elsewhere). A device of another outlet is refused (`wrong_outlet`).
+  (The loser of two payments is handled since step 7d.)
 - **Schema** (`0004_trading.sql`, `0001_tenancy.sql`, edited in place):
   - `sale.paid_device_id`, set by ingest on every payment.
   - A foreign key to `device(tenant_id, outlet_id, id)`, which is a new unique key on `device`. The payer must be a
@@ -366,10 +367,11 @@ a moved item's response carries **only its new code**.
   (`reports.ts`): the counter that took the money is credited. Shift expected cash already followed the payer (payments
   are joined by `sale.shift_id`, the payer's shift).
 - **Two devices paying one order.** The visit's root lock serializes them; the second is refused `already_paid`, and the
-  first payment stands (tested both ways). The tablet that lost still shows its row paid with a receipt it printed,
-  and a parked rejected event. This is the "parked rejected payment" gap from step 7, now possible across devices: the
-  counted drawer is over by that amount and the manager sees the rejection. Only cashiers pay, so it needs two cashiers
-  to take the same table's money while one is offline.
+  first payment stands (tested both ways). ~~The tablet that lost still shows its row paid with a receipt it printed,
+  and a parked rejected event.~~ **Handled in step 7d:** the losing tablet marks its row `refused`, its cash counts in
+  its drawer's expected figure, its receipt number is listed as refused (not missing) at day close, and a banner stays
+  until a manager acknowledges it. Only cashiers pay, so it needs two cashiers to take the same table's money while one
+  is offline.
 - **Tablet** (`sale.ts` `payOrder`, `order.ts`):
   - Paying a view makes it this device's paid `sales` row (no `ownerDeviceId`) on this device's receipt counter, and
     drops the view. Kept events are deleted by root as before.
@@ -380,7 +382,8 @@ a moved item's response carries **only its new code**.
     back as its own split, as before.
   - The Sell screen enables Cash and UPI on another device's order and says the receipt and drawer will be this counter's.
 - **Known gaps:** the opener's Sell screen just finds the table free when its order was paid elsewhere (no "paid at C2"
-  note); ~~voiding another device's order is still not possible~~ (step 7c); the tablet does not undo a payment the server refused.
+  note); ~~voiding another device's order is still not possible~~ (step 7c); ~~the tablet does not undo a payment the
+  server refused~~ (step 7d: it marks the row `refused`; the money is refunded or handed over by a person, not undone).
 
 ## Step 7c notes (voiding an open order from any device of the outlet)
 
@@ -407,10 +410,10 @@ a moved item's response carries **only its new code**.
   (`void-order`, `void-reason`, `void-go`, `void-cancel`).
 - **The opener's tablet** needed no change: a pull showing its open sale `void` already voids its row (written for the
   online manager void in step 7), and a visit with no open sale drops its kept events. Tested for 7c with an unsent line.
-- **Known gaps:** an opener that pays offline while another device voids loses the race the other way round (the void
+- **Known gaps:** ~~an opener that pays offline while another device voids loses the race the other way round (the void
   landed first): its payment is refused `sale_void` and it keeps a local paid row and printed receipt, the same parked
-  rejected payment as in 7b; the manager sees the rejection. Likewise, its unsent line events on that order are parked
-  `sale_void`. The opener's Sell screen just finds the table free (no "voided at C2 by …" note). Day close lists the voided
+  rejected payment as in 7b; the manager sees the rejection.~~ Handled in step 7d, the same way as `already_paid`.
+  Its unsent line events on that order are still parked `sale_void` (the generic "not accepted" banner). The opener's Sell screen just finds the table free (no "voided at C2 by …" note). Day close lists the voided
   order's reason only in the audit, not on a screen.
 - **Verified 2026-11-07**, after `fresh`: API 239/239 (4 new in `running-orders.test.ts`), tablet 54/54 (3 new in
   `visits.test.ts`), shared 55/55, typecheck clean (shared, api, counter); DB not re-run (no schema change); 13 mutants (`vo-*`, `tab-void-*`, retargeted `pd-opener-only` and re-run `pd-any-outlet`), 13/13 caught.
@@ -419,6 +422,86 @@ a moved item's response carries **only its new code**.
   `browser-sell.mjs` 27/27, `browser-flow.mjs` 44/44. The first `browser-flow` run (just after midnight) failed at the
   online order's "accepted" step (timeout); a re-run after `fresh` passed 44/44. Not explained; this change does not touch
   the online queue. Watch for it.
+
+## Step 7d notes (a payment the server refused, on the tablet that took it)
+
+- **Rule (agreed 2026-11-07).** When another device's closing of a table order stands (it was paid there first, 7b, or
+  voided there first, 7c), the losing `payment.taken` is still refused `already_paid` / `sale_void`; **what wins did not
+  change.** But the customer paid, the receipt was printed and the cash is in the losing drawer, so:
+  - the tablet marks its row **`refused`** (not paid, not void), keeping its receipt number and payments;
+  - the drawer's **expected cash includes the refused cash** (it is in the drawer), on the tablet's slip and on the server
+    alike, so an honest count reads "Cash matches"; the refused amount is its own line ("Taken, refused by server (n) …
+    Refund or hand to manager.");
+  - its receipt number stays **used**: day close lists it under `refusedReceipts`, not as a missing number;
+  - a banner on Sell and Shift names each one (receipt, table, amount and method, why) until **a manager acknowledges it**
+    on that tablet (Manager tools, online sign-in).
+  Any other refusal of a payment (a wrong total, a bad receipt number) is a fault, handled as before: row stays paid,
+  generic "not accepted" banner, a gap at day close.
+- **Server: no new event or table.** The refused `sync_event` row is the record; readers in `apps/api/src/refused.ts`:
+  - `refusedPaymentsOf(shift, device)`: rejected `payment.taken` with one of the two reasons, sent by the shift's device,
+    naming that shift (`payload.shiftId`). Added to the shift's payments at **shift close** (`applyShiftClosed`) and at a
+    manager's **force-close**; the cash part is stored in the new **`shift.refused_cash_paise`** (`0004_trading.sql`,
+    edited in place: set exactly when the shift is closed). Day close shows "(of which ₹X refused)" per shift.
+  - `refusedReceipts(outlet, date)`: the refused receipts of a business day (payload `businessDate`), with any
+    acknowledgement. The receipt-gap query (`dayclose.ts`) counts these numbers as used.
+  - **`POST /outlets/:id/refused-payments/:eventId/ack`** (manager, outlet scope): writes audit `payment.refused_ack`
+    (entity `sync_event`, detail sale, receipt, reason, device, note). The audit row is the whole record, so it is written
+    on the request's transaction, not behind the audit savepoint; a second ack returns `already: true` and writes nothing.
+    `sync_event` is not updatable by the app role, so concurrent acks queue on an advisory lock rather than a row lock.
+- **Tablet** (`apps/counter/src/refused.ts`, `sync.ts`, `shift.ts`, `RefusedBanner.tsx`):
+  - push's result transaction now includes `sales`: a rejection with one of the two reasons on a `payment.taken` marks the
+    row `refused` (`refused: { reason, eventId, at }`) in the same transaction that parks the outbox row. Only a row held
+    as `paid` changes. The receipt counter is untouched.
+  - Pull never touches it: `applyVisits` acts only on rows still `open`, and `refold` returns nothing for any non-open
+    row of that id (so a stale open visit cannot bring it back as a view). Reprint lists paid rows only.
+  - `slipFor`: sales, cash and UPI from paid rows; `refused: { count, cashPaise, upiPaise }`; expected cash from both.
+    The Shift screen recomputes the slip after its post-close sync, so a refusal arriving in that sync is classified right.
+  - The generic "N records were not accepted" banner skips refused payments (they have their own banner).
+  - `acknowledgeRefused`: calls the ack route with the manager's token, then marks `refused.ackAt` and deletes the parked
+    outbox row (the server holds that event). The row stays `refused` and stays on the slip.
+- **A refusal that arrives after a manager force-closed its drawer** (added 2026-11-07): that shift's figures stay as they
+  were closed (the refused cash is not added later, as with a late accepted payment), and day close flags the receipt
+  `afterDrawerClosed` with "It arrived after that drawer was closed, so its cash is not in that shift's expected
+  figure: count it separately" (`mgr-refused-late`). Only a force-close can come first (a tablet sends its payments
+  before its own close), and the comparison is `closed_at < received_at`. Both are server times only for a force-close,
+  because a tablet's own close carries the tablet's clock, so the flag requires `closed_by`. API test in
+  `running-orders.test.ts`; mutants `rf-late-never-flagged`, `rf-late-any-closed`, `rf-late-any-force-closed`. No
+  browser check of the line itself (display only; `browser-tables.mjs` covers the day-close list around it).
+- **Verified 2026-11-07**, after `fresh` and with the api and counter images rebuilt:
+  - API: full suite **244/244** after `fresh` (with the late-refusal flag test). The 7d tests cover both races (the loser's shift expected/variance/refused
+    cash, the winner's untouched), a split cash/UPI refusal under a manager's force-close, day close listing the
+    numbers as refused and not missing, the acknowledgement (once, this outlet only, refused events only), a refusal
+    naming another device's shift or counted in a later shift, another outlet's day close, and any other refusal staying
+    a fault.
+  - Tablet 59/59: 4 new in `test/refused.test.ts` (each reason: row state, receipt and counter unchanged, slip totals,
+    later pulls neither resurrect nor delete; a fault refusal stays paid; acknowledgement) and 1 new real-API two-device
+    contract in `test/push.test.ts` that reproduces both races and checks the tablet's slip equals the server's shift.
+  - Shared 55/55, DB 46/46, typecheck clean (shared, admin, api, counter).
+  - 22 mutants (`rf-*`, `tab-rf-*` in `scripts/mutation-checks.mjs`), 22/22 caught (`rf-ack-any-event` first had a
+    pattern that missed on CRLF; fixed to a regex and re-run; the 3 `rf-late-*` were added with the flag).
+  - Browser: `browser-tables.mjs` **56/56** (17 new: a third tablet, cashier C, pays offline one order that A pays online
+    and one that A voids; on reconnect the banner names both receipts and why, the generic parked banner stays off,
+    neither table comes back, the banner is on Shift too, the slip says "Taken, refused by server (2)" and "Cash
+    matches", the server's shift agrees, a manager on C sees both and acknowledges them, day close lists them as refused
+    and not missing, the audit has two rows, and after a reload no banner). `browser-sell.mjs` 27/27.
+    `browser-flow.mjs` 44/44 on its own fresh seed, but see the next point.
+  - **Script findings, not app bugs:** `browser-flow.mjs` must run on its own fresh seed: `tables` and `sell` leave
+    drawers open on School 1, and flow force-closes exactly one before closing the day. Two of its queries looked up a
+    sale by `receipt_no` alone, which is unique per *device*, not per counter (several tablets on C1 each have a #3).
+    They are now scoped to the flow's device. The tables script now waits for A's closing to reach the server before C
+    reconnects (otherwise C's payment can win and A's is the one refused).
+  - **Flaky check, diagnosed and fixed (same day):** the first `browser-flow` run (01:24) failed "header says Offline"
+    (43/44). Cause: `App.tsx` `sync()` set `setOnline(true)` when its pulls succeeded. When the network dropped
+    mid-sync, the last pull, already answered, landed after the `offline` event and set the header back to "Online",
+    which stayed until the next sync attempt. A real tablet could show Online while offline. Fixed:
+    `setOnline(navigator.onLine)`. `browser-flow.mjs` now reproduces the race every run: it holds the open-orders pull's
+    answer 1.5 s, goes offline meanwhile, and checks "header stays Offline after a sync that was in flight", then
+    "Online again on reconnect". Against the old line this check failed both times it ran ("● Online"). With the fix,
+    46/46 twice after `fresh`.
+    The check sits after the reconnect step, not before the offline reload: one run with it placed there (01:35) failed
+    the offline reload (service worker), and the next passed. In Chromium, requests skip the service worker while a
+    Playwright route is set, so the two are kept apart. After the fix `browser-tables.mjs` 56/56 and `browser-sell.mjs`
+    27/27 again. The earlier "accepted" timeout did not recur.
 
 ## Step 8 notes (whole counter flow in a real browser)
 
@@ -478,6 +561,7 @@ a moved item's response carries **only its new code**.
 | 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | **done 2026-11-06, browser-verified.** `node scripts/browser-tables.mjs` (two Edge contexts, two devices: cashier 1024x768, waiter 768x1024, map mode, Docker stack rebuilt): 24/24, log in `.validation/browser-tables.log`. Covers the other device's order appearing with no sync pressed (under 1 s), adds both ways with the same total, an offline device's line arriving on reconnect, payment refused on the other device's order, paying its own order with the other device's line, the table freeing on both. `browser-sell.mjs` re-run 27/27. After `up:fresh`: DB 45/45, API 230/230 (8 new in `apps/api/test/orders-pull.test.ts`), tablet 49/49 (11 new in `test/visits.test.ts`, one a property over 40 seeds; 1 new two-device real-API contract in `test/push.test.ts`), typecheck clean. 20 mutants (`ov-*`, `vis-*`, 3 retargeted `tab-*`), 20/20 caught. Shared not re-run (unchanged) | done, uncommitted |
 | 7b | Paying another device's order: any cashier device of the outlet pays a table order, on its own receipt series and shift (`sale.paid_device_id`) | two-browser test | **done 2026-11-06, browser-verified.** `scripts/browser-tables.mjs` 29/29: the counter pays the waiter tablet's order (3 lines, one added offline), the table frees on the waiter's tablet, the counter's next receipt is the next number in its series, and the server row says paid on the counter, on its receipt. `browser-sell.mjs` 27/27. After `up:fresh`: DB 46/46 (1 new), API 234/234 (4 new in `running-orders.test.ts`: payer's receipt/shift/cash, void and reprint rules, both paying, per-payer series and day-close gaps, counter report, another outlet), tablet 51/51 (2 new in `visits.test.ts`; the two-device contract now pays across devices against the real API), typecheck clean. 19 mutants (`pd-*`, `vis-*`, 2 retargeted phase 4 ones), 19/19 caught. Shared not re-run (unchanged) | done, uncommitted |
 | 7c | Voiding an open order from any device of the outlet: a cashier any, a waiter only their own, with a reason (`order.voided` v2) | ingest tests, mutants, two-browser test | **done 2026-11-07, browser-verified.** See "Step 7c notes" | done, uncommitted |
+| 7d | A payment the server refused (`already_paid` / `sale_void`) on the tablet that took it: row `refused`, cash in the drawer's expected figure and its own slip line, receipt number used (not a gap), banner until a manager acknowledges | tablet and API tests, real-API contract, mutants, two-browser test | **done 2026-11-07, browser-verified.** See "Step 7d notes" | done, uncommitted |
 | 8 | Playwright run of the whole counter flow against the new screens (the check owed since phase 4) | run recorded in the progress doc | **done 2026-11-06, browser-verified.** `node scripts/browser-flow.mjs` after `fresh`: 41/41 (see "Step 8 notes"). Found: no screen to void a past-day open order, which blocks day close. No unit suites re-run (no app code changed) | done, uncommitted |
 
 ### Model per step (see "Model usage plan" in CLAUDE.md; the assistant reminds you before a HIGH step)
@@ -492,6 +576,7 @@ a moved item's response carries **only its new code**.
 | 6 | STANDARD | screens from the frozen prototype; the browser check is the safety net |
 | 7 | **HIGH** | a new pull channel for open orders: ordering, cursors and offline reads |
 | 7c | **HIGH** | ingest and authorization: who may close another device's order |
+| 7d | **HIGH** | money and sync: a refused payment's cash, receipt number and drawer variance |
 | 8 | STANDARD | scripted browser run; escalate only if it exposes a sync bug |
 
 ## Decided 2026-11-06 (PLAN D17, D18)
@@ -506,12 +591,13 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 8, 2b, 7b and 7c are done and verified (7 and 7b with
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 8, 2b, 7b, 7c and 7d are done and verified (7 and 7b with
 a two-browser run, 8 with `scripts/browser-flow.mjs`, 41/41). Step 8 is uncommitted.
 
 Phase 12's steps are all done, and the day-close void screen (step 8 notes, "Found") is built and browser-checked.
-Voiding another device's order is built (step 7c). Open before a pilot: two cashiers paying one table while one is offline
-(step 7b notes), and its 7c twin, a payment taken offline on an order another device voided. Then PLAN.md 0.3 item 3.
+Voiding another device's order is built (step 7c). ~~Open before a pilot: two cashiers paying one table while one is offline
+(step 7b notes), and its 7c twin, a payment taken offline on an order another device voided.~~ Done in step 7d (the
+losing tablet's refused payment). Next: PLAN.md 0.3 item 3.
 
 The notes below were written for step 4 and are kept for reference.
 

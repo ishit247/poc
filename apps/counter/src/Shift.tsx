@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { formatRupees, paise, parseRupees, renderShiftSlip, type ShiftSlipView } from '@pos/shared';
 import { db, type DeviceInfo, type LocalShift } from './db.ts';
 import type { Actor } from './sale.ts';
-import { closeShift, openShift } from './shift.ts';
+import { closeShift, openShift, slipFor } from './shift.ts';
 
 const money = (text: string, what: string): number => {
   try { return parseRupees(text); } catch { throw new RangeError(`Enter ${what} as rupees, like 500 or 500.50.`); }
@@ -80,7 +80,9 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
           const view = await closeShift({ device, actor, countedCashPaise: money(cash, 'the counted cash') });
           setCash('');
           await onSync().catch(() => {}); // forced sync: send the shift now if we can; the slip says if anything is still waiting
-          setSlip({ ...view, unsyncedCount: await db.outbox.filter((r) => !r.rejected).count() });
+          // Worked out again after the sync: a payment refused in it (step 7d) moves from sales to its own line.
+          const closed = await db.shifts.get(shift.id);
+          setSlip(closed ? await slipFor(closed, device) : view);
         })}>Close shift</button>
       {error && <p className="error" role="alert">{error}</p>}
     </main>

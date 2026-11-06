@@ -133,7 +133,7 @@ export function DayClose({ token, onDone }: { token: string; onDone: () => void 
               <table>
                 <thead><tr><th>Counter</th><th>Cashier</th><th>Float</th><th>Counted</th><th>Expected</th><th>Variance</th></tr></thead>
                 <tbody>
-                  {t.shifts.map((s) => <tr key={s.id}><td>{s.counter}</td><td>{s.cashier}</td><td>{rs(s.float)}</td><td>{rs(s.counted)}</td><td>{rs(s.expected)}</td><td className={s.variance === 0 ? '' : 'warn'}>{rs(s.variance)}</td></tr>)}
+                  {t.shifts.map((s) => <tr key={s.id}><td>{s.counter}</td><td>{s.cashier}</td><td>{rs(s.float)}</td><td>{rs(s.counted)}</td><td>{rs(s.expected)}{s.refused ? <span className="warn" data-testid="mgr-shift-refused"> (of which {rs(s.refused)} refused)</span> : null}</td><td className={s.variance === 0 ? '' : 'warn'}>{rs(s.variance)}</td></tr>)}
                 </tbody>
               </table>
             </>
@@ -143,6 +143,14 @@ export function DayClose({ token, onDone }: { token: string; onDone: () => void 
 
       {view && (view.closed ? t?.receiptGaps : view.receiptGaps)?.map((g) => (
         <p key={g.deviceId} className="warn" data-testid="mgr-gap">Counter {g.counter}: receipt {g.missing.join(', ')} never reached the server.</p>
+      ))}
+      {view && (view.closed ? t?.refusedReceipts : view.refusedReceipts)?.map((x) => (
+        <p key={x.eventId} className="warn" data-testid="mgr-refused-receipt">
+          Counter {x.counter}: receipt {x.receiptNo} was paid ({x.cashPaise ? `${rs(x.cashPaise)} cash` : ''}{x.cashPaise && x.upiPaise ? ' + ' : ''}{x.upiPaise ? `${rs(x.upiPaise)} UPI` : ''}) but refused:
+          {x.reason === 'sale_void' ? ' the order was voided on another device first' : ' the table was already paid on another counter'}.
+          {x.afterDrawerClosed && <b data-testid="mgr-refused-late"> It arrived after that drawer was closed, so its cash is not in that shift's expected figure: count it separately.</b>}
+          {x.acknowledgedAt ? ` Dealt with by ${x.acknowledgedBy ?? 'a manager'}.` : ' Not yet dealt with.'}
+        </p>
       ))}
       {view && (view.lateAdjustments.length > 0 || (t?.lateAdjustments?.length ?? 0) > 0) && (
         <section data-testid="mgr-late">

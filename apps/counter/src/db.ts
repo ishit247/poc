@@ -20,7 +20,13 @@ export interface Entity { type: string; id: string; data: Record<string, any> }
 
 export interface LocalSale {
   id: string;
-  status: 'open' | 'paid' | 'void';
+  /**
+   * 'refused' (step 7d): this device took the money and printed the receipt, and the server refused the payment
+   * (`already_paid`: another device paid the table first; `sale_void`: another device voided the order first). Not paid,
+   * not void: its receipt number stays used, its cash stays in this drawer's expected figure, and `refused` says why.
+   */
+  status: 'open' | 'paid' | 'void' | 'refused';
+  refused?: { reason: string; eventId: string; at: string; ackAt?: string };
   createdBy: string;
   createdByName: string;
   channel: 'counter';

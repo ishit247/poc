@@ -19,6 +19,7 @@ import { audit } from './audit.js';
 import { withTenant } from './db.js';
 import { applyOrderChange, applyOrderOpened, lockVisit, payOrder, settleVisit } from './order-ingest.js';
 import { Defer, Reject, RejectUnrecorded } from './sync-outcome.js';
+import { cashOf, refusedPaymentsOf } from './refused.js';
 
 export interface Envelope { eventId: string; seq: number; createdAt: string; payload: unknown }
 export type Status = 'applied' | 'duplicate' | 'rejected' | 'deferred';
@@ -284,10 +285,14 @@ async function applyShiftClosed(c: pg.PoolClient, p: DevicePrincipal, ev: ShiftC
   if (shift.closed_at) throw new Reject(shift.closed_by ? 'shift_force_closed' : 'shift_already_closed');
   const pays = await c.query(
     `SELECT pay.method, pay.amount_paise::int AS "amountPaise" FROM payment pay JOIN sale s ON s.id = pay.sale_id WHERE s.shift_id = $1`, [ev.shiftId]);
-  const expected = expectedCash(shift.opening, pays.rows);
+  // Payments refused for this drawer (step 7d) put real cash in it: expected counts them, refused_cash_paise says how much.
+  // The tablet sends events in its own order, so every payment it took on this shift was decided before this close.
+  const refused = await refusedPaymentsOf(c, ev.shiftId, p.deviceId); // shiftOf checked that this is the shift's device
+  const expected = expectedCash(shift.opening, [...pays.rows, ...refused]);
   await c.query(
-    `UPDATE shift SET closed_at = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint WHERE id = $1`,
-    [ev.shiftId, ev.at, ev.countedCashPaise, expected]);
+    `UPDATE shift SET closed_at = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint,
+                      refused_cash_paise = $5::bigint WHERE id = $1`,
+    [ev.shiftId, ev.at, ev.countedCashPaise, expected, cashOf(refused)]);
 }
 
 async function applyPayment(c: pg.PoolClient, p: DevicePrincipal, ev: PaymentTaken, s: TradingSettings): Promise<void> {

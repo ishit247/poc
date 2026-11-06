@@ -20,6 +20,11 @@ export interface ShiftSlipView {
   cashSalesPaise: number;
   upiSalesPaise: number;
   salesCount: number;
+  /**
+   * Money this drawer took for payments the server refused (phase 12 step 7d): another device's closing of the order
+   * stood. Not in the sales above; the cash IS in `expectedCash` (it is in the drawer). Absent on older slips.
+   */
+  refused?: { count: number; cashPaise: number; upiPaise: number };
   countedCashPaise: number;
   /** counted - expected. Negative is short. */
   variancePaise: number;
@@ -35,7 +40,7 @@ const stamp = (iso: string, timeZone: string) =>
 /** The slip the cashier keeps (and the manager checks the drawer against). Fixed-width text, like the receipt. */
 export function renderShiftSlip(v: ShiftSlipView, width = RECEIPT_WIDTH): string[] {
   const rule = '-'.repeat(width);
-  const out = [
+  const out: string[] = [
     v.outletName.slice(0, width),
     'SHIFT SLIP',
     rule,
@@ -48,10 +53,19 @@ export function renderShiftSlip(v: ShiftSlipView, width = RECEIPT_WIDTH): string
     row(`Cash sales`, money(v.cashSalesPaise), width),
     row('UPI sales', money(v.upiSalesPaise), width),
     row('Bills', String(v.salesCount), width),
+  ];
+  // The customer paid, the server refused it: refund it or hand it to the manager. Its cash is in "expected" below.
+  if (v.refused && v.refused.count > 0) {
+    out.push(rule, `Taken, refused by server (${v.refused.count})`);
+    if (v.refused.cashPaise) out.push(row(' Cash, in drawer', money(v.refused.cashPaise), width));
+    if (v.refused.upiPaise) out.push(row(' UPI', money(v.refused.upiPaise), width));
+    out.push('Refund or hand to manager.');
+  }
+  out.push(
     rule,
     row('Counted cash', money(v.countedCashPaise), width),
     row(v.variancePaise === 0 ? 'Cash matches' : v.variancePaise < 0 ? 'SHORT' : 'OVER', v.variancePaise === 0 ? '' : money(Math.abs(v.variancePaise)), width),
-  ];
+  );
   if (v.unsyncedCount > 0) out.push(rule, `${v.unsyncedCount} record${v.unsyncedCount === 1 ? '' : 's'} not yet sent.`, 'Check totals with the manager.');
   return out;
 }

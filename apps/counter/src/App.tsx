@@ -12,6 +12,8 @@ import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
 import { Branding } from './Branding.tsx';
 import { EnrolCodeMaker, InviteScreen, ManagerLogin, ManagerTools } from './manager/index.ts';
+import { RefusedBanner } from './RefusedBanner.tsx';
+import { isRefusedPayment } from './refused.ts';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -90,7 +92,8 @@ function Counter({ device }: { device: DeviceInfo }) {
   const [online, setOnline] = useState(navigator.onLine);
   const [syncError, setSyncError] = useState('');
   const pending = useLive(() => db.outbox.filter((r) => !r.rejected).count(), 0);
-  const parked = useLive(() => db.outbox.filter((r) => !!r.rejected).count(), 0);
+  // A refused payment (step 7d) has its own banner, which says what to do; this one is for everything else.
+  const parked = useLive(() => db.outbox.filter((r) => !!r.rejected && !isRefusedPayment(r)).count(), 0);
   const lastPush = useLive(async () => (await getMeta('lastPush')) ?? '', '');
   const logoUrl = useLogoUrl();
   const lastPull = useLive(async () => (await getMeta('lastPull')) ?? '', '');
@@ -107,7 +110,9 @@ function Counter({ device }: { device: DeviceInfo }) {
         await pull(device);
         await pullOrders(device); // other devices' open orders (phase 12 step 7)
         setSyncError(pushed ? '' : 'Sales could not be sent just now. They are safe on this tablet and will be retried.');
-        setOnline(true);
+        // Not `true`: the network can drop while this pull is in flight, and the `offline` event that came meanwhile
+        // must not be overwritten by a request that had already left.
+        setOnline(navigator.onLine);
       } catch {
         setSyncError('Could not reach the server.');
         setOnline(false);
@@ -160,7 +165,7 @@ function Counter({ device }: { device: DeviceInfo }) {
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
       {mgr !== null && !actor ? (
-        mgr ? <ManagerTools token={mgr} onDone={() => setMgr(null)} /> : <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />
+        mgr ? <ManagerTools token={mgr} outletId={device.outletId} onDone={() => setMgr(null)} /> : <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />
       ) : !actor ? (
         <>
           <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
@@ -168,9 +173,10 @@ function Counter({ device }: { device: DeviceInfo }) {
         </>
       ) : actor.role === 'cashier' && shift === null && tab !== 'shift' ? (
         // A cashier with no open drawer cannot take money: send them to open one first.
-        <Shift device={device} actor={actor} shift={undefined} onSync={sync} />
+        <><RefusedBanner /><Shift device={device} actor={actor} shift={undefined} onSync={sync} /></>
       ) : (
         <>
+          {(tab === 'sell' || tab === 'shift') && <RefusedBanner />}
           <nav>
             <button data-testid="tab-sell" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
             <button data-testid="tab-orders" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Open orders</button>

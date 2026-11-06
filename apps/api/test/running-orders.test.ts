@@ -608,3 +608,154 @@ test('7c: another outlet\'s device, or a person who does not work here, cannot v
   assert.deepEqual(statuses(await b.push([voidBy(b, s!, far.cashierId)])), ['rejected:unknown_user']);
   assert.equal((await sale(s!)).status, 'open');
 });
+
+// Step 7d: the payment another device's closing beat. The rules that win are unchanged; what changes is that the losing
+// drawer's cash and receipt number are accounted for, from the refused sync_event row alone.
+const login = async (app: App, email = 'a1@example.test') =>
+  (await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(A) }, payload: { email, password: 'dev-password-123' } })).json().token as string;
+async function dayClose(app: App, outletId: string) {
+  const r = await app.inject({ method: 'GET', url: `/outlets/${outletId}/day-close?date=${DATE}`, headers: bearer(await login(app)) });
+  assert.equal(r.statusCode, 200, r.body);
+  return r.json();
+}
+const shiftRow = (id: string) => withTenant(A, async (c) => (await c.query(
+  'SELECT expected_cash_paise::int AS e, variance_paise::int AS v, refused_cash_paise::int AS r FROM shift WHERE id = $1', [id])).rows[0]);
+const ackAs = async (app: App, outletId: string, eventId: string, email?: string) =>
+  app.inject({ method: 'POST', url: `/outlets/${outletId}/refused-payments/${eventId}/ack`, headers: bearer(await login(app, email)), payload: {} });
+
+test('7d: both pay one table: the loser\'s cash counts in its drawer, its receipt is listed refused (not missing), a manager acknowledges it once', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const [s, l1, s3, l3, shA, shB] = ids(6);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 2), a.open(s3!, { tableId: await a.newTable() }), a.add(s3!, l3!, 1)]);
+  const total = await totalOf([[1000, 2]]), one = await totalOf([[1000, 1]]);
+  assert.deepEqual(statuses(await b.push([shiftOpened(b, shB!), payIn(b, shB!, s!, [[l1!, 2]], total)])), ['applied', 'applied']);
+
+  // A, offline, took the same table's money (its #1), then sold another order (#2). Unchanged rule: B's payment stands.
+  const opened = shiftOpened(a, shA!), lost = payIn(a, shA!, s!, [[l1!, 2]], total);
+  assert.deepEqual(statuses(await a.push([opened, lost, payIn(a, shA!, s3!, [[l3!, 1]], one)])), ['applied', 'rejected:already_paid', 'applied']);
+  assert.deepEqual(await withTenant(A, async (c) => (await c.query('SELECT paid_device_id, receipt_seq FROM sale WHERE id = $1', [s])).rows[0]),
+    { paid_device_id: b.deviceId, receipt_seq: 1 });
+
+  // A's drawer holds both amounts: a count of exactly that balances, and the refused part is named.
+  assert.deepEqual(statuses(await a.push([shiftClosed(a, shA!, total + one)])), ['applied']);
+  assert.deepEqual(await shiftRow(shA!), { e: total + one, v: 0, r: total });
+  assert.deepEqual(statuses(await b.push([shiftClosed(b, shB!, total)])), ['applied']);
+  assert.deepEqual(await shiftRow(shB!), { e: total, v: 0, r: 0 }, 'the winner\'s drawer is untouched');
+
+  const dc = await dayClose(app, a.outletId);
+  assert.deepEqual((dc.receiptGaps as { deviceId: string }[]).filter((g) => [a.deviceId, b.deviceId].includes(g.deviceId)), [], 'A\'s #1 is used, not lost');
+  const mine = (dc.refusedReceipts as any[]).filter((x) => x.deviceId === a.deviceId);
+  assert.equal(mine.length, 1);
+  assert.deepEqual({ ...mine[0], receivedAt: undefined }, {
+    eventId: lost.eventId, deviceId: a.deviceId, counter: 'C1', saleId: s, receiptNo: lost.payload.receiptNo, receiptSeq: 1, reason: 'already_paid',
+    cashPaise: total, upiPaise: 0, receivedAt: undefined, acknowledgedAt: null, acknowledgedBy: null, afterDrawerClosed: false });
+
+  // Acknowledged once, by this outlet's manager. Another outlet's manager, or an event that was not refused: 404.
+  assert.equal((await ackAs(app, a.outletId, lost.eventId, 'a2@example.test')).statusCode, 404);
+  const applied = (await withTenant(A, async (c) => (await c.query(
+    `SELECT id FROM sync_event WHERE device_id = $1 AND type = 'payment.taken' AND outcome = 'applied'`, [a.deviceId])).rows[0])).id;
+  assert.equal((await ackAs(app, a.outletId, applied)).statusCode, 404);
+  assert.deepEqual((await ackAs(app, a.outletId, lost.eventId)).json(), { ok: true, already: false });
+  assert.deepEqual((await ackAs(app, a.outletId, lost.eventId)).json(), { ok: true, already: true });
+  const rows = await withTenant(A, async (c) => (await c.query(
+    `SELECT actor_id, detail FROM audit WHERE action = 'payment.refused_ack' AND entity_id = $1`, [lost.eventId])).rows);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].detail.saleId, s);
+  assert.equal(rows[0].detail.reason, 'already_paid');
+  const after = (await dayClose(app, a.outletId)).refusedReceipts.find((x: any) => x.eventId === lost.eventId);
+  assert.equal(after.acknowledgedBy, 'School 1 Canteen manager');
+  assert.ok(after.acknowledgedAt);
+});
+
+test('7d: paid offline an order another device voided: refused sale_void; a manager\'s force-close counts the cash too; no gap', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const [s, l1, shA] = ids(3);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 1)]);
+  assert.deepEqual(statuses(await b.push([voidBy(b, s!, b.cashierId)])), ['applied']);
+  const total = await totalOf([[1000, 1]]);
+  const opened = shiftOpened(a, shA!), split = payIn(a, shA!, s!, [[l1!, 1]], total);
+  // Split tender: part cash, part UPI. Only the cash is in the drawer.
+  split.payload.payments = [{ method: 'cash', amountPaise: 500, tenderedPaise: 500, changePaise: 0, upiRef: null },
+    { method: 'upi', amountPaise: total - 500, tenderedPaise: null, changePaise: 0, upiRef: 'UTR1' }];
+  assert.deepEqual(statuses(await a.push([opened, split])), ['applied', 'rejected:sale_void']);
+  assert.equal((await sale(s!)).status, 'void', 'the void stands');
+
+  const fc = await app.inject({ method: 'POST', url: `/outlets/${a.outletId}/shifts/${shA}/force-close`, headers: bearer(await login(app)), payload: { countedCashPaise: 500 } });
+  assert.equal(fc.statusCode, 200, fc.body);
+  assert.deepEqual(fc.json(), { ok: true, expectedCashPaise: 500, variancePaise: 0, refusedCashPaise: 500 });
+  assert.deepEqual(await shiftRow(shA!), { e: 500, v: 0, r: 500 });
+
+  const dc = await dayClose(app, a.outletId);
+  assert.deepEqual((dc.receiptGaps as { deviceId: string }[]).filter((g) => g.deviceId === a.deviceId), []);
+  const mine = (dc.refusedReceipts as any[]).filter((x) => x.deviceId === a.deviceId);
+  assert.deepEqual(mine.map((x) => [x.reason, x.cashPaise, x.upiPaise, x.afterDrawerClosed]), [['sale_void', 500, total - 500, false]],
+    'refused before the force-close: in that shift\'s figures, so not flagged');
+});
+
+test('7d: refused cash counts only in the drawer that took it, on the shift it names; another outlet neither sees nor acknowledges it', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const far = await Tab.enrol(app, 'a2@example.test', 'School 2 Canteen');
+  const [s, l1, shA1, shA2, shB] = ids(5);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 1)]);
+  const total = await totalOf([[1000, 1]]);
+  const o1 = shiftOpened(a, shA1!), o2 = shiftOpened(b, shB!);
+  assert.deepEqual(statuses(await a.push([o1, payIn(a, shA1!, s!, [[l1!, 1]], total)])), ['applied', 'applied']);
+
+  // B, paying the same table late, names A's shift instead of its own (a bug, or worse): refused, and not A's money.
+  const bad = payIn(b, shA1!, s!, [[l1!, 1]], total);
+  assert.deepEqual(statuses(await b.push([o2, bad])), ['applied', 'rejected:already_paid']);
+  // A pays again into its first shift (refused), closes it, opens a second: only the first holds the refused cash.
+  const again = payIn(a, shA1!, s!, [[l1!, 1]], total);
+  assert.deepEqual(statuses(await a.push([again, shiftClosed(a, shA1!, 2 * total)])), ['rejected:already_paid', 'applied']);
+  assert.deepEqual(await shiftRow(shA1!), { e: 2 * total, v: 0, r: total }, 'its own refusal only, not B\'s naming of it');
+  assert.deepEqual(statuses(await a.push([shiftOpened(a, shA2!), shiftClosed(a, shA2!, 0)])), ['applied', 'applied']);
+  assert.deepEqual(await shiftRow(shA2!), { e: 0, v: 0, r: 0 }, 'a later shift of the same tablet holds none of it');
+  assert.deepEqual(statuses(await b.push([shiftClosed(b, shB!, 0)])), ['applied']);
+  assert.deepEqual(await shiftRow(shB!), { e: 0, v: 0, r: 0 }, 'nor B\'s own drawer: it named a shift that is not B\'s (the real tablet names its own)');
+
+  // School 2's day close lists none of it; School 2's manager cannot acknowledge it through their own outlet.
+  const r = await app.inject({ method: 'GET', url: `/outlets/${far.outletId}/day-close?date=${DATE}`, headers: bearer(await login(app, 'a2@example.test')) });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.deepEqual((r.json().refusedReceipts as any[]).filter((x) => [again.eventId, bad.eventId].includes(x.eventId)), []);
+  assert.equal((await ackAs(app, far.outletId, again.eventId, 'a2@example.test')).statusCode, 404);
+});
+
+test('7d: a refusal that arrives after a manager force-closed its drawer is flagged at day close; the shift\'s figures stay as closed', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const [s, l1, shA, s2, l2] = ids(5);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 1), a.open(s2!, { tableId: await a.newTable() }), a.add(s2!, l2!, 1)]);
+  const total = await totalOf([[1000, 1]]);
+  assert.deepEqual(statuses(await b.push([b.pay(s!, [[l1!, 1]], total)])), ['applied']);
+  // A opens its drawer, goes offline, takes the table's money and another sale's; meanwhile a manager force-closes A's drawer.
+  assert.deepEqual(statuses(await a.push([shiftOpened(a, shA!)])), ['applied']);
+  const late = payIn(a, shA!, s!, [[l1!, 1]], total), onTime = payIn(a, shA!, s2!, [[l2!, 1]], total);
+  const fc = await app.inject({ method: 'POST', url: `/outlets/${a.outletId}/shifts/${shA}/force-close`, headers: bearer(await login(app)), payload: { countedCashPaise: 0 } });
+  assert.deepEqual(fc.json(), { ok: true, expectedCashPaise: 0, variancePaise: 0, refusedCashPaise: 0 });
+  assert.deepEqual(statuses(await a.push([late, onTime])), ['rejected:already_paid', 'applied']);
+  assert.deepEqual(await shiftRow(shA!), { e: 0, v: 0, r: 0 }, 'fixed at the close: not reopened by what came later');
+
+  const mine = ((await dayClose(app, a.outletId)).refusedReceipts as any[]).filter((x) => x.deviceId === a.deviceId);
+  assert.deepEqual(mine.map((x) => [x.eventId, x.afterDrawerClosed]), [[late.eventId, true]]);
+});
+
+test('7d: any other refusal of a payment is a fault, not a refused payment: no drawer cash, still a gap, no acknowledgement', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app);
+  const [s, l1, sh] = ids(3);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 1)]);
+  const total = await totalOf([[1000, 1]]);
+  const opened = shiftOpened(a, sh!), wrong = payIn(a, sh!, s!, [[l1!, 1]], total + 100); // a total its lines do not make
+  const [, r1] = await a.push([opened, wrong]);
+  assert.equal(r1!.status, 'rejected');
+  assert.ok(!['already_paid', 'sale_void'].includes(r1!.reason ?? ''), String(r1!.reason));
+  assert.deepEqual(statuses(await a.push([payIn(a, sh!, s!, [[l1!, 1]], total), shiftClosed(a, sh!, total)])), ['applied', 'applied']);
+  assert.deepEqual(await shiftRow(sh!), { e: total, v: 0, r: 0 });
+  const dc = await dayClose(app, a.outletId);
+  assert.deepEqual((dc.receiptGaps as any[]).filter((g) => g.deviceId === a.deviceId).map((g) => g.missing), [[1]]);
+  assert.deepEqual((dc.refusedReceipts as any[]).filter((x) => x.deviceId === a.deviceId), []);
+  assert.equal((await ackAs(app, a.outletId, wrong.eventId)).statusCode, 404);
+});

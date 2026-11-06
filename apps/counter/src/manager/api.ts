@@ -7,9 +7,16 @@ export interface Me { name: string; outlets: { id: string; name: string; timezon
 export interface Totals {
   paidSales: number; grossPaise: number; taxPaise: number; cashPaise: number; upiPaise: number; onlineGrossPaise: number;
   voids: number; voidTotalPaise: number; refunds: number; refundTotalPaise: number; varianceTotalPaise: number;
-  shifts: { id: string; cashier: string; counter: string; float: number; counted: number; expected: number; variance: number }[];
+  shifts: { id: string; cashier: string; counter: string; float: number; counted: number; expected: number; variance: number; refused?: number }[];
   lateAdjustments?: { id: string; businessDate: string; receiptNo: string; status: string; totalPaise: number }[];
   receiptGaps?: { deviceId: string; counter: string; missing: number[] }[];
+  refusedReceipts?: RefusedReceipt[];
+}
+/** A payment the server refused (step 7d): the customer paid, another device's closing of the order stood. */
+export interface RefusedReceipt {
+  eventId: string; deviceId: string; counter: string; saleId: string; receiptNo: string; receiptSeq: number; reason: string;
+  cashPaise: number; upiPaise: number; receivedAt: string; acknowledgedAt: string | null; acknowledgedBy: string | null;
+  afterDrawerClosed?: boolean;
 }
 export interface Device { id: string; label: string | null; counter: string; lastSeenAt: string | null; outboxPending: number | null; blocking: boolean }
 export interface OpenOrder {
@@ -20,6 +27,7 @@ export interface Blockers { openShifts: { id: string; cashier: string; openedAt:
 export interface Preview {
   date: string; closed: boolean; closedAt?: string; provisional?: boolean;
   blockers?: Blockers; totals: Totals | null; lateAdjustments: NonNullable<Totals['lateAdjustments']>; receiptGaps?: NonNullable<Totals['receiptGaps']>;
+  refusedReceipts?: RefusedReceipt[];
 }
 
 export const rs = (n: number) => formatRupees(paise(n));

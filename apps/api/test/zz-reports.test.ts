@@ -35,8 +35,8 @@ async function world() {
 
     const sh = randomUUID();
     await c.query(
-      `INSERT INTO shift (id, tenant_id, outlet_id, device_id, user_id, opened_at, closed_at, opening_cash_paise, counted_cash_paise, expected_cash_paise, variance_paise)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 5000, 19950, 20000, -50)`, [sh, A, o, dev, u, `${D}T09:00:00+05:30`, `${D}T17:00:00+05:30`]);
+      `INSERT INTO shift (id, tenant_id, outlet_id, device_id, user_id, opened_at, closed_at, opening_cash_paise, counted_cash_paise, expected_cash_paise, variance_paise, refused_cash_paise)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 5000, 19950, 20000, -50, 0)`, [sh, A, o, dev, u, `${D}T09:00:00+05:30`, `${D}T17:00:00+05:30`]);
 
     // A drawer still open that day has no count yet: the variance report must not include it.
     await c.query(

@@ -6,6 +6,9 @@
 // What it checks: a waiter's order on one device appears on the other's table map without anyone pressing sync (the
 // server's nudge); either device adds to the other's order and both show the same lines; a line added offline arrives
 // once the device is back; payment stays with the device that opened the order, and paying frees the table on both.
+// Step 7d: a third tablet pays offline two orders that another device pays or voids first; its refused payments show
+// a banner, a slip line and the server's shift figures, and a manager acknowledges them on that tablet.
+// Run browser-flow.mjs on its own fresh seed afterwards: this script leaves drawers open on School 1.
 import http from 'node:http';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -37,7 +40,8 @@ const [outletId, counterId] = execFileSync('docker', ['exec', 'app-postgres-1', 
 await api('PUT', `/outlets/${outletId}/table-mode`, { mode: 'map' }, mgr);
 const tag = Date.now().toString(36).slice(-4).toUpperCase();
 const [shared, own, voided] = [`S${tag}`, `O${tag}`, `V${tag}`]; // fresh tables, so earlier runs' orders are not on them
-for (const code of [shared, own, voided]) {
+const [racePaid, raceVoid] = [`P${tag}`, `Q${tag}`]; // step 7d: the tables two counters race on
+for (const code of [shared, own, voided, racePaid, raceVoid]) {
   const r = await api('POST', `/outlets/${outletId}/tables`, { code }, mgr);
   if (r.status !== 201) throw new Error(`table ${code}: ${r.status}`);
 }
@@ -191,6 +195,99 @@ try {
     .split('\n').filter((l) => /^(paid|open|void)\|/.test(l));
   check('server: both void with their reasons; B\'s audited as voided on another device, A\'s own not',
     vrec.join(',') === 'void|guest walked out|1,void|rung by mistake|0', vrec.join(' , '));
+
+  // 7d: a second counter, C, takes money offline for two orders that another device closes first: A pays one, A voids
+  // the other. On reconnect C's payments are refused; C shows a banner, its slip names the cash, a manager clears it.
+  const c = await tablet('C', 'cashier', { width: 1024, height: 768 });
+  const rupees = (s) => Number(s.replace(/[^\d.]/g, ''));
+  const race = async (code) => {
+    await b.T(`table-${code}`).click();
+    await b.item(0).click();
+    await b.until(async () => (await b.lines()) === 1);
+    check(`C: B's order on ${code} arrives before C goes offline`, (await c.until(() => c.busy(code), 15000)) >= 0);
+    await a.until(() => a.busy(code), 15000);
+    await c.ctx.setOffline(true);
+    await c.T(`table-${code}`).click();
+    await c.until(async () => (await c.lines()) === 1);
+    const amount = rupees(await c.T('total').innerText());
+    await c.T('pay-cash').click(); await c.T('confirm-pay').click();
+    await c.T('receipt-no').waitFor();
+    const receipt = (await c.T('receipt-no').innerText()).trim();
+    await c.T('new-sale').click();
+    return { receipt, amount };
+  };
+  const lostToPay = await race(racePaid);
+  await a.T(`table-${racePaid}`).click();
+  await a.until(async () => (await a.lines()) === 1);
+  await a.T('pay-cash').click(); await a.T('confirm-pay').click();
+  await a.T('receipt-no').waitFor();
+  await a.T('new-sale').click();
+  // A's closing must reach the server first (A sends about 0.8 s after a change): that is the race C loses.
+  const sent = () => a.until(async () => (await a.T('pending').innerText()).startsWith('0 waiting'), 15000);
+  check('A: its payment reached the server', (await sent()) >= 0);
+  check('C offline: no banner while its payment is unsent', !(await c.T('refused-banner').isVisible()));
+  await c.ctx.setOffline(false);
+  const shown = await c.until(async () => (await c.T('refused-row').count()) === 1, 15000);
+  check('C: on reconnect the banner names the refused receipt (already paid elsewhere)', shown >= 0 &&
+    (await c.T('refused-row').first().innerText()).includes(lostToPay.receipt) && (await c.T('refused-row').first().innerText()).includes('already paid'),
+    shown >= 0 ? `${shown} ms` : 'not within 15 s');
+  check('C: the generic "not accepted" banner is not shown for it', !(await c.T('parked').isVisible()));
+  await c.shot('t6a-c-refused-already-paid');
+
+  const lostToVoid = await race(raceVoid);
+  await a.T(`table-${raceVoid}`).click();
+  await a.until(async () => (await a.lines()) === 1);
+  await a.T('void-order').click(); await a.T('void-reason').fill('customer left'); await a.T('void-go').click();
+  await a.until(async () => !(await a.busy(raceVoid)));
+  check('A: its void reached the server', (await sent()) >= 0);
+  await c.ctx.setOffline(false);
+  const both = await c.until(async () => (await c.T('refused-row').count()) === 2, 15000);
+  check('C: the voided order\'s payment is refused too, and says why', both >= 0 &&
+    (await c.T('refused-banner').innerText()).includes(lostToVoid.receipt) && (await c.T('refused-banner').innerText()).includes('voided'));
+  check('C: neither table comes back busy on C', !(await c.busy(racePaid)) && !(await c.busy(raceVoid)));
+
+  // Shift: the banner is there too; the cashier counts the float plus both amounts, and the slip says where it went.
+  await c.T('tab-shift').click();
+  check('C: the banner shows on the Shift screen', await c.T('refused-banner').isVisible());
+  const counted = 500 + lostToPay.amount + lostToVoid.amount;
+  await c.T('counted-cash').fill(counted.toFixed(2)); await c.T('close-shift').click();
+  await c.T('shift-slip-text').waitFor();
+  const slip = await c.T('shift-slip-text').innerText();
+  check('C: slip lists "taken, refused by server" with the cash, and the drawer matches', slip.includes('Taken, refused by server (2)') && slip.includes('Cash matches') &&
+    slip.includes('Refund or hand to manager.'), slip.split('\n').filter((l) => /refused|Cash|OVER|SHORT|Bills/i.test(l)).join(' / '));
+  await c.shot('t6b-c-slip-refused');
+  await c.T('slip-done').click();
+  const sq = `BEGIN; SELECT set_config('app.tenant_id','00000000-0000-4000-8000-00000000000a',true);
+    SELECT 'R|'||s.expected_cash_paise||'|'||s.variance_paise||'|'||s.refused_cash_paise FROM shift s
+     WHERE s.closed_at IS NOT NULL AND s.device_id = (SELECT e.device_id FROM sync_event e WHERE e.payload->>'receiptNo' = '${lostToPay.receipt}' AND e.outcome = 'rejected' LIMIT 1)
+     ORDER BY s.closed_at DESC LIMIT 1; COMMIT;`;
+  const srow = execFileSync('docker', ['exec', 'app-postgres-1', 'psql', '-U', 'pos_owner', '-d', 'pos', '-tA', '-c', sq]).toString().split('\n').find((l) => l.startsWith('R|')) ?? '';
+  const paise = (n) => Math.round(n * 100);
+  check('server: C\'s shift expects the refused cash, variance 0, and names it', srow === `R|${paise(counted)}|0|${paise(lostToPay.amount + lostToVoid.amount)}`, srow);
+
+  // A manager signs in on C and acknowledges both; the banner is gone when the cashier signs back in.
+  await c.T('sign-out').click();
+  await c.T('mgr-open').click();
+  await c.T('mgr-email').fill('a1@example.test'); await c.T('mgr-password').fill('dev-password-123'); await c.T('mgr-login').click();
+  check('Manager on C: both refused payments listed', (await c.until(async () => (await c.T('mgr-refused-ack').count()) === 2)) >= 0);
+  check('Manager on C: day close lists them as refused, not as missing receipts',
+    (await c.until(async () => (await c.T('mgr-refused-receipt').count()) >= 2, 10000)) >= 0 &&
+    !(await c.page.locator('[data-testid="mgr-gap"]').allInnerTexts()).some((t) => t.includes(String(Number(lostToPay.receipt.split('-').pop())))));
+  await c.shot('t6c-c-manager-refused');
+  await c.T('mgr-refused-ack').first().click();
+  await c.until(async () => (await c.T('mgr-refused-ack').count()) === 1);
+  await c.T('mgr-refused-ack').first().click();
+  check('Manager on C: acknowledged, the list is empty', (await c.until(async () => (await c.T('mgr-refused').count()) === 0)) >= 0);
+  const aq = `BEGIN; SELECT set_config('app.tenant_id','00000000-0000-4000-8000-00000000000a',true);
+    SELECT 'N|'||count(*) FROM audit WHERE action = 'payment.refused_ack' AND detail->>'receiptNo' IN ('${lostToPay.receipt}', '${lostToVoid.receipt}'); COMMIT;`;
+  const acks = execFileSync('docker', ['exec', 'app-postgres-1', 'psql', '-U', 'pos_owner', '-d', 'pos', '-tA', '-c', aq]).toString().split('\n').find((l) => l.startsWith('N|'));
+  check('server: two acknowledgements in the audit', acks === 'N|2', acks);
+  await c.page.reload();
+  await c.page.locator('[data-testid^="staff-"]').filter({ hasText: /cashier/i }).first().click();
+  for (const d of PIN) await c.T(`key-${d}`).click();
+  await c.T('pin-go').click();
+  await c.T('opening-cash').waitFor({ timeout: 10000 });
+  check('C: after acknowledgement no banner, no parked records', !(await c.T('refused-banner').isVisible()) && !(await c.T('parked').isVisible()));
   for (const t of [a, b]) check(`${t === a ? 'A' : 'B'}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 } catch (e) {
   check('run completed', false, String(e).split('\n')[0]);

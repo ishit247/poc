@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { withTenant } from '../db.js';
 import { expectedCash } from '@pos/shared';
 import { audit } from '../audit.js';
+import { cashOf, REFUSED_REASONS, refusedPaymentsOf, refusedReceipts } from '../refused.js';
 
 const params = z.object({ id: z.string().uuid() });
 const query = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict();
@@ -67,7 +68,7 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
   // A shift belongs to the day it was opened on, in the outlet's own timezone.
   const shifts = await c.query(
     `SELECT s.id, u.name AS cashier, ct.code AS counter, s.opening_cash_paise AS "float", s.counted_cash_paise AS counted,
-            s.expected_cash_paise AS expected, s.variance_paise AS variance
+            s.expected_cash_paise AS expected, s.variance_paise AS variance, s.refused_cash_paise AS refused
        FROM shift s JOIN app_user u ON u.id = s.user_id JOIN device d ON d.id = s.device_id JOIN counter ct ON ct.id = d.counter_id
        JOIN outlet o ON o.id = s.outlet_id
       WHERE s.outlet_id = $1 AND (s.opened_at AT TIME ZONE o.timezone)::date = $2 AND s.closed_at IS NOT NULL
@@ -77,7 +78,7 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
     paidSales: s.paid, grossPaise: Number(s.gross), taxPaise: Number(s.tax),
     cashPaise: by.cash ?? 0, upiPaise: by.upi ?? 0, onlineGrossPaise: by.aggregator ?? 0,
     voids: s.voids, voidTotalPaise: Number(s.voidTotal), refunds: s.refunds, refundTotalPaise: Number(s.refundTotal),
-    shifts: shifts.rows.map((r) => ({ ...r, float: Number(r.float), counted: Number(r.counted), expected: Number(r.expected), variance: Number(r.variance) })),
+    shifts: shifts.rows.map((r) => ({ ...r, float: Number(r.float), counted: Number(r.counted), expected: Number(r.expected), variance: Number(r.variance), refused: Number(r.refused) })),
     varianceTotalPaise: shifts.rows.reduce((a, r) => a + Number(r.variance), 0),
   };
 }
@@ -87,14 +88,22 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
  * a rejected event, or one still on a tablet. Shown to the manager; it does not block the close.
  */
 async function receiptGaps(c: pg.PoolClient, outletId: string, date: string) {
+  // A refused payment (step 7d) used its number: the receipt was printed and the customer paid. It is listed under
+  // `refusedReceipts`, not here, and it still counts towards the top of the series.
   const r = await c.query(
     `SELECT g.device_id AS "deviceId", ct.code AS counter, array_agg(n ORDER BY n) AS missing
-       FROM (SELECT COALESCE(paid_device_id, device_id) AS device_id, max(receipt_seq) AS top, array_agg(receipt_seq) AS have
-               FROM sale WHERE outlet_id = $1 AND business_date = $2 AND receipt_seq IS NOT NULL
-              GROUP BY COALESCE(paid_device_id, device_id)) g
+       FROM (SELECT device_id, max(seq) AS top, array_agg(seq) AS have
+               FROM (SELECT COALESCE(paid_device_id, device_id) AS device_id, receipt_seq AS seq
+                       FROM sale WHERE outlet_id = $1 AND business_date = $2 AND receipt_seq IS NOT NULL
+                     UNION ALL
+                     SELECT e.device_id, (e.payload->>'receiptSeq')::int
+                       FROM sync_event e JOIN device dv ON dv.id = e.device_id
+                      WHERE dv.outlet_id = $1 AND e.type = 'payment.taken' AND e.outcome = 'rejected' AND e.reason = ANY($3::text[])
+                        AND e.payload->>'businessDate' = $2::text) used
+              GROUP BY device_id) g
        JOIN device d ON d.id = g.device_id JOIN counter ct ON ct.id = d.counter_id
        CROSS JOIN LATERAL generate_series(1, g.top) n
-      WHERE NOT n = ANY(g.have) GROUP BY g.device_id, ct.code ORDER BY ct.code`, [outletId, date]);
+      WHERE NOT n = ANY(g.have) GROUP BY g.device_id, ct.code ORDER BY ct.code`, [outletId, date, REFUSED_REASONS]);
   return r.rows as { deviceId: string; counter: string; missing: number[] }[];
 }
 
@@ -143,6 +152,7 @@ export const dayCloseRoutes: FastifyPluginAsync = async (app) => {
         totals: day ? await totals(c, ps.data.id, day.id, q.data.date) : null,
         lateAdjustments: await lateAdjustments(c, ps.data.id, q.data.date),
         receiptGaps: await receiptGaps(c, ps.data.id, q.data.date),
+        refusedReceipts: await refusedReceipts(c, ps.data.id, q.data.date),
       };
     });
   });
@@ -157,19 +167,49 @@ export const dayCloseRoutes: FastifyPluginAsync = async (app) => {
     if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);
     return withTenant(p.tenantId, async (c) => {
       // Lock the row so a tablet's own close, arriving at the same moment, cannot also win.
-      const s = (await c.query('SELECT opening_cash_paise::int AS opening, closed_at FROM shift WHERE id = $1 AND outlet_id = $2 FOR UPDATE', [ps.data.shiftId, ps.data.id])).rows[0];
+      const s = (await c.query('SELECT opening_cash_paise::int AS opening, closed_at, device_id FROM shift WHERE id = $1 AND outlet_id = $2 FOR UPDATE', [ps.data.shiftId, ps.data.id])).rows[0];
       if (!s) return notFound(reply);
       if (s.closed_at) return reply.code(409).send({ error: 'already closed' });
       const pays = await c.query(
         `SELECT pay.method, pay.amount_paise::int AS "amountPaise" FROM payment pay JOIN sale sl ON sl.id = pay.sale_id WHERE sl.shift_id = $1`, [ps.data.shiftId]);
-      const expected = expectedCash(s.opening, pays.rows);
+      // Cash taken for payments the server refused (step 7d) is in the drawer too; see refused.ts.
+      const refused = await refusedPaymentsOf(c, ps.data.shiftId, s.device_id);
+      const expected = expectedCash(s.opening, [...pays.rows, ...refused]);
       const counted = b.data.countedCashPaise;
       await c.query(
-        `UPDATE shift SET closed_at = now(), closed_by = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint WHERE id = $1`,
-        [ps.data.shiftId, p.userId, counted, expected]);
+        `UPDATE shift SET closed_at = now(), closed_by = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint,
+                          refused_cash_paise = $5::bigint WHERE id = $1`,
+        [ps.data.shiftId, p.userId, counted, expected, cashOf(refused)]);
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'shift.force_close', entity: 'shift', entityId: ps.data.shiftId,
-        detail: { outletId: ps.data.id, countedCashPaise: counted, expectedCashPaise: expected, variancePaise: counted - expected } });
-      return { ok: true, expectedCashPaise: expected, variancePaise: counted - expected };
+        detail: { outletId: ps.data.id, countedCashPaise: counted, expectedCashPaise: expected, variancePaise: counted - expected, refusedCashPaise: cashOf(refused) } });
+      return { ok: true, expectedCashPaise: expected, variancePaise: counted - expected, refusedCashPaise: cashOf(refused) };
+    });
+  });
+
+  // A manager acknowledges a refused payment (step 7d): they have the cash, or saw it refunded. The audit row is the
+  // whole record, so it is written on the request's own transaction, not behind the audit savepoint: if it cannot be
+  // written the request fails. A second acknowledgement records nothing and says so.
+  app.post('/outlets/:id/refused-payments/:eventId/ack', { config: cfg }, async (req, reply) => {
+    const ps = z.object({ id: z.string().uuid(), eventId: z.string().uuid() }).safeParse(req.params);
+    const b = z.object({ note: z.string().trim().max(200).optional() }).strict().safeParse(req.body ?? {});
+    if (!ps.success || !b.success) return reply.code(400).send({ error: 'invalid request' });
+    const p = req.principal!;
+    if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);
+    return withTenant(p.tenantId, async (c) => {
+      const e = (await c.query(
+        `SELECT e.id, e.device_id, e.entity_id, e.reason, e.payload->>'receiptNo' AS "receiptNo" FROM sync_event e JOIN device d ON d.id = e.device_id
+          WHERE e.id = $1 AND d.outlet_id = $2 AND e.type = 'payment.taken' AND e.outcome = 'rejected' AND e.reason = ANY($3::text[])`,
+        [ps.data.eventId, ps.data.id, REFUSED_REASONS])).rows[0];
+      if (!e) return notFound(reply);
+      // sync_event is not updatable by the app role, so no row lock: two managers at once queue on this instead.
+      await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`refused_ack:${e.id}`]);
+      const seen = await c.query(`SELECT 1 FROM audit WHERE action = 'payment.refused_ack' AND entity = 'sync_event' AND entity_id = $1`, [e.id]);
+      if (seen.rowCount) return { ok: true, already: true };
+      await c.query(
+        'INSERT INTO audit (tenant_id, actor_kind, actor_id, action, entity, entity_id, detail) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [p.tenantId, 'user', p.userId, 'payment.refused_ack', 'sync_event', e.id,
+          { outletId: ps.data.id, deviceId: e.device_id, saleId: e.entity_id, receiptNo: e.receiptNo, reason: e.reason, note: b.data.note ?? null }]);
+      return { ok: true, already: false };
     });
   });
 
@@ -196,7 +236,7 @@ export const dayCloseRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(409).send({ error: 'cannot close', blockers: { ...bl, devices: bl.devices.map((d) => ({ ...d, blocking: unacked.some((u) => u.id === d.id) })) } });
       }
 
-      const frozen = { ...(await totals(c, ps.data.id, day.id, date)), lateAdjustments: await lateAdjustments(c, ps.data.id, date), receiptGaps: await receiptGaps(c, ps.data.id, date) };
+      const frozen = { ...(await totals(c, ps.data.id, day.id, date)), lateAdjustments: await lateAdjustments(c, ps.data.id, date), receiptGaps: await receiptGaps(c, ps.data.id, date), refusedReceipts: await refusedReceipts(c, ps.data.id, date) };
       await c.query('UPDATE business_day SET closed_at = now(), closed_by = $2, totals = $3 WHERE id = $1 AND closed_at IS NULL',
         [day.id, p.userId, JSON.stringify(frozen)]);
       const skipped = bl.devices.filter((d) => d.blocking && acknowledgedDeviceIds.includes(d.id)).map((d) => ({ id: d.id, outboxPending: d.outboxPending }));

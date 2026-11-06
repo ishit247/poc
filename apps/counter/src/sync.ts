@@ -6,6 +6,7 @@ import { syncLogo } from './logo.ts';
 import { syncItemImages } from './itemImages.ts';
 import { applyVisits, localSettings, type PulledVisit } from './order.ts';
 import { watchStream } from './stream.ts';
+import { markRefused } from './refused.ts';
 
 interface Change { type: string; id: string; version: number; deleted: boolean; data: Record<string, any> }
 
@@ -113,10 +114,13 @@ export async function push(device: DeviceInfo): Promise<PushSummary> {
     if (!r.ok) throw new Error(`push failed: ${r.status}`);
     const { results } = (await r.json()) as { results: { eventId: string; status: string; reason?: string }[] };
     const bySeq = new Map(batch.map((b) => [b.eventId, b.seq!]));
-    await db.transaction('rw', db.outbox, db.meta, async () => {
+    const byId = new Map(batch.map((b) => [b.eventId, b]));
+    await db.transaction('rw', db.outbox, db.meta, db.sales, async () => {
       for (const res of results) {
         const seq = bySeq.get(res.eventId);
         if (seq === undefined) continue;
+        // Step 7d: another device's closing of this order won. The row stops counting as paid in the same transaction.
+        if (res.status === 'rejected' && res.reason) await markRefused(byId.get(res.eventId)!, res.reason);
         if (res.status === 'applied' || res.status === 'duplicate') { await db.outbox.delete(seq); summary.done++; }
         // A manager already closed this drawer: nothing is wrong, and pull brings their figures. Not a parked failure.
         else if (res.status === 'rejected' && res.reason === 'shift_force_closed') { await db.outbox.delete(seq); summary.done++; }

@@ -3,7 +3,7 @@
 import 'fake-indexeddb/auto';
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { addItem, paise, DEFAULT_SETTINGS, type MenuEntry, type Tender } from '@pos/shared';
+import { addItem, paise, totals, DEFAULT_SETTINGS, type MenuEntry, type Tender } from '@pos/shared';
 import { currentShift, db, type DeviceInfo } from '../src/db.ts';
 import { createSale, type Actor } from '../src/sale.ts';
 import { pull, pullOrders, push } from '../src/sync.ts';
@@ -12,6 +12,7 @@ import { addToOrder, moveOrder, openOrder, orderById, removeLine, setLineQty, ta
 import { loadMenu } from '../src/menu.ts';
 import { payOrder } from '../src/sale.ts';
 import { seedShift } from './helpers.ts';
+import { acknowledgeRefused, unacknowledgedRefused } from '../src/refused.ts';
 import { buildApp } from '../../api/src/app.ts';
 import { pool, withTenant } from '../../api/src/db.ts';
 
@@ -347,4 +348,91 @@ test('contract (12b, 7b): two devices at one table, each sees and adds to the ot
     payload: { events: [{ eventId: crypto.randomUUID(), seq: ++bSeq, createdAt: at(), payload: { type: 'payment.taken', schemaVersion: 2, saleId: bRoot, businessDate: '2026-05-23',
       receiptNo: 'C1-20260523-1', receiptSeq: 1, payments: [{ method: 'cash', amountPaise: rec.total, tenderedPaise: rec.total, changePaise: 0, upiRef: null }], lines, totalPaise: rec.total } }] } });
   assert.equal(late.json().results[0].reason, 'already_paid');
+});
+
+test('contract (7d): the tablet loses both races against the real server: refused rows, an honest slip equal to the server\'s, no receipt gap, acknowledged', async () => {
+  const { app, A, mgr, o, real, actor, enrol } = await realTablet();
+  const newTable = async () => {
+    const r = await app.inject({ method: 'POST', url: `/outlets/${o.id}/tables`, headers: { authorization: `Bearer ${mgr}` }, payload: { code: `R${Math.random().toString(36).slice(2, 7)}` } });
+    assert.equal(r.statusCode, 201, r.body);
+    return r.json().id as string;
+  };
+  const [t1, t2] = [await newTable(), await newTable()];
+  await pull(real);
+  const menu = await loadMenu();
+  const e1 = menu.entries.find((e) => e.available)!;
+  const opts = { device: real, actor, settings: menu.settings };
+  await openShift({ actor, openingCashPaise: 0 });
+
+  // Device B, another cashier's tablet at the outlet, as raw events.
+  const bCred = await enrol();
+  let bSeq = 0;
+  const bPush = async (...payloads: unknown[]) => {
+    const r = await app.inject({ method: 'POST', url: '/sync/push', headers: { authorization: `Device ${bCred}` },
+      payload: { events: payloads.map((payload) => ({ eventId: crypto.randomUUID(), seq: ++bSeq, createdAt: new Date().toISOString(), payload })) } });
+    return (r.json().results as { status: string; reason?: string }[]).map((x) => x.reason ? `${x.status}:${x.reason}` : x.status);
+  };
+  const cashierId = actor.id;
+
+  // Two orders of this tablet, on the server.
+  let paidThere = await openOrder({ ...opts, menuVersion: menu.menuVersion, tableId: t1 });
+  paidThere = await addToOrder({ ...opts, saleId: paidThere.id, entry: e1 });
+  let voidedThere = await openOrder({ ...opts, menuVersion: menu.menuVersion, tableId: t2 });
+  voidedThere = await addToOrder({ ...opts, saleId: voidedThere.id, entry: e1, });
+  assert.equal((await push(real)).parked, 0);
+
+  // B pays the first and voids the second, while this tablet is offline.
+  const date = paidThere.businessDate.replaceAll('-', '');
+  const lines = paidThere.lines.map((l) => ({ lineId: l.lineId, qty: l.qty }));
+  assert.deepEqual(await bPush(
+    { type: 'payment.taken', schemaVersion: 2, saleId: paidThere.id, businessDate: paidThere.businessDate, receiptNo: `C1-${date}-1`, receiptSeq: 1,
+      payments: [{ method: 'cash', amountPaise: paidThere.totalPaise, tenderedPaise: paidThere.totalPaise, changePaise: 0, upiRef: null }], lines, totalPaise: paidThere.totalPaise },
+    { type: 'order.voided', schemaVersion: 2, saleId: voidedThere.id, voidedBy: cashierId, reason: 'rung twice', at: new Date().toISOString() }), ['applied', 'applied']);
+
+  // Offline, this tablet takes cash for both, then rings an ordinary sale. All three receipts are printed.
+  const p1 = await payOrder({ device: real, actor, saleId: paidThere.id, tenders: cash(paidThere.totalPaise) });
+  const p2 = await payOrder({ device: real, actor, saleId: voidedThere.id, tenders: cash(voidedThere.totalPaise) });
+  const cart = addItem([], e1, 1);
+  const p3 = await createSale({ device: real, actor, cart, settings: menu.settings, menuVersion: menu.menuVersion, tenders: cash(totals(cart, menu.settings).total) });
+
+  // Reconnect: both payments refused, the ordinary sale applied.
+  const res = await push(real);
+  assert.equal(res.parked, 2);
+  assert.deepEqual([(await db.sales.get(p1.id))?.status, (await db.sales.get(p1.id))?.refused?.reason], ['refused', 'already_paid']);
+  assert.deepEqual([(await db.sales.get(p2.id))?.status, (await db.sales.get(p2.id))?.refused?.reason], ['refused', 'sale_void']);
+  assert.equal((await db.sales.get(p3.id))?.status, 'paid');
+
+  // A pull afterwards neither brings them back as open orders nor deletes them.
+  await pullOrders(real);
+  assert.equal((await db.sales.get(p1.id))?.status, 'refused');
+  assert.equal((await db.sales.get(p2.id))?.status, 'refused');
+  const states = await tableStates();
+  assert.equal(states.find((s) => s.table.id === t1)!.orders.length, 0);
+  assert.equal(states.find((s) => s.table.id === t2)!.orders.length, 0);
+
+  // Shift close with the whole drawer counted: the tablet's slip and the server agree, and the refused cash is named.
+  const counted = p1.totalPaise + p2.totalPaise + p3.totalPaise;
+  const slip = await closeShift({ device: real, actor, countedCashPaise: counted });
+  assert.equal(slip.variancePaise, 0);
+  assert.deepEqual(slip.refused, { count: 2, cashPaise: p1.totalPaise + p2.totalPaise, upiPaise: 0 });
+  assert.equal(slip.salesCount, 1);
+  assert.equal((await push(real)).parked, 0);
+  const shiftId = (await db.shifts.toArray()).find((s) => s.closedAt)!.id;
+  const srv = await withTenant(A, async (c) => (await c.query(
+    'SELECT expected_cash_paise::int AS e, variance_paise::int AS v, refused_cash_paise::int AS r FROM shift WHERE id = $1', [shiftId])).rows[0]);
+  assert.deepEqual(srv, { e: counted, v: 0, r: p1.totalPaise + p2.totalPaise });
+
+  // Day close: this tablet's three numbers are used (none missing); the two refused are listed.
+  const dc = (await app.inject({ method: 'GET', url: `/outlets/${o.id}/day-close?date=${p1.businessDate}`, headers: { authorization: `Bearer ${mgr}` } })).json();
+  assert.deepEqual(dc.receiptGaps.filter((g: { deviceId: string }) => g.deviceId === real.deviceId), []);
+  assert.deepEqual(dc.refusedReceipts.filter((x: { deviceId: string }) => x.deviceId === real.deviceId).map((x: { receiptNo: string; reason: string }) => [x.receiptNo, x.reason]),
+    [[p1.receiptNo, 'already_paid'], [p2.receiptNo, 'sale_void']]);
+
+  // The manager acknowledges both on this tablet: the banner list empties, the parked copies go, the server records it.
+  for (const id of [p1.id, p2.id]) await acknowledgeRefused({ token: mgr, outletId: o.id, saleId: id });
+  assert.deepEqual(await unacknowledgedRefused(), []);
+  assert.equal(await db.outbox.filter((r) => !!r.rejected).count(), 0);
+  const acked = (await app.inject({ method: 'GET', url: `/outlets/${o.id}/day-close?date=${p1.businessDate}`, headers: { authorization: `Bearer ${mgr}` } })).json()
+    .refusedReceipts.filter((x: { deviceId: string }) => x.deviceId === real.deviceId);
+  assert.ok(acked.every((x: { acknowledgedAt: string | null }) => x.acknowledgedAt), 'both acknowledged on the server');
 });

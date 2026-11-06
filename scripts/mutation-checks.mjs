@@ -27,6 +27,7 @@ const ORDER = 'packages/shared/src/order.ts';
 const SHARED_ORDER = { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/order.test.ts'], noDb: true };
 const TABLET_ORDER = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/order.test.ts'], noDb: true };
 const TABLET_VISITS = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/visits.test.ts'], noDb: true };
+const TABLET_REFUSED = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/refused.test.ts'], noDb: true };
 const PULL_TESTS = API_TESTS('orders-pull.test.ts');
 
 const staff = API_TESTS('staff.test.ts');
@@ -595,6 +596,33 @@ const MUTANTS = [
     ['pd-payer-mutable', 'NEW.table_id, NEW.paid_device_id)', 'NEW.table_id, OLD.paid_device_id)'],
     ['pd-payer-any-outlet', 'FOREIGN KEY (tenant_id, outlet_id, paid_device_id) REFERENCES device(tenant_id, outlet_id, id),', 'FOREIGN KEY (tenant_id, paid_device_id) REFERENCES device(tenant_id, id),'],
   ].map(([id, from, to]) => M(id, TRADING, from, to, DB_TESTS)),
+  // --- phase 12 step 7d: a payment the server refused (already_paid / sale_void) on the tablet that took it
+  ...[
+    ['rf-close-ignores-refused', 'apps/api/src/ingest.ts', 'const expected = expectedCash(shift.opening, [...pays.rows, ...refused]);', 'const expected = expectedCash(shift.opening, pays.rows);'],
+    ['rf-close-refused-unrecorded', 'apps/api/src/ingest.ts', '[ev.shiftId, ev.at, ev.countedCashPaise, expected, cashOf(refused)]', '[ev.shiftId, ev.at, ev.countedCashPaise, expected, 0]'],
+    ['rf-force-close-ignores-refused', 'apps/api/src/routes/dayclose.ts', 'const expected = expectedCash(s.opening, [...pays.rows, ...refused]);', 'const expected = expectedCash(s.opening, pays.rows);'],
+    ['rf-cash-any-reason', 'apps/api/src/refused.ts', /AND e\.reason = ANY\(\$3::text\[\]\)(?=\r?\n\s+AND e\.payload->>'shiftId' = \$1)/, 'AND $3::text[] IS NOT NULL'],
+    ['rf-cash-any-shift', 'apps/api/src/refused.ts', "AND e.payload->>'shiftId' = $1`", "AND $1::text IS NOT NULL`"],
+    ['rf-cash-any-device', 'apps/api/src/refused.ts', "WHERE e.device_id = $2 AND e.type = 'payment.taken'", "WHERE $2::uuid IS NOT NULL AND e.type = 'payment.taken'"],
+    ['rf-list-any-outlet', 'apps/api/src/refused.ts', "WHERE d.outlet_id = $1 AND e.type = 'payment.taken'", "WHERE $1::uuid IS NOT NULL AND e.type = 'payment.taken'"],
+    ['rf-gap-not-used', 'apps/api/src/routes/dayclose.ts', "AND e.payload->>'businessDate' = $2::text) used", 'AND false) used'],
+    ['rf-gap-any-reason', 'apps/api/src/routes/dayclose.ts', /AND e\.reason = ANY\(\$3::text\[\]\)(?=\r?\n\s+AND e\.payload->>'businessDate' = \$2::text\) used)/, 'AND $3::text[] IS NOT NULL'],
+    ['rf-ack-any-outlet', 'apps/api/src/routes/dayclose.ts', "WHERE e.id = $1 AND d.outlet_id = $2 AND", 'WHERE e.id = $1 AND $2::uuid IS NOT NULL AND'],
+    ['rf-ack-any-event', 'apps/api/src/routes/dayclose.ts', /AND e\.type = 'payment\.taken' AND e\.outcome = 'rejected' AND e\.reason = ANY\(\$3::text\[\]\)`,(?=\r?\n\s+\[ps\.data\.eventId)/, 'AND $3::text[] IS NOT NULL`,'],
+    ['rf-ack-twice', 'apps/api/src/routes/dayclose.ts', 'if (seen.rowCount) return { ok: true, already: true };', ''],
+    ['rf-late-never-flagged', 'apps/api/src/refused.ts', '(sh.closed_by IS NOT NULL AND sh.closed_at < e.received_at) AS "afterDrawerClosed"', 'false AS "afterDrawerClosed"'],
+    ['rf-late-any-closed', 'apps/api/src/refused.ts', '(sh.closed_by IS NOT NULL AND sh.closed_at < e.received_at) AS "afterDrawerClosed"', '(sh.closed_at IS NOT NULL) AS "afterDrawerClosed"'],
+    ['rf-late-any-force-closed', 'apps/api/src/refused.ts', '(sh.closed_by IS NOT NULL AND sh.closed_at < e.received_at) AS "afterDrawerClosed"', '(sh.closed_by IS NOT NULL) AS "afterDrawerClosed"'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('running-orders.test.ts'))),
+  ...[
+    ['tab-rf-not-marked', 'apps/counter/src/sync.ts', "if (res.status === 'rejected' && res.reason) await markRefused(byId.get(res.eventId)!, res.reason);", ''],
+    ['tab-rf-any-reason', 'apps/counter/src/refused.ts', " || !REFUSED_REASONS.includes(reason)) return false;", ') return false;'],
+    ['tab-rf-slip-ignores-refused', 'apps/counter/src/shift.ts', 'expectedCash(shift.openingCashPaise, [...payments, ...refusedPays])', 'expectedCash(shift.openingCashPaise, payments)'],
+    ['tab-rf-counted-as-sale', 'apps/counter/src/shift.ts', "const sales = mine.filter((s) => s.status === 'paid');", "const sales = mine.filter((s) => s.status === 'paid' || s.status === 'refused');"],
+    ['tab-rf-ack-without-server', 'apps/counter/src/refused.ts', "if (!r.ok) throw new Error(r.status === 404", "if (false) throw new Error(r.status === 404"],
+    ['tab-rf-ack-keeps-parked', 'apps/counter/src/refused.ts', '    await db.outbox.where(\'eventId\').equals(now.refused.eventId).delete();', ''],
+    ['tab-rf-pull-deletes', 'apps/counter/src/order.ts', "if (local?.status !== 'open') continue;", "if (!local || local.status === 'paid' || local.status === 'void') continue;"],
+  ].map(([id, file, from, to]) => M(id, file, from, to, TABLET_REFUSED)),
   M('vis-shift-keeps-root-events', 'apps/counter/src/shift.ts', "await db.orderEvents.where('saleId').equals(s.rootId ?? s.id).delete();", "await db.orderEvents.where('saleId').equals(s.id).delete();", TABLET_VISITS),
 ];
 

@@ -162,6 +162,26 @@ try {
   const drained = await until(async () => (await pending()) === 0, 20000);
   check('outbox drains on reconnect', !!drained, `${Date.now() - t0} ms`);
 
+  // The network drops while a sync is in flight: its last request (the open-orders pull) was already answered, and lands
+  // after the `offline` event. Held on purpose (fetched, then delivered 1.5 s later) so the race happens every run.
+  // Kept apart from the offline reload above: while a route is set, Chromium requests skip the service worker.
+  let held = 0;
+  const lastOfSync = (url) => /\/api\/sync\/orders\?/.test(String(url));
+  await page.route(lastOfSync, async (route) => {
+    const resp = await route.fetch();
+    held++;
+    await page.waitForTimeout(1500);
+    await route.fulfill({ response: resp });
+  });
+  await T('sync-now').click();
+  await until(async () => held > 0, 5000);
+  await ctx.setOffline(true);
+  await page.waitForTimeout(2500); // the held pull is delivered meanwhile
+  await page.unroute(lastOfSync);
+  check('header stays Offline after a sync that was in flight', (await text('sync-status')).includes('Offline'), await text('sync-status'));
+  await ctx.setOffline(false);
+  check('and says Online again on reconnect', await until(async () => (await text('sync-status')).includes('Online'), 10000));
+
   // 6. Tab killed mid-push: the server applies the batch, the tablet never hears back, the tab closes
   let hit = false;
   await page.route('**/api/sync/push', async (route) => { await route.fetch(); hit = true; await route.abort('failed'); });
@@ -173,7 +193,7 @@ try {
   await signIn();
   await T('search').waitFor();
   check('reopened tab resends and drains', !!(await until(async () => (await pending()) === 0, 20000)));
-  const [[killedRows, killedStatus]] = sql(`count(*), max(status)) FROM sale WHERE receipt_no='${killed}'`);
+  const [[killedRows, killedStatus]] = sql(`count(*), max(status)) FROM sale WHERE receipt_no='${killed}' AND COALESCE(paid_device_id, device_id)='${deviceId}'`);
   check('the resent sale exists once on the server, paid', killedRows === '1' && killedStatus === 'paid', `${killedRows} row(s), ${killedStatus}`);
 
   // 7. A receipt that never reaches the server (gap detection)
@@ -223,7 +243,7 @@ try {
   check('every receipt but the lost one is on the server, paid', JSON.stringify(server.map((r) => r[0])) === JSON.stringify(expected) && server.every((r) => r[1] === 'paid'), `${server.length}/${receipts.length}`);
   const [[rejected]] = sql(`count(*)) FROM sync_event WHERE device_id='${deviceId}' AND outcome='rejected'`);
   check('no event was rejected', rejected === '0', rejected);
-  const [[reprints]] = sql(`count(*)) FROM audit WHERE action='sale.reprinted' AND entity_id=(SELECT id FROM sale WHERE receipt_no='${receipts[2]}')`);
+  const [[reprints]] = sql(`count(*)) FROM audit WHERE action='sale.reprinted' AND entity_id=(SELECT id FROM sale WHERE receipt_no='${receipts[2]}' AND COALESCE(paid_device_id, device_id)='${deviceId}')`);
   check('reprint recorded in the audit trail', reprints === '1', reprints);
 
   // 11. Manager: day close with the gap shown, then reports.
