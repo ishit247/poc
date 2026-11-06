@@ -3,10 +3,10 @@ import { DEFAULT_SETTINGS, resolveMenu, type MenuEntry, type TradingSettings } f
 import { db, getMeta } from './db.ts';
 
 export interface MenuView {
-  categories: { id: string; name: string; sortOrder: number }[];
+  categories: { id: string; name: string; code: string; sortOrder: number }[];
   entries: MenuEntry[];
-  /** Tile extras by item id; kept apart from MenuEntry, which the server's order pricing shares. */
-  extras: Record<string, { description: string | null; imageSha256: string | null; diet: 'veg' | 'egg' | 'non_veg' | null; tagIds: string[] }>;
+  /** Tile extras by item id; kept apart from MenuEntry, which the server's order pricing shares. `code` is the full quick code (category + item, D16). */
+  extras: Record<string, { code: string; description: string | null; imageSha256: string | null; diet: 'veg' | 'egg' | 'non_veg' | null; tagIds: string[] }>;
   /** Filter row (PLAN D17): tags by name; items carry their tag ids in `extras`. Never affects price or the cart. */
   tags: { id: string; name: string; sortOrder: number }[];
   settings: TradingSettings;
@@ -32,9 +32,10 @@ export async function loadMenu(): Promise<MenuView> {
     counter: { mode: counter?.menuMode ?? 'all', rules: of('counter_item').map((r) => ({ itemId: r.id, listed: r.data.listed, pricePaise: r.data.pricePaise })) },
   });
   return {
-    categories: of('category').map((r) => ({ id: r.id, name: r.data.name, sortOrder: r.data.sortOrder })).sort((a, b) => a.sortOrder - b.sortOrder),
+    categories: of('category').map((r) => ({ id: r.id, name: r.data.name, code: String(r.data.code ?? ''), sortOrder: r.data.sortOrder })).sort((a, b) => a.sortOrder - b.sortOrder),
     entries,
     extras: Object.fromEntries(of('item').map((r) => [r.id, {
+      code: String(of('category').find((c) => c.id === r.data.categoryId)?.data.code ?? '') + String(r.data.code ?? ''),
       description: r.data.description ?? null,
       imageSha256: r.data.imageSha256 ?? null,
       diet: r.data.diet ?? null,

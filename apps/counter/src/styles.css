@@ -26,7 +26,9 @@ nav { display: flex; gap: 8px; padding: 8px 14px; }
 .pad button { min-height: 64px; font-size: 24px; }
 
 .sell { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 340px; gap: 12px; padding: 0 14px 12px; }
-.menu { min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.menu { min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.menu > * { flex: none; }
+.grid.pop .item { min-height: 72px; } .grid.pop .item img { display: none; }
 .cats { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 8px; }
 .grid { overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-content: start; }
 .item { min-height: 84px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; }
@@ -46,6 +48,22 @@ nav { display: flex; gap: 8px; padding: 8px 14px; }
 .sums .total { font-weight: 700; font-size: 22px; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 
+.strip { display: flex; gap: 8px; align-items: center; padding-bottom: 8px; }
+.strip .tables { display: flex; gap: 8px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; }
+.tbl { white-space: nowrap; flex: none; text-align: left; line-height: 1.15; }
+.tbl small { display: block; color: #555; }
+.tbl.free { background: #e9ebe7; } .tbl.busy { background: #fbe9a8; } .tbl.cur { outline: 3px solid #1f4e3d; }
+.srow { display: flex; gap: 8px; } .srow .search { flex: 1; max-width: none; min-width: 0; }
+.hint { min-height: 20px; font-size: 14px; padding: 2px 0; }
+.menu h3 { margin: 4px 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: #666; }
+.grid.pop { overflow: visible; padding-bottom: 8px; } .grid.pop .item { border-color: #1f4e3d; }
+.code { font-variant-numeric: tabular-nums; font-weight: 600; }
+.payrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.payrow button { min-height: 60px; font-size: 18px; }
+.dialog.wide { width: min(900px, 96vw); max-height: 92vh; overflow: auto; }
+.dialog .row { display: flex; align-items: center; gap: 8px; }
+.map { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.map .tbl { min-height: 84px; font-size: 18px; }
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 10; }
 .dialog { background: #fff; border-radius: 12px; padding: 20px; width: 460px; max-width: 94vw; display: flex; flex-direction: column; gap: 12px; }
 .dialog h2 { margin: 0; }
@@ -53,6 +71,8 @@ nav { display: flex; gap: 8px; padding: 8px 14px; }
 .modes { display: flex; gap: 8px; }
 .modes button { flex: 1; }
 .change { font-size: 22px; font-weight: 600; margin: 0; }
+.quick { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; }
+.quick button { min-height: 56px; font-size: 18px; }
 
 .receipt { background: #fff; border: 1px dashed #999; border-radius: 6px; padding: 16px 20px; width: 360px; text-align: left; }
 .receipt h2 { margin: 0 0 6px; text-align: center; }

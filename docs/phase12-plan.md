@@ -266,6 +266,27 @@ a moved item's response carries **only its new code**.
   order guard sat after `validatePayments`, which threw first with another message). Run the suite green **before** the
   mutants, and check that each mutant's catching test is the one written for it.
 
+## Step 6 notes (Sell screen)
+
+- `apps/counter/src/Sell.tsx` rewritten; `menu.ts` now carries category `code` and the full quick code (category + item) in
+  `extras[itemId].code`; `PayDialog` takes `initialMode` and shows Exact plus quick-cash buttons.
+- Two kinds of cart. **Default (cafe) mode**: an in-memory draft; Cash/UPI pays it at once with v1 `createSale`; "Hold & new"
+  and "Save order" call `openOrder` on the default table; held orders show as chips and resume into the running order.
+  **Map mode (restaurant)**: pick a table; its first item calls `openOrder`, then every tap is `addToOrder`/`setLineQty`.
+  Paying a running order uses `payOrder` (v2).
+- Code search: digits match the code prefix across the whole menu; Add (and Enter) is enabled only for one exact, available code.
+  Popular row = the six most-sold items in this device's own sales (no setting). Filter row = diet marks and tags.
+  After a paid receipt the screen returns to Sell by itself after 6 s.
+- **Known gaps:** "Clear" on a running order removes every line (events) and leaves an empty open order, voided at shift
+  close; there is no single-order void on the tablet because `sale.voided` only allows `abandoned_at_shift_close`.
+  No "Print bill" state (decision still open). The strip's ‹ › scroll buttons are not built (it scrolls by touch).
+  Map mode with several orders on one table shows only the first.
+- **Not covered by the browser run:** the diet/tag filter row (clicked by no check), a waiter's view, a table with a
+  second order, rapid double taps. The run leaves the outlet in `default` mode and adds tables T2, T3 to tenant A (reseed
+  with `up:fresh` to clear). Header wraps awkwardly at 768 wide (existing, not from this step).
+- Test lesson: IndexedDB live queries repaint a moment after a click, so the script waits 400 ms before reading the cart.
+  Step 8 should use proper polling assertions.
+
 ## Steps
 
 | # | Step | Verification | State |
@@ -276,7 +297,7 @@ a moved item's response carries **only its new code**.
 | 3 | Shared: v2 event types, the fold (`foldOrder`) with property tests (any order of delivery gives the same lines) | **done 2026-11-06.** Shared 53/53 (12 new in `test/order.test.ts`, 3 of them properties over 400 seeds each). Typecheck clean (shared, api, counter, admin). After `up:fresh`: API 204/204 (unchanged). 14 mutants `order-*`/`payv2-*`, 14/14 caught. After the "payment wins" change: shared 54/54, typecheck clean, the 9 payment mutants (6 new) 9/9 caught; the 9 fold mutants were not re-run (their code did not change). 18 step 3 mutants in all. No browser (no UI) | done, uncommitted |
 | 4 | Server: relax `sale`/`sale_line` for open orders, ingest v1 and v2, payment rules above, N-1 | **done 2026-11-06.** After `up:fresh`: DB 45/45 (2 new in `db/test/trading.test.mjs`), API 222/222 (13 new in `apps/api/test/running-orders.test.ts`: duplicate and doubled batch, reorder and deferral, two devices adding concurrently, late line after payment, remove/change after payment, the payment winning, settings drift, v1/v2 mixing, void, move, and a property over 12 seeded two-device histories delivered in random order with retries: server rows = `foldOrder`), shared 55/55, tablet 25/25, typecheck clean. 52 mutants run (43 new `order-*`/`ro-*`, plus the retargeted and touched ingest ones): 50 caught at first; `ro-pay-keeps-unpaid` survived, which exposed a missing case (a whole line that reached the server before the payment, but was not in it). That test was added and the mutant re-run and caught; `ro-removed-counts-as-taken` was an equivalent mutant and was dropped. No browser (no UI) | done, uncommitted |
 | 5 | Tablet: local open orders as line events (Dexie version bump), table state, hold/move | **done 2026-11-06.** After `up:fresh`: tablet 37/37 (11 new in `apps/counter/test/order.test.ts`, one a property over 60 seeded histories; 1 new real-API contract in `test/push.test.ts`), counter typecheck clean. 14 mutants `tab-ord-*`/`tab-pay-*`/`tab-shift-*`, 14/14 caught (two re-run after a guard fix, see notes). API, DB and shared suites not re-run (no server or shared code changed). No browser (no screen yet) | done, uncommitted |
-| 6 | UI: Sell redesign per the prototype (table strip and full map, code search with Add button, Popular row, one-tap Cash/UPI, quick cash, auto-return) | **real browser at 1024x768 and 768x1024**, offline toggle | not started |
+| 6 | UI: Sell redesign per the prototype (table strip and full map, code search with Add button, Popular row, one-tap Cash/UPI, quick cash, auto-return) | **real browser at 1024x768 and 768x1024**, offline toggle | **done 2026-11-06, browser-verified.** `node scripts/browser-sell.mjs` (Playwright, installed Edge, Docker stack on :8080 rebuilt): 27/27 at 1024x768 and 768x1024, log in `.validation/browser-sell.log`, screenshots in `.validation/screens/`. Covers code search and Add, hold/resume, edit and quick-cash pay of a running order, UPI, a sale offline, restaurant table strip and map, no sideways scroll, no page errors. Tablet tests 37/37, typecheck clean. No mutants (UI, not a guard) | done, uncommitted |
 | 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | not started |
 | 8 | Playwright run of the whole counter flow against the new screens (the check owed since phase 4) | run recorded in the progress doc | not started |
 
@@ -305,12 +326,8 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 5 and 2b are done and verified. Next is **step 6**
-(Sell redesign per the prototype; STANDARD; a fresh session is a good place to start). Read "Step 5 notes" first: the
-tablet API for orders is `apps/counter/src/order.ts`; the Sell screen still saves with v1 `createSale`, and step 6 wires
-Save/Hold and the table strip to `openOrder`/`addToOrder`/`setLineQty`/`moveOrder`/`tableStates`. One decision there is
-worth a look before building the cart UI: the per-device merge rule (one item can show on two lines). Steps 4 and 5 are
-uncommitted (`git status`).
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 6 and 2b are done and verified. Next is **step 7** (12b, HIGH: outlet open-orders pull and SSE nudge; start on
+a HIGH model in a fresh session). Read "Step 5 notes" ("For step 7") and "Step 6 notes". Steps 4 to 6 are uncommitted.
 
 The notes below were written for step 4 and are kept for reference.
 

@@ -19,8 +19,10 @@ function build(mode: Mode, total: Paise, cashIn: string, splitCash: string, ref:
   ];
 }
 
-export function PayDialog({ total, onConfirm, onCancel }: { total: Paise; onConfirm: (t: Tender[]) => Promise<void>; onCancel: () => void }) {
-  const [mode, setMode] = useState<Mode>('cash');
+const QUICK_CASH_RUPEES = [50, 100, 200, 500, 2000];
+
+export function PayDialog({ total, initialMode = 'cash', onConfirm, onCancel }: { total: Paise; initialMode?: Mode; onConfirm: (t: Tender[]) => Promise<void>; onCancel: () => void }) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [cashIn, setCashIn] = useState('');
   const [splitCash, setSplitCash] = useState('');
   const [ref, setRef] = useState('');
@@ -58,7 +60,13 @@ export function PayDialog({ total, onConfirm, onCancel }: { total: Paise; onConf
           </label>
         )}
         {mode !== 'cash' && <label>UPI reference (optional)<input data-testid="upi-ref" value={ref} onChange={(e) => setRef(e.target.value)} /></label>}
-        {mode !== 'upi' && <p data-testid="change" className="change">Change to give: ₹{rs(change)}</p>}
+        {mode === 'cash' && (
+          <div className="quick" data-testid="quick-cash">
+            <button data-testid="cash-exact" className={cashIn === '' ? 'active' : ''} onClick={() => setCashIn('')}>Exact</button>
+            {QUICK_CASH_RUPEES.filter((v) => v * 100 >= total).map((v) => <button key={v} data-testid={`cash-${v}`} onClick={() => setCashIn(String(v))}>₹{v}</button>)}
+          </div>
+        )}
+        {mode !== 'upi' && <p data-testid="change"className="change">Change to give: ₹{rs(change)}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <div className="actions">
           <button onClick={onCancel} disabled={busy}>Cancel</button>
