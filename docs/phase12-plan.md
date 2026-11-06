@@ -382,6 +382,41 @@ a moved item's response carries **only its new code**.
 - **Known gaps:** the opener's Sell screen just finds the table free when its order was paid elsewhere (no "paid at C2"
   note); voiding another device's order is still not possible; the tablet does not undo a payment the server refused.
 
+## Step 8 notes (whole counter flow in a real browser)
+
+- **Script:** `scripts/browser-flow.mjs` (Playwright, installed Edge, headless, 1024x768, Docker stack on :8080). Run
+  `node scripts/validate.mjs fresh --yes` first: the script closes today's business day for School 1, so a second run
+  without a fresh seed fails at day close. Log `.validation/browser-flow.log`, screenshots `.validation/screens/flow-*.png`.
+  Assertions poll (`until`) instead of fixed waits, and the end state is checked in Postgres, not only on screen.
+- **Result 2026-11-06: 41/41** (after a fresh seed). One tablet, one business day:
+  - enrol, PIN sign-in, open the drawer;
+  - diet and tag filter row (only this tenant's tags; a tag and a diet filter show only matching items; clearing restores);
+  - quick-code add, cash and UPI sales with consecutive receipts;
+  - a saved order paid from the Open orders tab; reprint shown as a copy, `print()` called once, `sale.reprinted` in `audit`;
+  - **offline:** two sales queue; the page **reloads with no network** (service worker), **offline PIN sign-in** works, the
+    outbox survives the reload, and drains on reconnect (about 0.2 s);
+  - **tab killed mid-push:** the push reaches the server, the response is dropped, the tab closes; a new tab resends and
+    drains, and the sale exists once, paid;
+  - **receipt gap:** one offline sale's events are deleted from IndexedDB, the next sale syncs; day close names the
+    missing receipt number;
+  - online order (manual provider): new, accept, ready, hand over;
+  - shift close: slip with cash sales, counted cash and variance; the server has the shift closed with the count;
+  - server state: every receipt but the lost one, in order, all paid; no rejected `sync_event`;
+  - manager on the tablet: force-closes a forgotten drawer, gross on screen equals the server's paid sales, closes the
+    day (`business_day.closed_at` set), Reports loads; no sideways scroll; no page errors.
+- **Found:**
+  - **A past-day open order blocks day close, and no screen can clear it.** Force-closing a drawer does not void its
+    open orders, and the manager tools have no void. The seed's waiter order from 2026-01-01 is exactly this case; the
+    script voids it with the manager's `POST /orders/:id/void` (marked in the log as API, no screen). A manager screen to
+    void an open order is needed before a pilot.
+  - Day close lists two tablets on one counter as "Counter C1" twice (no label), so a manager cannot tell which one is
+    which. Cosmetic until a counter has two tablets.
+  - Only Samosa has a Zomato price in the seed; the New online order dialog correctly refuses an unpriced item.
+- **Not covered:** portrait size in this script (step 6 covers 768x1024), restaurant map mode (steps 6, 7, 7b scripts),
+  printing on hardware, a storage-pressure or `storage.persist()` check on a real tablet, the N-1 upgrade path, refunds
+  (no route). This is a scripted run, not a guard: no mutants. The kill-tab check would also pass if the server's
+  unique receipt index alone stopped a duplicate; the event-id idempotency is proven by the phase 4 API tests and mutants.
+
 ## Steps
 
 | # | Step | Verification | State |
@@ -395,7 +430,7 @@ a moved item's response carries **only its new code**.
 | 6 | UI: Sell redesign per the prototype (table strip and full map, code search with Add button, Popular row, one-tap Cash/UPI, quick cash, auto-return) | **real browser at 1024x768 and 768x1024**, offline toggle | **done 2026-11-06, browser-verified.** `node scripts/browser-sell.mjs` (Playwright, installed Edge, Docker stack on :8080 rebuilt): 27/27 at 1024x768 and 768x1024, log in `.validation/browser-sell.log`, screenshots in `.validation/screens/`. Covers code search and Add, hold/resume, edit and quick-cash pay of a running order, UPI, a sale offline, restaurant table strip and map, no sideways scroll, no page errors. Tablet tests 37/37, typecheck clean. No mutants (UI, not a guard) | done, uncommitted |
 | 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | **done 2026-11-06, browser-verified.** `node scripts/browser-tables.mjs` (two Edge contexts, two devices: cashier 1024x768, waiter 768x1024, map mode, Docker stack rebuilt): 24/24, log in `.validation/browser-tables.log`. Covers the other device's order appearing with no sync pressed (under 1 s), adds both ways with the same total, an offline device's line arriving on reconnect, payment refused on the other device's order, paying its own order with the other device's line, the table freeing on both. `browser-sell.mjs` re-run 27/27. After `up:fresh`: DB 45/45, API 230/230 (8 new in `apps/api/test/orders-pull.test.ts`), tablet 49/49 (11 new in `test/visits.test.ts`, one a property over 40 seeds; 1 new two-device real-API contract in `test/push.test.ts`), typecheck clean. 20 mutants (`ov-*`, `vis-*`, 3 retargeted `tab-*`), 20/20 caught. Shared not re-run (unchanged) | done, uncommitted |
 | 7b | Paying another device's order: any cashier device of the outlet pays a table order, on its own receipt series and shift (`sale.paid_device_id`) | two-browser test | **done 2026-11-06, browser-verified.** `scripts/browser-tables.mjs` 29/29: the counter pays the waiter tablet's order (3 lines, one added offline), the table frees on the waiter's tablet, the counter's next receipt is the next number in its series, and the server row says paid on the counter, on its receipt. `browser-sell.mjs` 27/27. After `up:fresh`: DB 46/46 (1 new), API 234/234 (4 new in `running-orders.test.ts`: payer's receipt/shift/cash, void and reprint rules, both paying, per-payer series and day-close gaps, counter report, another outlet), tablet 51/51 (2 new in `visits.test.ts`; the two-device contract now pays across devices against the real API), typecheck clean. 19 mutants (`pd-*`, `vis-*`, 2 retargeted phase 4 ones), 19/19 caught. Shared not re-run (unchanged) | done, uncommitted |
-| 8 | Playwright run of the whole counter flow against the new screens (the check owed since phase 4) | run recorded in the progress doc | not started |
+| 8 | Playwright run of the whole counter flow against the new screens (the check owed since phase 4) | run recorded in the progress doc | **done 2026-11-06, browser-verified.** `node scripts/browser-flow.mjs` after `fresh`: 41/41 (see "Step 8 notes"). Found: no screen to void a past-day open order, which blocks day close. No unit suites re-run (no app code changed) | done, uncommitted |
 
 ### Model per step (see "Model usage plan" in CLAUDE.md; the assistant reminds you before a HIGH step)
 
@@ -422,12 +457,12 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 7, 2b and 7b are done and verified (7 and 7b with
-a two-browser run). Steps 4 to 7b are uncommitted.
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 8, 2b and 7b are done and verified (7 and 7b with
+a two-browser run, 8 with `scripts/browser-flow.mjs`, 41/41). Step 8 is uncommitted.
 
-Next is **step 8** (the full counter-flow browser run; STANDARD). Read "Step 7b notes" for what is still open: voiding
-another device's order, and two cashiers paying one table while one is offline (the second payment is refused, but the
-losing tablet keeps its local receipt).
+Phase 12's steps are all done. Open before a pilot: a manager screen to void an open order (a past-day one blocks day
+close, step 8 notes), voiding another device's order, and two cashiers paying one table while one is offline (step 7b
+notes). Then PLAN.md 0.3 item 3.
 
 The notes below were written for step 4 and are kept for reference.
 
