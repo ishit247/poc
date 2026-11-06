@@ -531,3 +531,80 @@ test('7b: a device of another outlet cannot pay the order', async () => {
   assert.deepEqual(statuses(await far.push([far.pay(s!, [[l1!, 1]], await totalOf([[1000, 1]]))])), ['rejected:wrong_outlet']);
   assert.equal((await sale(s!)).status, 'open');
 });
+
+// --- Step 7c: an open table order voided from any device of its outlet (`order.voided` v2).
+const voidBy = (t: Tab, saleId: string, voidedBy: string, reason = 'guest left') =>
+  t.ev({ type: 'order.voided', schemaVersion: 2, saleId, voidedBy, reason, at: tick() });
+async function voidRow(id: string) {
+  return withTenant(A, async (c) => (await c.query('SELECT status, void_reason FROM sale WHERE id = $1', [id])).rows[0]);
+}
+
+test('7c: a cashier on another device voids the order: audited with reason, device and user; a retry is a duplicate; nothing lands after it', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const [s, l1, l2, sh] = ids(4);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 2)]);
+
+  const v = voidBy(b, s!, b.cashierId, 'wrong table, rung again');
+  assert.deepEqual(statuses(await b.push([v])), ['applied']);
+  assert.deepEqual(await voidRow(s!), { status: 'void', void_reason: 'wrong table, rung again' });
+  const audit = await withTenant(A, async (c) => (await c.query(
+    `SELECT actor_kind, actor_id, detail FROM audit WHERE action = 'order.voided' AND entity_id = $1`, [s])).rows);
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].actor_kind, 'user');
+  assert.equal(audit[0].actor_id, b.cashierId);
+  assert.equal(audit[0].detail.reason, 'wrong table, rung again');
+  assert.equal(audit[0].detail.deviceId, b.deviceId);
+  assert.equal(audit[0].detail.openedOnDeviceId, a.deviceId);
+
+  // The same event again (a lost response): a duplicate, no second audit row. A second void: already void.
+  assert.deepEqual(statuses(await b.push([v])), ['duplicate']);
+  assert.deepEqual(statuses(await a.push([voidBy(a, s!, a.cashierId)])), ['rejected:already_void']);
+  assert.equal(await withTenant(A, async (c) => (await c.query(`SELECT count(*)::int AS n FROM audit WHERE action = 'order.voided' AND entity_id = $1`, [s])).rows[0].n), 1);
+
+  // The opener, not knowing yet: its new line and its payment are refused (a payment after a void loses).
+  assert.deepEqual(statuses(await a.push([a.add(s!, l2!, 1), shiftOpened(a, sh!), payIn(a, sh!, s!, [[l1!, 2]], await totalOf([[1000, 2]]))])),
+    ['rejected:sale_void', 'applied', 'rejected:sale_void']);
+  assert.equal((await sale(s!)).status, 'void');
+});
+
+test('7c: a waiter voids only an order they opened, from any device; another\'s order is refused', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const [mine, theirs, l1, l2] = ids(4);
+  await a.push([a.open(mine!, { tableId: await a.newTable() }), a.add(mine!, l1!, 1),
+    a.open(theirs!, { tableId: await a.newTable(), by: a.cashierId }), a.add(theirs!, l2!, 1)]);
+
+  assert.deepEqual(statuses(await b.push([voidBy(b, theirs!, b.waiterId)])), ['rejected:not_own_order']);
+  assert.equal((await sale(theirs!)).status, 'open');
+  assert.deepEqual(statuses(await b.push([voidBy(b, mine!, b.waiterId)])), ['applied']);
+  assert.equal((await sale(mine!)).status, 'void');
+});
+
+test('7c: the payment wins: a void arriving after it is refused; a split made after it is voidable', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app);
+  const [s, l1, l2] = ids(3);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 1)]);
+  assert.deepEqual(statuses(await b.push([b.pay(s!, [[l1!, 1]], await totalOf([[1000, 1]]))])), ['applied']);
+  assert.deepEqual(statuses(await a.push([voidBy(a, s!, a.cashierId)])), ['rejected:not_open']);
+  assert.equal((await sale(s!)).status, 'paid');
+
+  // A late line splits off; the split (named by its own id, as a payment names it) is voided, the paid root untouched.
+  await a.push([a.add(s!, l2!, 1)]);
+  const [split] = await splits(s!);
+  assert.ok(split);
+  assert.deepEqual(statuses(await b.push([voidBy(b, split!, b.cashierId)])), ['applied']);
+  assert.equal((await sale(split!)).status, 'void');
+  assert.equal((await sale(s!)).status, 'paid');
+});
+
+test('7c: another outlet\'s device, or a person who does not work here, cannot void the order', async () => {
+  const app = buildApp();
+  const a = await Tab.enrol(app), b = await Tab.second(app), far = await Tab.enrol(app, 'a2@example.test', 'School 2 Canteen');
+  const [s, l1] = ids(2);
+  await a.push([a.open(s!, { tableId: await a.newTable() }), a.add(s!, l1!, 1)]);
+  assert.deepEqual(statuses(await far.push([voidBy(far, s!, far.cashierId)])), ['rejected:wrong_outlet']);
+  assert.deepEqual(statuses(await b.push([voidBy(b, s!, far.cashierId)])), ['rejected:unknown_user']);
+  assert.equal((await sale(s!)).status, 'open');
+});

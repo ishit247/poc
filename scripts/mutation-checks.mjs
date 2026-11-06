@@ -566,12 +566,28 @@ const MUTANTS = [
   ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, TABLET_VISITS)),
   // --- phase 12 step 7b: a table order paid on another device of its outlet (running-orders.test.ts, trading.test.mjs)
   ...[
-    ['pd-opener-only', "if (as === 'pay' && sale.order_root_id) {", 'if (false) {'],
+    ['pd-opener-only', "if ((as === 'pay' || as === 'void') && sale.order_root_id) {", "if (as === 'void' && sale.order_root_id) {"],
     ['pd-any-outlet', "if (sale.outlet_id !== p.outletId) throw new Reject('wrong_outlet');", ''],
     ['pd-void-anywhere', "const sale = await saleOf(c, p, ev.saleId, 'opener');", "const sale = await saleOf(c, p, ev.saleId, 'pay');"],
     ['pd-reprint-opener', "const sale = await saleOf(c, p, ev.saleId, 'receipt');", "const sale = await saleOf(c, p, ev.saleId, 'opener');"],
     ['pd-payer-not-recorded', 'orderFlags, p.deviceId]);', 'orderFlags, null]);'],
   ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('running-orders.test.ts'))),
+  // --- phase 12 step 7c: an open table order voided from any device of its outlet (`order.voided`)
+  ...[
+    ['vo-opener-only', "const sale = await saleOf(c, p, ev.saleId, 'void');", "const sale = await saleOf(c, p, ev.saleId, 'opener');"],
+    ['vo-any-outlet-user', "AND uo.outlet_id = $2 AND u.role IN ('cashier', 'waiter')`, [ev.voidedBy", "AND $2::uuid IS NOT NULL AND u.role IN ('cashier', 'waiter')`, [ev.voidedBy"],
+    ['vo-waiter-any', "if (who.role === 'waiter' && sale.created_by !== ev.voidedBy) throw new Reject('not_own_order');", ''],
+    ['vo-void-after-paid', "if (sale.status !== 'open') throw new Reject(sale.status === 'void' ? 'already_void' : 'not_open'); // the payment wins", ''],
+    ['vo-pay-after-void', /if \(sale\.status === 'void'\) throw new Reject\('sale_void'\);(?=\r?\n  if \(sale\.status !== 'open'\) throw new Reject\('already_paid'\);)/, ''],
+    ['vo-not-audited', "action: 'order.voided', entity: 'sale'", "action: 'order.voided.x', entity: 'sale'"],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('running-orders.test.ts'))),
+  ...[
+    ['tab-void-no-reason', "if (!reason) throw new Error('Give a reason for voiding this order.');", ''],
+    ['tab-void-waiter-any', "if (args.actor.role !== 'cashier' && sale.createdBy !== args.actor.id) throw", 'if (false) throw'],
+    ['tab-void-no-row', '    await db.sales.put(voided);', ''],
+    ['tab-void-keeps-events', "    await db.orderEvents.where('saleId').equals(rootOf(sale)).delete();\n    if (ownerDeviceId) {", '    if (ownerDeviceId) {'],
+    ['tab-void-view-left', '        await db.visits.put(kept);', ''],
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/order.ts', from, to, TABLET_VISITS)),
   M('pd-gaps-by-opener', 'apps/api/src/routes/dayclose.ts', 'COALESCE(paid_device_id, device_id)', 'device_id', API_TESTS('running-orders.test.ts'), true),
   M('pd-report-by-opener', 'apps/api/src/reports.ts', 'COALESCE(s.paid_device_id, s.device_id) AS device_id', 's.device_id', API_TESTS('running-orders.test.ts')),
   ...[

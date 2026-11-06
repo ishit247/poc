@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { foldOrder, liveLines, paise, DEFAULT_SETTINGS, type ClosedLine, type MenuEntry, type OrderEvent, type Tender } from '@pos/shared';
 import { db, type DeviceInfo } from '../src/db.ts';
 import { payOrder, type Actor } from '../src/sale.ts';
-import { addToOrder, applyVisits, openOrder, orderById, setLineQty, tableStates, type PulledVisit } from '../src/order.ts';
+import { addToOrder, applyVisits, openOrder, orderById, setLineQty, tableStates, voidOrder, type PulledVisit } from '../src/order.ts';
 import { closeShift } from '../src/shift.ts';
 import { seedShift } from './helpers.ts';
 
@@ -274,6 +274,67 @@ test('a visit that closed on the server: another device\'s view goes; this devic
   assert.equal((await db.sales.get(s.id))?.status, 'void');
   assert.equal(await db.orderEvents.count(), 0);
   assert.deepEqual((await tableStates()).flatMap((x) => x.orders), []);
+});
+
+test('7c: a cashier voids another device\'s order here with a reason: the event, the view gone, and a pull before it lands does not reopen it', async () => {
+  const b = new Other();
+  const root = uuid();
+  b.open(root); b.add(root, uuid(), tea, 2);
+  await apply([visit(root, b.events)]);
+  await addToOrder({ ...base, actor: cashier, saleId: root, entry: dosa }); // our line, still unsent: it goes out before the void
+
+  await assert.rejects(voidOrder({ device, actor: cashier, saleId: root, reason: '   ' }), /Give a reason/);
+  const v = await voidOrder({ device, actor: cashier, saleId: root, reason: ' guest left ' });
+  assert.equal(v.status, 'void');
+  const out = (await db.outbox.toArray()).map((r) => r.payload);
+  assert.deepEqual(out.map((x) => x.type), ['order.line_added', 'order.voided']);
+  assert.deepEqual(out[1], { type: 'order.voided', schemaVersion: 2, saleId: root, voidedBy: cashier.id, reason: 'guest left', at: (out[1] as any).at });
+  assert.equal((await db.visits.get(root))?.view, undefined, 'the view is gone');
+  assert.equal(await db.orderEvents.where('saleId').equals(root).count(), 0);
+  assert.equal((await tableStates()).find((s) => s.table.id === T1)!.orders.length, 0, 'the table is free here');
+
+  await apply([visit(root, b.events)]);
+  assert.equal((await tableStates()).find((s) => s.table.id === T1)!.orders.length, 0, 'a stale open visit does not reopen it');
+  await apply([{ rootId: root, version: 2, sales: [{ id: root, status: 'void', deviceId: OTHER }], open: null }]);
+  assert.equal(await db.visits.count(), 0);
+  await closeShift({ device, actor: cashier, countedCashPaise: 0 });
+  assert.equal((await db.outbox.toArray()).filter((r) => r.payload.type === 'sale.voided').length, 0, 'shift close has nothing to void');
+});
+
+test('7c: a waiter voids only an order they opened; another person\'s order is refused here too', async () => {
+  const other: Actor = { id: '33333333-3333-4333-8333-333333333333', name: 'Other', role: 'waiter' };
+  const b = new Other();
+  const theirs = uuid();
+  b.open(theirs); b.add(theirs, uuid(), tea); // opened by `waiter`
+  await apply([visit(theirs, b.events)]);
+  await assert.rejects(voidOrder({ device, actor: other, saleId: theirs, reason: 'x' }), /cashier/);
+  assert.equal((await orderById(theirs))?.status, 'open');
+  assert.equal(await db.outbox.count(), 0);
+
+  // Their own order, opened on another device: allowed.
+  await voidOrder({ device, actor: waiter, saleId: theirs, reason: 'duplicate' });
+  assert.equal((await tableStates()).find((s) => s.table.id === T1)!.orders.length, 0);
+
+  // Their own order on this device: the row is void, its kept events go, shift close does not void it again.
+  const s = await openOrder({ ...base, actor: waiter, menuVersion: 1, tableId: T2 });
+  await addToOrder({ ...base, actor: waiter, saleId: s.id, entry: tea });
+  await voidOrder({ device, actor: waiter, saleId: s.id, reason: 'mistake' });
+  assert.equal((await db.sales.get(s.id))?.status, 'void');
+  assert.equal(await db.orderEvents.where('saleId').equals(s.id).count(), 0);
+  await closeShift({ device, actor: cashier, countedCashPaise: 0 });
+  assert.equal((await db.outbox.toArray()).filter((r) => r.payload.type === 'sale.voided').length, 0);
+});
+
+test('7c: the opener\'s order voided on another device: its row is void, its unsent line\'s copy goes, the table frees', async () => {
+  const s = await openOrder({ ...base, actor: waiter, menuVersion: 1, tableId: T1 });
+  await addToOrder({ ...base, actor: waiter, saleId: s.id, entry: tea });
+  await apply([{ rootId: s.id, version: 3, sales: [{ id: s.id, status: 'void', deviceId: device.deviceId }], open: null }]);
+  assert.equal((await db.sales.get(s.id))?.status, 'void');
+  assert.equal(await db.orderEvents.where('saleId').equals(s.id).count(), 0);
+  assert.equal((await tableStates()).find((x) => x.table.id === T1)!.orders.length, 0);
+  await assert.rejects(addToOrder({ ...base, actor: waiter, saleId: s.id, entry: tea }), /closed/);
+  await closeShift({ device, actor: cashier, countedCashPaise: 0 });
+  assert.equal((await db.outbox.toArray()).filter((r) => r.payload.type === 'sale.voided').length, 0, 'not voided twice');
 });
 
 test('a page with an event that does not parse is not applied at all', async () => {

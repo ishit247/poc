@@ -18,7 +18,8 @@
 // - this device: a `sales` row (the root, or a split the server made after a payment), paid and voided here as before;
 // - another device: a `view` on the `visits` row, never a `sales` row, so shift close, receipts and cash totals here
 //   cannot touch it. Anyone may add, change or remove its lines (D18), and any cashier may pay it (step 7b: paying
-//   turns it into this device's paid `sales` row, see `payOrder`). Only its own device voids it.
+//   turns it into this device's paid `sales` row, see `payOrder`). A cashier, or the waiter who opened it, may void it
+//   here too (step 7c, `voidOrder`).
 import {
   addItem, foldOrder, liveLines, openLines, totals, DEFAULT_SETTINGS, OrderEvent, ORDER_SCHEMA_VERSION,
   type Cart, type ClosedLine, type MenuEntry, type OrderEnvelope, type OrderOpened, type TradingSettings,
@@ -279,6 +280,35 @@ export async function setLineQty(args: {
 }
 
 export const removeLine = (args: Omit<Parameters<typeof setLineQty>[0], 'qty'>) => setLineQty({ ...args, qty: 0 });
+
+/**
+ * Voids an open table order with a reason, this device's own or another device's (step 7c). A cashier may void any open
+ * order, a waiter only one they opened; the server checks the same, and a payment that reached it first wins. One
+ * transaction: the event, and this device's record of the closing. Another device's view becomes a void `sales` row
+ * here (as paying it makes a paid one, step 7b), so `refold` cannot reopen it from a pull made before the void lands.
+ */
+export async function voidOrder(args: { device: DeviceInfo; actor: Actor; saleId: string; reason: string; now?: Date }): Promise<LocalSale> {
+  const reason = args.reason.trim();
+  if (!reason) throw new Error('Give a reason for voiding this order.');
+  if (reason.length > 200) throw new Error('Keep the reason under 200 characters.');
+  return db.transaction('rw', ALL(), async () => {
+    const sale = await openOrderRow(args.saleId);
+    if (args.actor.role !== 'cashier' && sale.createdBy !== args.actor.id) throw new Error('Only a cashier, or whoever opened it, may void this order.');
+    await queue({ type: 'order.voided', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, voidedBy: args.actor.id, reason, at: await stamp(args.now ?? new Date()) });
+    const { ownerDeviceId, anomalies: _a, ...rest } = sale;
+    const voided: LocalSale = { ...rest, status: 'void' };
+    await db.sales.put(voided);
+    await db.orderEvents.where('saleId').equals(rootOf(sale)).delete();
+    if (ownerDeviceId) {
+      const visit = await db.visits.where('openSaleId').equals(sale.id).first();
+      if (visit) {
+        const { view: _view, ...kept } = visit;
+        await db.visits.put(kept);
+      }
+    }
+    return voided;
+  });
+}
 
 /** Moves an order to another table of this outlet. Moving to the table it is on writes nothing. */
 export async function moveOrder(args: {

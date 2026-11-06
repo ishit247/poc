@@ -4,7 +4,7 @@ import { addItem, formatRupees, paise, setQty, totals, type Cart, type MenuEntry
 import { db, type DeviceInfo, type LocalSale } from './db.ts';
 import type { MenuView } from './menu.ts';
 import { createSale, payOrder, type Actor } from './sale.ts';
-import { addToOrder, openOrder, orderById, setLineQty, tableMode, tableStates } from './order.ts';
+import { addToOrder, openOrder, orderById, setLineQty, tableMode, tableStates, voidOrder } from './order.ts';
 import { useItemImageUrl } from './itemImages.ts';
 import { PayDialog } from './PayDialog.tsx';
 import { Receipt } from './Receipt.tsx';
@@ -43,6 +43,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const [mapOpen, setMapOpen] = useState(false);
   const [done, setDone] = useState<LocalSale | null>(null);
   const [popular, setPopular] = useState<string[]>([]);
+  const [voiding, setVoiding] = useState<string | null>(null); // the reason being typed, while the void form is open
   const searchRef = useRef<HTMLInputElement>(null);
 
   const mode = useLive(tableMode, 'default' as 'default' | 'map');
@@ -50,6 +51,9 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const order = useLive(async () => (orderId ? (await orderById(orderId)) ?? null : null), null as LocalSale | null, [orderId]);
   const activeOrder = order && order.status === 'open' ? order : null;
   const otherDevice = !!activeOrder?.ownerDeviceId; // another device's order: it may be added to and paid here (step 7b)
+  // Step 7c: a cashier voids any open order here, a waiter only one they opened (the server checks the same).
+  const mayVoid = !!activeOrder && (actor.role === 'cashier' || activeOrder.createdBy === actor.id);
+  useEffect(() => setVoiding(null), [activeOrder?.id]);
   const defaultTable = states.find((s) => s.table.isDefault)?.table;
 
   // The items this counter sells most, from its own sales: nothing to maintain, and empty on a new counter.
@@ -116,6 +120,14 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
       for (const l of activeOrder.lines) await setLineQty({ device, actor, settings: menu.settings, saleId: activeOrder.id, lineId: l.lineId!, qty: 0 });
     } else setCart([]);
   });
+
+  const confirmVoid = async () => {
+    if (!activeOrder || voiding === null) return;
+    try {
+      await voidOrder({ device, actor, saleId: activeOrder.id, reason: voiding });
+      setOrderId(null); setVoiding(null); setMessage('Order voided.');
+    } catch (e) { setMessage(e instanceof Error ? e.message : 'Not allowed.'); }
+  };
 
   const finish = async (tenders: Tender[]) => {
     const sale = inOrder
@@ -261,7 +273,15 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           {!inOrder && mode === 'default' && (
             <button data-testid="save-order" disabled={cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage('Order saved.'); })}>Save order</button>
           )}
+          {mayVoid && voiding === null && <button data-testid="void-order" onClick={() => setVoiding('')}>Void order</button>}
         </div>
+        {mayVoid && voiding !== null && (
+          <div className="row" data-testid="void-form">
+            <input data-testid="void-reason" value={voiding} maxLength={200} placeholder="Reason (required)" onChange={(e) => setVoiding(e.target.value)} />
+            <button data-testid="void-go" className="primary" disabled={!voiding.trim()} onClick={() => void confirmVoid()}>Void</button>
+            <button data-testid="void-cancel" onClick={() => setVoiding(null)}>Cancel</button>
+          </div>
+        )}
       </aside>
       {mapOpen && (
         <div className="overlay" role="dialog" aria-label="All tables">

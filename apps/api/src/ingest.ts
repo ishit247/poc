@@ -13,7 +13,7 @@
 import type pg from 'pg';
 import {
   OutboxEvent, exclusiveLine, expectedCash, paise, roundOffFor,
-  type GstRounding, type PaymentTaken, type PrintReprinted, type SaleCreated, type SaleVoided, type ShiftClosed, type ShiftOpened, type TradingSettings,
+  type GstRounding, type OrderVoided, type PaymentTaken, type PrintReprinted, type SaleCreated, type SaleVoided, type ShiftClosed, type ShiftOpened, type TradingSettings,
 } from '@pos/shared';
 import { audit } from './audit.js';
 import { withTenant } from './db.js';
@@ -32,6 +32,7 @@ const MODES: GstRounding[] = ['half_up', 'up', 'down'];
 const KNOWN: Record<string, readonly number[]> = {
   'sale.created': [1], 'payment.taken': [1, 2], 'print.reprinted': [1], 'shift.opened': [1], 'shift.closed': [1], 'sale.voided': [1],
   'order.opened': [2], 'order.line_added': [2], 'order.line_changed': [2], 'order.line_removed': [2], 'order.moved': [2],
+  'order.voided': [2],
 };
 
 export async function ingest(p: DevicePrincipal, e: Envelope, settings: TradingSettings): Promise<Result> {
@@ -76,6 +77,7 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
     else if (ev.type === 'shift.opened') await applyShiftOpened(c, p, ev);
     else if (ev.type === 'shift.closed') await applyShiftClosed(c, p, ev);
     else if (ev.type === 'sale.voided') await applyVoid(c, p, ev);
+    else if (ev.type === 'order.voided') await applyOrderVoid(c, p, ev);
     else if (ev.type === 'print.reprinted') await applyReprint(c, p, ev);
     else if (ev.type === 'order.opened') await applyOrderOpened(c, p, e, ev, (d) => businessDay(c, p, d));
     else await applyOrderChange(c, p, e, ev, settings);
@@ -182,15 +184,17 @@ async function applySale(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, ev: 
  * `as` is who the event needs this device to be:
  * - `pay`: a table order may be paid on any device of its outlet (step 7b; the receipt is from the payer's own series
  *   and the money goes into the payer's shift). A whole sale is paid where it was rung up.
- * - `opener`: voiding stays with the device that holds the order (D18 changes who may add lines and pay, not who voids).
+ * - `opener`: the shift-close void (`sale.voided`) stays with the device that holds the order.
+ * - `void`: `order.voided` of a table order may come from any device of its outlet (who may void it is judged by
+ *   `applyOrderVoid`); a whole sale, as with paying, only from where it was rung up.
  * - `receipt`: a reprint is of the payer's receipt, so on the device that paid.
  */
-async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string, as: 'pay' | 'opener' | 'receipt') {
+async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string, as: 'pay' | 'opener' | 'void' | 'receipt') {
   // A running order's root is locked first, as every order event does (order-ingest.ts), so the two never deadlock.
   const root = (await c.query('SELECT order_root_id FROM sale WHERE id = $1', [saleId])).rows[0]?.order_root_id as string | null | undefined;
   if (root) await lockVisit(c, root);
   const sale = (await c.query(
-    'SELECT device_id, outlet_id, paid_device_id, status, total_paise, receipt_no, order_root_id FROM sale WHERE id = $1 FOR UPDATE', [saleId])).rows[0];
+    'SELECT device_id, outlet_id, paid_device_id, status, total_paise, receipt_no, order_root_id, created_by FROM sale WHERE id = $1 FOR UPDATE', [saleId])).rows[0];
   if (!sale) {
     // An order may have been opened on another device of the outlet (D18), so its refusal is looked up from any device.
     const refused = await c.query(
@@ -199,12 +203,33 @@ async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string, as: 
     if (refused.rowCount) throw new Reject('sale_rejected');
     throw new Defer();
   }
-  if (as === 'pay' && sale.order_root_id) {
+  if ((as === 'pay' || as === 'void') && sale.order_root_id) {
     if (sale.outlet_id !== p.outletId) throw new Reject('wrong_outlet');
   } else if ((as === 'receipt' ? sale.paid_device_id ?? sale.device_id : sale.device_id) !== p.deviceId) {
     throw new Reject('wrong_device');
   }
-  return sale as { device_id: string; status: string; total_paise: string; receipt_no: string | null; order_root_id: string | null };
+  return sale as { device_id: string; status: string; total_paise: string; receipt_no: string | null; order_root_id: string | null; created_by: string };
+}
+
+/**
+ * A cashier or waiter cancels an open table order from any device of its outlet (step 7c). Same rule as the online
+ * void (`ORDER_SCOPE`): a cashier any open order here, a waiter only one they opened. A manager voids online; no
+ * tablet signs a manager in. The status check is what makes the payment win, in either order of arrival: a void after
+ * the payment finds it paid (`not_open`); a payment after the void finds it void (`sale_void`, in `applyPayment`).
+ */
+async function applyOrderVoid(c: pg.PoolClient, p: DevicePrincipal, ev: OrderVoided): Promise<void> {
+  const sale = await saleOf(c, p, ev.saleId, 'void');
+  const who = (await c.query(
+    `SELECT u.role FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id
+      WHERE u.id = $1 AND uo.outlet_id = $2 AND u.role IN ('cashier', 'waiter')`, [ev.voidedBy, p.outletId])).rows[0] as { role: string } | undefined;
+  if (!who) throw new Reject('unknown_user');
+  if (who.role === 'waiter' && sale.created_by !== ev.voidedBy) throw new Reject('not_own_order');
+  if (sale.status !== 'open') throw new Reject(sale.status === 'void' ? 'already_void' : 'not_open'); // the payment wins
+  await c.query(`UPDATE sale SET status = 'void', void_reason = $2 WHERE id = $1`, [ev.saleId, ev.reason]);
+  await audit(c, {
+    tenantId: p.tenantId, actorKind: 'user', actorId: ev.voidedBy, action: 'order.voided', entity: 'sale', entityId: ev.saleId,
+    detail: { reason: ev.reason, at: ev.at, deviceId: p.deviceId, openedOnDeviceId: sale.device_id, rootId: sale.order_root_id },
+  });
 }
 
 /** Only a paid sale has a receipt to print again. The audit entry is the trail a manager reads. */

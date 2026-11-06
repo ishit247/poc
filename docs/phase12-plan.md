@@ -327,8 +327,7 @@ a moved item's response carries **only its new code**.
   runs one at a time, so an older page can't be written over a newer one. New in `App.tsx`: a sync 0.8 s after the outbox
   grows. Before this, an order change waited for the 60 s timer, which would have made the map up to a minute stale on
   other devices. `sync` is now single-flight.
-- **Not built in step 7: paying another device's order.** Built in step 7b (below). Voiding another device's order is
-  still not supported.
+- **Not built in step 7: paying another device's order.** Built in step 7b (below). Voiding another device's order: step 7c.
 - **Known gaps:** the Orders tab lists this device's open orders only; a table with two orders still shows only the first (step 6
   gap); this device's own *rejected* order events stay folded into its row (as before step 7); a parked rejected payment
   leaves the local row paid while the server's stays open (as before).
@@ -353,7 +352,8 @@ a moved item's response carries **only its new code**.
 - **Rule.** A table order (`order_root_id` set) may be paid by a cashier on **any device of its outlet**. The money and
   the receipt belong to the device that paid: the receipt number is from the payer's own series, the payment is in the
   payer's shift (so the payer's drawer count balances), and `sale.paid_device_id` records the payer. A whole (v1) sale is
-  still paid where it was rung up. **Voiding stays with the opener** (`wrong_device`); a reprint is of the payer's receipt,
+  still paid where it was rung up. **Voiding stayed with the opener** (`wrong_device`; relaxed in step 7c for `order.voided`,
+  the shift-close `sale.voided` still is); a reprint is of the payer's receipt,
   so it is the payer's (`wrong_device` elsewhere). A device of another outlet is refused (`wrong_outlet`).
 - **Schema** (`0004_trading.sql`, `0001_tenancy.sql`, edited in place):
   - `sale.paid_device_id`, set by ingest on every payment.
@@ -380,7 +380,45 @@ a moved item's response carries **only its new code**.
     back as its own split, as before.
   - The Sell screen enables Cash and UPI on another device's order and says the receipt and drawer will be this counter's.
 - **Known gaps:** the opener's Sell screen just finds the table free when its order was paid elsewhere (no "paid at C2"
-  note); voiding another device's order is still not possible; the tablet does not undo a payment the server refused.
+  note); ~~voiding another device's order is still not possible~~ (step 7c); the tablet does not undo a payment the server refused.
+
+## Step 7c notes (voiding an open order from any device of the outlet)
+
+- **Rule (agreed 2026-11-06), the same as the online void (`ORDER_SCOPE`):** a **cashier** on any device of the outlet may
+  void any open table order there; a **waiter** only an order they opened (`sale.created_by`), from any device. A reason is
+  required. A manager voids online (`POST /orders/:id/void`, day-close screen); no tablet signs a manager in, so ingest
+  accepts cashiers and waiters only. Offered on the Sell screen for this device's own orders too (before 7c a tablet
+  had no Void at all; the only tablet void was the automatic one at shift close).
+- **Event `order.voided` v2** (`packages/shared/src/events.ts`): `saleId` (the open sale: the root, or a split, as a payment
+  names it), `voidedBy`, `reason` (trimmed, 1 to 200), `at`. In `OutboxEvent`, not in `OrderEvent`: it closes a sale like a
+  payment and is not folded. `sale.voided` v1 stays for the shift-close void, opener only, unchanged.
+- **Ingest** (`apps/api/src/ingest.ts`, `applyOrderVoid`): `saleOf(…, 'void')` locks the root then the sale, and for a table
+  order checks only the outlet (`wrong_outlet`); a whole (v1) sale stays opener-only, as with paying. Then: `voidedBy` must
+  be a cashier or waiter of this outlet (`unknown_user`); a waiter on someone else's order is `not_own_order`; the status
+  must still be `open` (`not_open` after a payment, `already_void`). **The payment wins in both orders of arrival:** a void
+  after it is `not_open`; a payment after the void is `sale_void` (unchanged rule in `applyPayment`); later line events are
+  `sale_void` (unchanged). A retry is `duplicate` by event id. Audit `order.voided`, actor the user, detail `reason`, `at`,
+  `deviceId` (the voiding device), `openedOnDeviceId`, `rootId`. The push publishes the outlet's SSE nudge as for any applied event.
+- **Tablet** (`apps/counter/src/order.ts` `voidOrder`, `Sell.tsx`): one transaction queues the event (after any unsent
+  line events of this device, so they reach the server first) and records the closing here: the row becomes a **void
+  `sales` row** (for another device's order too, as paying makes a paid one in 7b), kept events are deleted by root, and
+  the view is dropped. So `refold` cannot reopen it from a pull made before the void lands. The Sell screen shows "Void
+  order" when the signed-in person may void the order on screen, then a required reason, "Void", "Cancel"
+  (`void-order`, `void-reason`, `void-go`, `void-cancel`).
+- **The opener's tablet** needed no change: a pull showing its open sale `void` already voids its row (written for the
+  online manager void in step 7), and a visit with no open sale drops its kept events. Tested for 7c with an unsent line.
+- **Known gaps:** an opener that pays offline while another device voids loses the race the other way round (the void
+  landed first): its payment is refused `sale_void` and it keeps a local paid row and printed receipt, the same parked
+  rejected payment as in 7b; the manager sees the rejection. Likewise, its unsent line events on that order are parked
+  `sale_void`. The opener's Sell screen just finds the table free (no "voided at C2 by …" note). Day close lists the voided
+  order's reason only in the audit, not on a screen.
+- **Verified 2026-11-07**, after `fresh`: API 239/239 (4 new in `running-orders.test.ts`), tablet 54/54 (3 new in
+  `visits.test.ts`), shared 55/55, typecheck clean (shared, api, counter); DB not re-run (no schema change); 13 mutants (`vo-*`, `tab-void-*`, retargeted `pd-opener-only` and re-run `pd-any-outlet`), 13/13 caught.
+  `browser-tables.mjs` 39/39 (10 new: the counter voids the waiter tablet's order with a required reason, it drops off the
+  waiter's tablet, the waiter gets no Void on the counter's order, the counter voids its own, server rows and audit),
+  `browser-sell.mjs` 27/27, `browser-flow.mjs` 44/44. The first `browser-flow` run (just after midnight) failed at the
+  online order's "accepted" step (timeout); a re-run after `fresh` passed 44/44. Not explained; this change does not touch
+  the online queue. Watch for it.
 
 ## Step 8 notes (whole counter flow in a real browser)
 
@@ -439,6 +477,7 @@ a moved item's response carries **only its new code**.
 | 6 | UI: Sell redesign per the prototype (table strip and full map, code search with Add button, Popular row, one-tap Cash/UPI, quick cash, auto-return) | **real browser at 1024x768 and 768x1024**, offline toggle | **done 2026-11-06, browser-verified.** `node scripts/browser-sell.mjs` (Playwright, installed Edge, Docker stack on :8080 rebuilt): 27/27 at 1024x768 and 768x1024, log in `.validation/browser-sell.log`, screenshots in `.validation/screens/`. Covers code search and Add, hold/resume, edit and quick-cash pay of a running order, UPI, a sale offline, restaurant table strip and map, no sideways scroll, no page errors. Tablet tests 37/37, typecheck clean. No mutants (UI, not a guard) | done, uncommitted |
 | 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | **done 2026-11-06, browser-verified.** `node scripts/browser-tables.mjs` (two Edge contexts, two devices: cashier 1024x768, waiter 768x1024, map mode, Docker stack rebuilt): 24/24, log in `.validation/browser-tables.log`. Covers the other device's order appearing with no sync pressed (under 1 s), adds both ways with the same total, an offline device's line arriving on reconnect, payment refused on the other device's order, paying its own order with the other device's line, the table freeing on both. `browser-sell.mjs` re-run 27/27. After `up:fresh`: DB 45/45, API 230/230 (8 new in `apps/api/test/orders-pull.test.ts`), tablet 49/49 (11 new in `test/visits.test.ts`, one a property over 40 seeds; 1 new two-device real-API contract in `test/push.test.ts`), typecheck clean. 20 mutants (`ov-*`, `vis-*`, 3 retargeted `tab-*`), 20/20 caught. Shared not re-run (unchanged) | done, uncommitted |
 | 7b | Paying another device's order: any cashier device of the outlet pays a table order, on its own receipt series and shift (`sale.paid_device_id`) | two-browser test | **done 2026-11-06, browser-verified.** `scripts/browser-tables.mjs` 29/29: the counter pays the waiter tablet's order (3 lines, one added offline), the table frees on the waiter's tablet, the counter's next receipt is the next number in its series, and the server row says paid on the counter, on its receipt. `browser-sell.mjs` 27/27. After `up:fresh`: DB 46/46 (1 new), API 234/234 (4 new in `running-orders.test.ts`: payer's receipt/shift/cash, void and reprint rules, both paying, per-payer series and day-close gaps, counter report, another outlet), tablet 51/51 (2 new in `visits.test.ts`; the two-device contract now pays across devices against the real API), typecheck clean. 19 mutants (`pd-*`, `vis-*`, 2 retargeted phase 4 ones), 19/19 caught. Shared not re-run (unchanged) | done, uncommitted |
+| 7c | Voiding an open order from any device of the outlet: a cashier any, a waiter only their own, with a reason (`order.voided` v2) | ingest tests, mutants, two-browser test | **done 2026-11-07, browser-verified.** See "Step 7c notes" | done, uncommitted |
 | 8 | Playwright run of the whole counter flow against the new screens (the check owed since phase 4) | run recorded in the progress doc | **done 2026-11-06, browser-verified.** `node scripts/browser-flow.mjs` after `fresh`: 41/41 (see "Step 8 notes"). Found: no screen to void a past-day open order, which blocks day close. No unit suites re-run (no app code changed) | done, uncommitted |
 
 ### Model per step (see "Model usage plan" in CLAUDE.md; the assistant reminds you before a HIGH step)
@@ -452,6 +491,7 @@ a moved item's response carries **only its new code**.
 | 5 | **HIGH for the local-database design**, then STANDARD | offline storage and outbox ordering are sync-critical; the rest is plumbing |
 | 6 | STANDARD | screens from the frozen prototype; the browser check is the safety net |
 | 7 | **HIGH** | a new pull channel for open orders: ordering, cursors and offline reads |
+| 7c | **HIGH** | ingest and authorization: who may close another device's order |
 | 8 | STANDARD | scripted browser run; escalate only if it exposes a sync bug |
 
 ## Decided 2026-11-06 (PLAN D17, D18)
@@ -466,12 +506,12 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 8, 2b and 7b are done and verified (7 and 7b with
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 8, 2b, 7b and 7c are done and verified (7 and 7b with
 a two-browser run, 8 with `scripts/browser-flow.mjs`, 41/41). Step 8 is uncommitted.
 
 Phase 12's steps are all done, and the day-close void screen (step 8 notes, "Found") is built and browser-checked.
-Open before a pilot: voiding another device's order from the counter, and two cashiers paying one table while one is offline (step 7b
-notes). Then PLAN.md 0.3 item 3.
+Voiding another device's order is built (step 7c). Open before a pilot: two cashiers paying one table while one is offline
+(step 7b notes), and its 7c twin, a payment taken offline on an order another device voided. Then PLAN.md 0.3 item 3.
 
 The notes below were written for step 4 and are kept for reference.
 

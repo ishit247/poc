@@ -145,6 +145,21 @@ export const OrderMoved = z.object({
   at: deviceTime,
 });
 
+/**
+ * Someone at the counter cancels an unpaid order, on any device of its outlet (step 7c): a cashier any open order, a
+ * waiter only one they opened (the same rule as `POST /orders/:id/void`). `saleId` is the open sale (the root, or a split
+ * the server made after a payment), as a payment names it. Not a line event: like a payment it closes a sale, so it is
+ * not folded. A payment that reached the server first wins (the void is refused); a payment arriving after is refused.
+ */
+export const OrderVoided = z.object({
+  type: z.literal('order.voided'),
+  schemaVersion: z.literal(ORDER_SCHEMA_VERSION),
+  saleId: uuid,
+  voidedBy: uuid,
+  reason: z.string().trim().min(1).max(200),
+  at: deviceTime,
+});
+
 // A copy of a paid receipt was printed again. Reprints are a classic way to hide a cash sale or
 // to hand out duplicate bills, so each one is recorded with who and when.
 export const PrintReprinted = z.object({
@@ -187,7 +202,7 @@ export const SaleVoided = z.object({
 
 export const OutboxEvent = z.discriminatedUnion('type', [
   SaleCreated, PaymentTaken, PrintReprinted, ShiftOpened, ShiftClosed, SaleVoided,
-  OrderOpened, OrderLineAdded, OrderLineChanged, OrderLineRemoved, OrderMoved,
+  OrderOpened, OrderLineAdded, OrderLineChanged, OrderLineRemoved, OrderMoved, OrderVoided,
 ]);
 export const OrderEvent = z.discriminatedUnion('type', [OrderOpened, OrderLineAdded, OrderLineChanged, OrderLineRemoved, OrderMoved]);
 export type OrderOpened = z.infer<typeof OrderOpened>;
@@ -197,6 +212,7 @@ export type OrderLineRemoved = z.infer<typeof OrderLineRemoved>;
 export type OrderMoved = z.infer<typeof OrderMoved>;
 export type OrderEvent = z.infer<typeof OrderEvent>;
 export type SaleVoided = z.infer<typeof SaleVoided>;
+export type OrderVoided = z.infer<typeof OrderVoided>;
 export type ShiftOpened = z.infer<typeof ShiftOpened>;
 export type ShiftClosed = z.infer<typeof ShiftClosed>;
 export type SaleCreated = z.infer<typeof SaleCreated>;

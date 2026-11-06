@@ -36,8 +36,8 @@ const [outletId, counterId] = execFileSync('docker', ['exec', 'app-postgres-1', 
   .split('\n').find((l) => /^[0-9a-f-]{36} [0-9a-f-]{36}$/.test(l)).split(' ');
 await api('PUT', `/outlets/${outletId}/table-mode`, { mode: 'map' }, mgr);
 const tag = Date.now().toString(36).slice(-4).toUpperCase();
-const [shared, own] = [`S${tag}`, `O${tag}`]; // two fresh tables, so earlier runs' orders are not on them
-for (const code of [shared, own]) {
+const [shared, own, voided] = [`S${tag}`, `O${tag}`, `V${tag}`]; // fresh tables, so earlier runs' orders are not on them
+for (const code of [shared, own, voided]) {
   const r = await api('POST', `/outlets/${outletId}/tables`, { code }, mgr);
   if (r.status !== 201) throw new Error(`table ${code}: ${r.status}`);
 }
@@ -153,6 +153,44 @@ try {
   const rec = execFileSync('docker', ['exec', 'app-postgres-1', 'psql', '-U', 'pos_owner', '-d', 'pos', '-tA', '-c', q]).toString()
     .split('\n').filter((l) => /^(paid|open|void) /.test(l));
   check('server: B\'s order is paid on A, on A\'s receipt', rec.length === 1 && rec[0].startsWith('paid true ') && r1.includes(rec[0].split(' ')[2]), rec.join(' | '));
+
+  // 7c: the counter (cashier) voids the waiter tablet's order, with a reason; the table frees on the waiter's tablet.
+  await b.T(`table-${voided}`).click();
+  await b.item(0).click();
+  check('B: its own order opens, and B may void it', (await b.until(async () => (await b.lines()) === 1)) >= 0 && await b.T('void-order').isVisible());
+  check('A: B\'s order on the void table turns busy', (await a.until(() => a.busy(voided))) >= 0);
+  await a.T(`table-${voided}`).click();
+  await a.until(async () => (await a.lines()) === 1);
+  await a.T('void-order').click();
+  check('A: Void needs a reason', !(await a.T('void-go').isEnabled()));
+  await a.T('void-reason').fill('guest walked out');
+  await a.T('void-go').click();
+  check('A: the order is voided here, the table free', (await a.until(async () => (await a.T('sell-message').innerText().catch(() => '')) === 'Order voided.' && !(await a.busy(voided)))) >= 0);
+  await a.shot('t5a-a-voided-b-order');
+  const dropped = await b.until(async () => !(await b.busy(voided)) && (await b.lines()) === 0);
+  check('B: the voided order drops off its tablet', dropped >= 0, dropped >= 0 ? `${dropped} ms` : 'not within 8 s');
+  await b.shot('t5b-b-order-voided-768x1024');
+
+  // A waiter may not void the counter's order; the counter voids its own.
+  await a.T(`table-${voided}`).click();
+  await a.item(0).click();
+  await a.until(async () => (await a.lines()) === 1);
+  await b.until(() => b.busy(voided));
+  await b.T(`table-${voided}`).click(); // B still has its voided order chosen; tapping the table opens the one now on it
+  check('B: sees A\'s new order on the table', (await b.until(async () => (await b.lines()) === 1)) >= 0);
+  check('B (waiter): no Void on an order someone else opened', !(await b.T('void-order').isVisible()));
+  await a.T('void-order').click(); await a.T('void-reason').fill('rung by mistake'); await a.T('void-go').click();
+  check('A: voids its own order', (await a.until(async () => !(await a.busy(voided)))) >= 0);
+  check('B: and it drops off B', (await b.until(async () => !(await b.busy(voided)))) >= 0);
+
+  const vq = `BEGIN; SELECT set_config('app.tenant_id','00000000-0000-4000-8000-00000000000a',true);
+    SELECT s.status||'|'||s.void_reason||'|'||(SELECT count(*) FROM audit au WHERE au.action = 'order.voided' AND au.entity_id::text = s.id::text AND au.actor_kind = 'user'
+                                                  AND (au.detail->>'deviceId' <> au.detail->>'openedOnDeviceId'))
+      FROM sale s JOIN dining_table dt ON dt.id = s.table_id WHERE dt.code = '${voided}' AND dt.outlet_id = '${outletId}' ORDER BY s.received_at; COMMIT;`;
+  const vrec = execFileSync('docker', ['exec', 'app-postgres-1', 'psql', '-U', 'pos_owner', '-d', 'pos', '-tA', '-c', vq]).toString()
+    .split('\n').filter((l) => /^(paid|open|void)\|/.test(l));
+  check('server: both void with their reasons; B\'s audited as voided on another device, A\'s own not',
+    vrec.join(',') === 'void|guest walked out|1,void|rung by mistake|0', vrec.join(' , '));
   for (const t of [a, b]) check(`${t === a ? 'A' : 'B'}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 } catch (e) {
   check('run completed', false, String(e).split('\n')[0]);
