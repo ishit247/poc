@@ -221,6 +221,51 @@ a moved item's response carries **only its new code**.
   like any open order; a cashier or manager voids it with `POST /orders/:id/void`. The tablet's shift-close auto-void
   covers only its own orders. There is still no gap check on device sequence numbers (PLAN 7.5).
 
+## Step 5 notes (tablet: running orders in IndexedDB)
+
+- **Local database (Dexie version 4, `apps/counter/src/db.ts`).** New table `orderEvents` keyed `[deviceId+seq]`, indexed by
+  `saleId`: a copy of every order event this device wrote, kept while its order is open. Its `seq` is the **same number as
+  the outbox row** (both written in one transaction; `queue()` now returns the seq), so (deviceId, seq) identifies an event
+  to the fold on the tablet and on the server alike. The outbox row leaves on acknowledgement as before; the kept copy
+  leaves when the order is paid or voided (the paid sale row is the record then). `sales` gains a `tableId` index;
+  `LocalSale` gains `kind` (`'order'`, or absent/`'whole'` for a v1 sale) and `tableId`, and its lines an optional `lineId`.
+  No upgrade function: old rows read as whole sales with no table. Meta key `eventClock` holds the last order-event time.
+- **The row is the fold** (`apps/counter/src/order.ts`). Every change is one transaction: queue the event, keep the copy,
+  refold the order with the shared `foldOrder` over the kept copies, rewrite the `sales` row (live lines only, totals from
+  `totals()` at the settings passed in). A fold anomaly aborts the transaction: every event here came from this file, so
+  one is a bug. `payOrder` pays from that row, so the v2 payment lists exactly the lines and quantities on screen.
+- **Event time never goes backwards on one device** (`stamp`): max(now, `eventClock`). The fold orders by device time;
+  a clock set back mid-order would otherwise reorder this device's own changes. Ties fall to seq, which is in order.
+- **Operations**: `openOrder` (on the default table unless a table is given, optionally with a cart; this is "hold" in a
+  cafe), `addToOrder`, `setLineQty` (0 is `order.line_removed`, never a change to 0), `removeLine`, `moveOrder`,
+  `tables`, `tableMode`, `tableStates` (occupancy derived from open orders). Setting the quantity a line has, or moving to
+  the table it is on, writes nothing. A busy table may take a second order (the default table always does).
+- **Decided here, worth a look: the merge rule.** Adding an item that already has a live line merges (`line_changed`) only
+  if **this device** added that line; otherwise it adds a new line beside it. Reason: adds are a union and changes are
+  last-wins, so two waiters each adding "one more tea" to a line would otherwise lose one. The cost: one item can appear
+  on two lines (and two receipt lines) when two devices added it. An explicit quantity edit stays last-wins.
+- **Payment.** `payOrder` sends `payment.taken` v2 for an order (lines at shown qty, `totalPaise`), v1 for a whole sale, so
+  old outboxes and old open sales still pay as before. An order with no live lines cannot be paid (void it instead).
+  Shift close voids open orders too, with `sale.voided` v1 (the server accepts it for an order's own device), and drops
+  their kept events.
+- **Not changed in this step, on purpose:** `createSale` (Pay now, and Save) still writes a v1 whole sale; the Sell screen
+  is not wired to `openOrder` yet. Step 6 switches Save/Hold to `openOrder` when it builds the new screen. Whole sales stay
+  the right shape for pay-at-once counter sales (two events instead of 2 + lines).
+- **For step 7:** other devices' orders can arrive as events into the same `orderEvents` table (deviceId differs), and the
+  same `refold` gives the merged view; the merge rule above already looks at the device. The anomaly guard must then
+  become "show, don't abort" for foreign events. Paying an order whose remote changes arrive between display and pay is
+  covered by the payment winning, but the screen should show the order changed.
+- Tests: `apps/counter/test/order.test.ts` (11, fake-indexeddb, no server): one per rule, a failure part-way through a
+  change leaving nothing, and a property over 60 seeded histories of 25 random edits with a clock jumping both ways
+  (row = naive model = fold of the kept events, total = `totals()` of the fold, no anomalies). One contract test in
+  `apps/counter/test/push.test.ts` runs the real tablet code against the real API and Postgres: pull (tables, menu,
+  settings), open, add, merge, change, move, push while open (the server's open sale equals the tablet row line for line),
+  remove offline, pay v2, push (server paid with the same lines, total and receipt number, no flags).
+- Not tested: the fold-anomaly abort (unreachable with this device's own events). No browser (no screen yet).
+- Mutation lesson: the first run reported 14/14, but two were "caught" by a test that was failing on its own (the empty-
+  order guard sat after `validatePayments`, which threw first with another message). Run the suite green **before** the
+  mutants, and check that each mutant's catching test is the one written for it.
+
 ## Steps
 
 | # | Step | Verification | State |
@@ -230,7 +275,7 @@ a moved item's response carries **only its new code**.
 | 2b | Tags and diet (D17): `item.diet`, `tag`, `item_tag` (versioned, RLS, pulled), manager routes, resolver carries them to the tablet, filter row (UI in step 6) | **done 2026-11-06.** After `up:fresh`: DB 22/22 (the `tags`, `tables` and `rls` files; 4 new in `db/test/tags.test.mjs`), API 209/209 (5 new in `apps/api/test/tags.test.ts`), tablet 25/25, typecheck clean. 12 mutants `tag-*`/`tagapi-*`, 12/12 caught (one survivor, the cross-tenant link key, led to a test fix and was re-run). No browser (no screen yet) | done, uncommitted |
 | 3 | Shared: v2 event types, the fold (`foldOrder`) with property tests (any order of delivery gives the same lines) | **done 2026-11-06.** Shared 53/53 (12 new in `test/order.test.ts`, 3 of them properties over 400 seeds each). Typecheck clean (shared, api, counter, admin). After `up:fresh`: API 204/204 (unchanged). 14 mutants `order-*`/`payv2-*`, 14/14 caught. After the "payment wins" change: shared 54/54, typecheck clean, the 9 payment mutants (6 new) 9/9 caught; the 9 fold mutants were not re-run (their code did not change). 18 step 3 mutants in all. No browser (no UI) | done, uncommitted |
 | 4 | Server: relax `sale`/`sale_line` for open orders, ingest v1 and v2, payment rules above, N-1 | **done 2026-11-06.** After `up:fresh`: DB 45/45 (2 new in `db/test/trading.test.mjs`), API 222/222 (13 new in `apps/api/test/running-orders.test.ts`: duplicate and doubled batch, reorder and deferral, two devices adding concurrently, late line after payment, remove/change after payment, the payment winning, settings drift, v1/v2 mixing, void, move, and a property over 12 seeded two-device histories delivered in random order with retries: server rows = `foldOrder`), shared 55/55, tablet 25/25, typecheck clean. 52 mutants run (43 new `order-*`/`ro-*`, plus the retargeted and touched ingest ones): 50 caught at first; `ro-pay-keeps-unpaid` survived, which exposed a missing case (a whole line that reached the server before the payment, but was not in it). That test was added and the mutant re-run and caught; `ro-removed-counts-as-taken` was an equivalent mutant and was dropped. No browser (no UI) | done, uncommitted |
-| 5 | Tablet: local open orders as line events (Dexie version bump), table state, hold/move | tablet unit tests against fake-indexeddb and the real API | not started |
+| 5 | Tablet: local open orders as line events (Dexie version bump), table state, hold/move | **done 2026-11-06.** After `up:fresh`: tablet 37/37 (11 new in `apps/counter/test/order.test.ts`, one a property over 60 seeded histories; 1 new real-API contract in `test/push.test.ts`), counter typecheck clean. 14 mutants `tab-ord-*`/`tab-pay-*`/`tab-shift-*`, 14/14 caught (two re-run after a guard fix, see notes). API, DB and shared suites not re-run (no server or shared code changed). No browser (no screen yet) | done, uncommitted |
 | 6 | UI: Sell redesign per the prototype (table strip and full map, code search with Add button, Popular row, one-tap Cash/UPI, quick cash, auto-return) | **real browser at 1024x768 and 768x1024**, offline toggle | not started |
 | 7 | 12b: outlet open-orders pull and SSE nudge, so a second counter or a waiter sees the table map | two-browser test | not started |
 | 8 | Playwright run of the whole counter flow against the new screens (the check owed since phase 4) | run recorded in the progress doc | not started |
@@ -260,11 +305,12 @@ a moved item's response carries **only its new code**.
 
 ## Start here (handover for the next session)
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 4 and 2b are done and verified. Next is **step 5**
-(tablet: HIGH for the local-database design, then STANDARD; a fresh session is a good place to start). Read "Step 4
-notes" first: the tablet must write `order.*` events with non-decreasing `at` per device, pay with `payment.taken` v2
-(`lines` at the quantities shown), and keep v1 `sale.created` working for old outboxes. The server's reason codes are
-listed there. Step 4 work is uncommitted (`git status`).
+Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 5 and 2b are done and verified. Next is **step 6**
+(Sell redesign per the prototype; STANDARD; a fresh session is a good place to start). Read "Step 5 notes" first: the
+tablet API for orders is `apps/counter/src/order.ts`; the Sell screen still saves with v1 `createSale`, and step 6 wires
+Save/Hold and the table strip to `openOrder`/`addToOrder`/`setLineQty`/`moveOrder`/`tableStates`. One decision there is
+worth a look before building the cart UI: the per-device merge rule (one item can show on two lines). Steps 4 and 5 are
+uncommitted (`git status`).
 
 The notes below were written for step 4 and are kept for reference.
 

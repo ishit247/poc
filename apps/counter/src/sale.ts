@@ -1,7 +1,7 @@
 // Writing a sale. The sale, its outbox events and the receipt counter are written in ONE
 // IndexedDB transaction, so there is no state where a receipt number was spent without the
 // sale, or a sale exists that the server will never hear about.
-import { nextReceipt, OutboxEvent, totals, validatePayments, EVENT_SCHEMA_VERSION, paise, type Cart, type Tender, type TradingSettings } from '@pos/shared';
+import { nextReceipt, OutboxEvent, totals, validatePayments, EVENT_SCHEMA_VERSION, ORDER_SCHEMA_VERSION, paise, type Cart, type Tender, type TradingSettings } from '@pos/shared';
 import { currentShift, db, getMeta, type DeviceInfo, type LocalSale } from './db.ts';
 
 export interface Actor { id: string; name: string; role: 'cashier' | 'waiter' }
@@ -17,9 +17,10 @@ const saleCreated = (s: LocalSale): OutboxEvent => ({
   subtotalPaise: s.subtotalPaise, taxPaise: s.taxPaise, roundOffPaise: s.roundOffPaise, totalPaise: s.totalPaise,
 });
 
-export async function queue(event: OutboxEvent): Promise<void> {
+/** Queues an event and returns its outbox seq (the device order the server replays, and the fold's event identity). */
+export async function queue(event: OutboxEvent): Promise<number> {
   // parse() is the gate: a malformed event throws here and rolls the whole transaction back.
-  await db.outbox.add({ eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), payload: OutboxEvent.parse(event) });
+  return db.outbox.add({ eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), payload: OutboxEvent.parse(event) });
 }
 
 /** Money goes into the drawer of an open shift, and only its owner may put it there. Call inside the transaction. */
@@ -31,11 +32,20 @@ async function drawerFor(actor: Actor): Promise<string> {
 }
 
 async function takePayment(device: DeviceInfo, sale: LocalSale, tenders: Tender[], today: string, shiftId: string): Promise<LocalSale> {
+  if (sale.kind === 'order' && sale.lines.length === 0) throw new Error('This order has nothing on it to pay for.');
   const payments = validatePayments(paise(sale.totalPaise), tenders);
   const issued = nextReceipt(device.counterCode, (await getMeta('receiptCounter')) ?? null, today);
   await db.meta.put({ key: 'receiptCounter', value: issued.counter });
   const date = issued.counter.date;
-  await queue({ type: 'payment.taken', schemaVersion: EVENT_SCHEMA_VERSION, saleId: sale.id, shiftId, businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments });
+  const common = { type: 'payment.taken', saleId: sale.id, shiftId, businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments } as const;
+  if (sale.kind === 'order') {
+    // v2: exactly the lines on screen, at the quantities on screen, for the total on screen. The payment wins on the
+    // server (step 4), so what is listed here is what the receipt says, whatever another device did meanwhile.
+    await queue({ ...common, schemaVersion: ORDER_SCHEMA_VERSION, lines: sale.lines.map((l) => ({ lineId: l.lineId!, qty: l.qty })), totalPaise: sale.totalPaise });
+    await db.orderEvents.where('saleId').equals(sale.id).delete(); // settled: the paid sale row is the record now
+  } else {
+    await queue({ ...common, schemaVersion: EVENT_SCHEMA_VERSION });
+  }
   return { ...sale, status: 'paid', shiftId, businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments };
 }
 
@@ -67,7 +77,7 @@ export async function createSale(args: {
 /** A cashier pays an order that a waiter (or they) saved earlier. */
 export async function payOrder(args: { device: DeviceInfo; actor: Actor; saleId: string; tenders: Tender[]; now?: Date }): Promise<LocalSale> {
   if (args.actor.role !== 'cashier') throw new Error('only a cashier takes payment');
-  return db.transaction('rw', db.sales, db.outbox, db.meta, db.shifts, async () => {
+  return db.transaction('rw', [db.sales, db.outbox, db.meta, db.shifts, db.orderEvents], async () => {
     const sale = await db.sales.get(args.saleId);
     if (!sale || sale.status !== 'open') throw new Error('that order is not open');
     const paid = await takePayment(args.device, sale, args.tenders, businessDate(args.device.timezone, args.now ?? new Date()), await drawerFor(args.actor));

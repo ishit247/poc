@@ -25,7 +25,7 @@ export async function openShift(args: { actor: Actor; openingCashPaise: number; 
 export async function closeShift(args: { device: DeviceInfo; actor: Actor; countedCashPaise: number; now?: Date }): Promise<ShiftSlipView> {
   if (!Number.isInteger(args.countedCashPaise) || args.countedCashPaise < 0) throw new RangeError('The count must be zero or more.');
   const at = (args.now ?? new Date()).toISOString();
-  return db.transaction('rw', db.shifts, db.outbox, db.sales, async () => {
+  return db.transaction('rw', [db.shifts, db.outbox, db.sales, db.orderEvents], async () => {
     const shift = await currentShift();
     if (!shift) throw new Error('There is no open shift to close.');
     if (shift.userId !== args.actor.id) throw new Error(`This shift belongs to ${shift.userName}.`);
@@ -33,6 +33,7 @@ export async function closeShift(args: { device: DeviceInfo; actor: Actor; count
     for (const s of await db.sales.filter((x) => x.status === 'open').toArray()) {
       await queue({ type: 'sale.voided', schemaVersion: EVENT_SCHEMA_VERSION, saleId: s.id, reason: 'abandoned_at_shift_close', at });
       await db.sales.put({ ...s, status: 'void' });
+      await db.orderEvents.where('saleId').equals(s.id).delete();
     }
     await queue({ type: 'shift.closed', schemaVersion: EVENT_SCHEMA_VERSION, shiftId: shift.id, countedCashPaise: args.countedCashPaise, at });
     await db.shifts.put({ ...shift, closedAt: at, countedCashPaise: args.countedCashPaise });

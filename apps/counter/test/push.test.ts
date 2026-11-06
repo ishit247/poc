@@ -8,6 +8,9 @@ import { currentShift, db, type DeviceInfo } from '../src/db.ts';
 import { createSale, type Actor } from '../src/sale.ts';
 import { pull, push } from '../src/sync.ts';
 import { closeShift, openShift } from '../src/shift.ts';
+import { addToOrder, moveOrder, openOrder, removeLine, setLineQty, tables } from '../src/order.ts';
+import { loadMenu } from '../src/menu.ts';
+import { payOrder } from '../src/sale.ts';
 import { seedShift } from './helpers.ts';
 import { buildApp } from '../../api/src/app.ts';
 import { pool, withTenant } from '../../api/src/db.ts';
@@ -182,4 +185,62 @@ test('contract: a drawer a manager closed reaches the tablet by pull, and the ta
   const cred2 = (await app.inject({ method: 'POST', url: '/enrol', payload: { code: code2 } })).json().credential as string;
   const feed = (await app.inject({ method: 'GET', url: '/sync/pull?cursor=0', headers: { authorization: `Device ${cred2}` } })).json();
   assert.deepEqual(feed.changes.filter((c: { type: string }) => c.type === 'shift'), []);
+});
+
+test('contract: a running order written by the real tablet code is the order the real server holds, paid with v2', async () => {
+  const app = buildApp();
+  const A = '00000000-0000-4000-8000-00000000000a';
+  const mgr = (await app.inject({ method: 'POST', url: '/login', headers: { host: 'tenant-a.localhost' }, payload: { email: 'a1@example.test', password: 'dev-password-123' } })).json().token as string;
+  const o = await withTenant(A, async (c) =>
+    (await c.query("SELECT o.id, (SELECT id FROM counter WHERE outlet_id = o.id AND code = 'C1') AS counter_id FROM outlet o WHERE o.name = 'School 1 Canteen'")).rows[0]);
+  const code = (await app.inject({ method: 'POST', url: '/enrolment-codes', headers: { authorization: `Bearer ${mgr}` }, payload: { outletId: o.id, counterId: o.counter_id } })).json().code;
+  const credential = (await app.inject({ method: 'POST', url: '/enrol', payload: { code } })).json().credential as string;
+  const user = (await withTenant(A, async (c) => (await c.query("SELECT id FROM app_user WHERE name = 'School 1 Canteen cashier'")).rows[0].id)) as string;
+  const real: DeviceInfo = { ...device, credential, deviceId: credential.split('.')[1]!, tenantId: A, outletId: o.id, counterId: o.counter_id };
+  const actor: Actor = { id: user, name: 'Cashier', role: 'cashier' };
+  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+    const r = await app.inject({ method: (init.method ?? 'GET') as 'GET' | 'POST', url: String(url).replace(/^\/api/, ''), headers: init.headers as Record<string, string>, payload: init.body as string });
+    return new Response(r.body, { status: r.statusCode });
+  }) as typeof fetch;
+
+  await Promise.all([db.entities.clear(), db.orderEvents.clear(), db.shifts.clear()]);
+  const made = await app.inject({ method: 'POST', url: `/outlets/${o.id}/tables`, headers: { authorization: `Bearer ${mgr}` }, payload: { code: `M${Date.now() % 100000}` } });
+  assert.equal(made.statusCode, 201, made.body);
+  await pull(real); // the tables, the menu and the settings, as a real tablet gets them
+  const menu = await loadMenu();
+  const [e1, e2] = menu.entries.filter((e) => e.available);
+  const tablesHere = await tables();
+  assert.ok(tablesHere.some((t) => t.isDefault), 'pull brought the default table');
+  const opts = { device: real, actor, settings: menu.settings };
+  await openShift({ actor, openingCashPaise: 0 });
+
+  // Opened on the default table, then edited the way a counter does: add, bump, add, change, remove, move.
+  let s = await openOrder({ ...opts, menuVersion: menu.menuVersion });
+  s = await addToOrder({ ...opts, saleId: s.id, entry: e1! });
+  s = await addToOrder({ ...opts, saleId: s.id, entry: e1!, qty: 2 });
+  s = await addToOrder({ ...opts, saleId: s.id, entry: e2! });
+  s = await setLineQty({ ...opts, saleId: s.id, lineId: s.lines[1]!.lineId!, qty: 2 });
+  s = await addToOrder({ ...opts, saleId: s.id, entry: e2! }); // merges: this device added that line
+  assert.deepEqual(s.lines.map((l) => l.qty), [3, 3]);
+  s = await moveOrder({ ...opts, saleId: s.id, tableId: tablesHere.find((t) => !t.isDefault)!.id });
+
+  // Sent while open: the server's open sale is the tablet's row, line for line.
+  assert.equal((await push(real)).parked, 0);
+  const server = async () => withTenant(A, async (c) => ({
+    sale: (await c.query('SELECT status, table_id, subtotal_paise::int sub, tax_paise::int tax, total_paise::int total, receipt_no, flags FROM sale WHERE id = $1', [s.id])).rows[0],
+    lines: (await c.query('SELECT line_id, qty FROM sale_line WHERE sale_id = $1 AND removed_at IS NULL ORDER BY line_id', [s.id])).rows,
+  }));
+  const open = await server();
+  assert.deepEqual(open.sale, { status: 'open', table_id: s.tableId, sub: s.subtotalPaise, tax: s.taxPaise, total: s.totalPaise, receipt_no: null, flags: [] });
+  const byId = (ls: { lineId?: string; qty: number }[]) => ls.map((l) => ({ line_id: l.lineId, qty: l.qty })).sort((a, b) => a.line_id!.localeCompare(b.line_id!));
+  assert.deepEqual(open.lines, byId(s.lines));
+
+  // One more change offline, then paid: the payment carries the lines as shown, and the server pays exactly those.
+  s = await removeLine({ ...opts, saleId: s.id, lineId: s.lines[0]!.lineId! });
+  const paid = await payOrder({ device: real, actor, saleId: s.id, tenders: [{ method: 'cash', amountPaise: paise(s.totalPaise), tenderedPaise: paise(s.totalPaise) }] });
+  assert.deepEqual(await push(real), { sent: 2, done: 2, parked: 0, deferred: 0 });
+  const after = await server();
+  assert.deepEqual(after.sale, { status: 'paid', table_id: s.tableId, sub: s.subtotalPaise, tax: s.taxPaise, total: paid.totalPaise, receipt_no: paid.receiptNo, flags: [] });
+  assert.deepEqual(after.lines, byId(paid.lines));
+  assert.equal(await db.orderEvents.count(), 0);
 });

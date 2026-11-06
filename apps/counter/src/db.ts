@@ -2,7 +2,7 @@
 // with no network lives here: the pulled catalogue and staff, the receipt counter, open
 // orders, and the outbox of events waiting to sync (push is phase 4).
 import Dexie, { type Table } from 'dexie';
-import type { OutboxEvent, PinAttemptState, ReceiptCounter, PaymentRecord } from '@pos/shared';
+import type { OrderEvent, OutboxEvent, PinAttemptState, ReceiptCounter, PaymentRecord } from '@pos/shared';
 
 export interface DeviceInfo {
   credential: string;
@@ -27,7 +27,15 @@ export interface LocalSale {
   businessDate: string;
   createdAt: string;
   menuVersion: number;
-  lines: { itemId: string; name: string; unitPaise: number; gstRateBp: number; qty: number; netPaise: number; taxPaise: number }[];
+  /**
+   * 'order' is a running order (phase 12, D15): its lines are the fold of its `orderEvents`, recomputed in the same
+   * transaction as every event, and it is paid with `payment.taken` v2. Absent or 'whole' is a v1 sale written whole.
+   */
+  kind?: 'whole' | 'order';
+  /** The table an order sits on (the outlet's default table in a cafe). Null or absent for a whole sale. */
+  tableId?: string | null;
+  /** For an order, the LIVE lines only, each with its lineId; removed lines stay in the fold, not here. */
+  lines: { lineId?: string; itemId: string; name: string; unitPaise: number; gstRateBp: number; qty: number; netPaise: number; taxPaise: number }[];
   subtotalPaise: number;
   taxPaise: number;
   roundOffPaise: number;
@@ -59,6 +67,13 @@ export interface OutboxRow {
   rejected?: string;
 }
 
+/**
+ * An order event this device wrote, kept while its order is open so the order can be refolded. `seq` is the SAME
+ * number as its outbox row (written in one transaction), so (deviceId, seq) identifies it to the fold here and on the
+ * server alike. The outbox row leaves on acknowledgement; this one leaves when the order is paid or voided.
+ */
+export interface OrderEventRow { deviceId: string; seq: number; saleId: string; payload: OrderEvent }
+
 /** The tenant's logo, cached so the header and receipt show it with no network. Keyed by content hash. */
 export interface LogoRow { sha: string; type: string; bytes: ArrayBuffer }
 
@@ -70,7 +85,9 @@ export type MetaValue =
   | { key: 'cursor'; value: number }
   | { key: 'receiptCounter'; value: ReceiptCounter }
   | { key: 'lastPull'; value: string }
-  | { key: 'lastPush'; value: string };
+  | { key: 'lastPush'; value: string }
+  /** The latest time stamped on an order event. Order event times never go backwards on one device (the fold needs it). */
+  | { key: 'eventClock'; value: string };
 
 class CounterDb extends Dexie {
   meta!: Table<MetaValue, string>;
@@ -81,6 +98,7 @@ class CounterDb extends Dexie {
   logo!: Table<LogoRow, string>;
   shifts!: Table<LocalShift, string>;
   itemImages!: Table<ItemImageRow, string>;
+  orderEvents!: Table<OrderEventRow, [string, number]>;
 
   constructor() {
     super('counter');
@@ -94,6 +112,8 @@ class CounterDb extends Dexie {
     });
     this.version(2).stores({ shifts: 'id, closedAt' });
     this.version(3).stores({ itemImages: 'sha' });
+    // Phase 12: running orders. Existing sales need no upgrade: no `kind` means a whole sale, no `tableId` is no table.
+    this.version(4).stores({ sales: 'id, status, createdBy, tableId', orderEvents: '[deviceId+seq], saleId' });
   }
 }
 

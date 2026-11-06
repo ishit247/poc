@@ -25,6 +25,7 @@ const M = (id, file, from, to, tests, all = false) => ({ id, file, from, to, tes
 const ORDER = 'packages/shared/src/order.ts';
 // `noDb`: the tests touch no database, so the fresh start before and after is skipped.
 const SHARED_ORDER = { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/order.test.ts'], noDb: true };
+const TABLET_ORDER = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/order.test.ts'], noDb: true };
 
 const staff = API_TESTS('staff.test.ts');
 const orders = API_TESTS('orders.test.ts');
@@ -505,6 +506,25 @@ const MUTANTS = [
     // Not a mutant: `if (!r.removed)` in openLines is defensive. A removed row on a closed sale comes only from a removal
     // in the fold, which is final, so that fold line is removed and leaves no remainder either way (equivalent mutant).
   ].map(([id, from, to]) => M(id, ORDER, from, to, SHARED_ORDER)),
+  // --- phase 12 step 5: running orders on the tablet (fake-indexeddb, no database)
+  ...[
+    ['tab-ord-clock-backwards', 'const t = Math.max(now.getTime(), last ? Date.parse(last) : 0);', 'const t = now.getTime();'],
+    ['tab-ord-merge-foreign', 'const same = sale.lines.find((l) => l.itemId === entry.itemId && mine.has(l.lineId!));', 'const same = sale.lines.find((l) => l.itemId === entry.itemId);'],
+    ['tab-ord-never-merge', 'const same = sale.lines.find((l) => l.itemId === entry.itemId && mine.has(l.lineId!));', 'const same = sale.lines.find(() => false);'],
+    ['tab-ord-zero-is-change', 'await write(device, qty === 0', 'await write(device, false'],
+    ['tab-ord-same-qty-writes', 'if (line.qty === qty) return sale;', ''],
+    ['tab-ord-same-table-writes', 'if (sale.tableId === tableId) return sale;', ''],
+    ['tab-ord-any-table', "if (!(await db.entities.get(['dining_table', tableId]))) throw", 'if (false) throw'],
+    ['tab-ord-closed-editable', "if (sale.status !== 'open') throw new Error('That order is already closed.');", ''],
+    ['tab-ord-qty-uncapped', 'if (qty !== 0) checkQty(qty, settings);', ''],
+    ['tab-ord-table-not-refolded', 'tableId: fold.tableId,', 'tableId: sale.tableId,'],
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/order.ts', from, to, TABLET_ORDER)),
+  ...[
+    ['tab-pay-v1-for-order', "if (sale.kind === 'order') {", 'if (false) {'],
+    ['tab-pay-empty-order', "if (sale.kind === 'order' && sale.lines.length === 0) throw", 'if (false) throw'],
+    ['tab-pay-keeps-events', 'await db.orderEvents.where(\'saleId\').equals(sale.id).delete(); // settled', '// settled'],
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, TABLET_ORDER)),
+  M('tab-shift-keeps-events', 'apps/counter/src/shift.ts', "await db.orderEvents.where('saleId').equals(s.id).delete();", '', TABLET_ORDER),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
