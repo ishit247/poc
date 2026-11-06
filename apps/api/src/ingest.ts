@@ -72,7 +72,8 @@ async function decide(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, setting
     else if (ev.type === 'shift.opened') await applyShiftOpened(c, p, ev);
     else if (ev.type === 'shift.closed') await applyShiftClosed(c, p, ev);
     else if (ev.type === 'sale.voided') await applyVoid(c, p, ev);
-    else await applyReprint(c, p, ev);
+    else if (ev.type === 'print.reprinted') await applyReprint(c, p, ev);
+    else throw new Error(`no handler for ${ev.type}`); // order.* events are turned away above until step 4 handles them
     await c.query('RELEASE SAVEPOINT ev');
   } catch (err) {
     await c.query('ROLLBACK TO SAVEPOINT ev');

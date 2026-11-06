@@ -6,6 +6,7 @@ export * from './payment.ts';
 export * from './receipt.ts';
 export * from './receipt-text.ts';
 export * from './events.ts';
+export * from './order.ts';
 export * from './pin-offline.ts';
 export * from './settings.ts';
 export * from './shift.ts';

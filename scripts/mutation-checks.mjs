@@ -22,6 +22,9 @@ const MENU = 'db/migrations/0003_menu.sql';
 const OUTLETS = 'apps/api/src/routes/outlets.ts';
 const TABLES_DB = { cwd: '.', cmd: ['node', '--test', 'db/test/tables.test.mjs'] };
 const M = (id, file, from, to, tests, all = false) => ({ id, file, from, to, tests, all });
+const ORDER = 'packages/shared/src/order.ts';
+// `noDb`: the tests touch no database, so the fresh start before and after is skipped.
+const SHARED_ORDER = { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/order.test.ts'], noDb: true };
 
 const staff = API_TESTS('staff.test.ts');
 const orders = API_TESTS('orders.test.ts');
@@ -412,6 +415,27 @@ const MUTANTS = [
     ['codeapi-conflict-is-500', 'apps/api/src/routes/menu.ts', "return 'code in use';", 'return null;'],
     ['codeapi-full-is-500', 'apps/api/src/routes/menu.ts', "return 'no free code';", 'return null;'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('tables.test.ts'))),
+  // --- running-order fold and v2 events (phase 12 step 3; packages/shared/test/order.test.ts). Pure code: no database.
+  ...[
+    ['order-arrival-order', ORDER, 'const sorted = [...unique.values()].sort(compareOrderEvents);', 'const sorted = [...unique.values()];'],
+    ['order-two-payloads-accepted', ORDER, "else if (canonical(seen.payload) !== canonical(e.payload)) throw new RangeError(`device ${e.deviceId} seq ${e.seq} has two different payloads`);", ''],
+    ['order-tie-ignores-device', ORDER, "if (a.deviceId !== b.deviceId) return a.deviceId < b.deviceId ? -1 : 1;", ''],
+    ['order-first-change-wins', ORDER, 'qty.set(p.lineId, p.qty); // sorted', 'if (!qty.has(p.lineId)) qty.set(p.lineId, p.qty); // sorted'],
+    ['order-last-removal-wins', ORDER, 'if (!removed.has(p.lineId)) removed.set(p.lineId, { by: p.by, at: p.at });', 'removed.set(p.lineId, { by: p.by, at: p.at });'],
+    ['order-open-beats-move', ORDER, 'tableId: movedTo ?? opened?.tableId ?? null', 'tableId: opened?.tableId ?? movedTo ?? null'],
+    ['order-line-conflict-silent', ORDER, "anomalies.push({ kind: 'line_conflict', lineId: p.lineId });", ''],
+    ['order-orphans-unreported', ORDER, "for (const lineId of orphans) anomalies.push({ kind: 'orphan', lineId });", ''],
+    ['order-totals-count-removed', ORDER, 'return totals(liveLines(f), s);', 'return totals(f.lines, s);'],
+    ['order-pay-removal-unrecorded', ORDER, "else if (!live) overridden.push({ lineId: l.lineId, kind: 'removed', foldQty: l.qty });", 'else if (!live) {}'],
+    ['order-pay-removed-line-unpaid', ORDER, '.map((l) => ({ ...l, qty: want.get(l.lineId)!, removedBy: null, removedAt: null }))', '.filter((l) => l.removedAt === null).map((l) => ({ ...l, qty: want.get(l.lineId)! }))'],
+    ['order-pay-fold-qty', ORDER, 'qty: want.get(l.lineId)!, removedBy', 'qty: l.qty, removedBy'],
+    ['order-pay-excess-not-late', ORDER, 'else if (l.qty > paidQty) late.push({ line: l, qty: l.qty - paidQty, partial: true });', ''],
+    ['order-pay-unpaid-not-late', ORDER, 'if (live) late.push({ line: l, qty: l.qty, partial: false });', ''],
+    ['order-pay-reduce-unrecorded', ORDER, "else if (l.qty < paidQty) overridden.push({ lineId: l.lineId, kind: 'reduced', foldQty: l.qty });", ''],
+    ['order-pay-total-unchecked', ORDER, "if (t.total !== totalPaise) return { kind: 'mismatch', expectedPaise: t.total };", ''],
+    ['payv2-sum-unchecked', 'packages/shared/src/events.ts', '=== e.totalPaise, { message:', '>= 0, { message:'],
+    ['payv2-dup-lines', 'packages/shared/src/events.ts', ".refine((ls) => new Set(ls.map((l) => l.lineId)).size === ls.length, { message: 'lines must be unique' })", ''],
+  ].map(([id, file, from, to]) => M(id, file, from, to, SHARED_ORDER)),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
@@ -432,8 +456,10 @@ for (const m of todo) {
   if (count === 0 || (count > 1 && !m.all)) { results.push([m.id, 'INVALID', `pattern found ${count}x`]); console.log(results.at(-1).join(' | ')); continue; }
   try {
     writeFileSync(m.file, isRe ? original.replace(m.from, m.to) : m.all ? original.split(m.from).join(m.to) : original.replace(m.from, () => m.to));
-    const up = run(['node', 'scripts/up-fresh.mjs']);
-    if (up.status !== 0) { results.push([m.id, 'BROKEN', 'fresh start failed under the mutation']); continue; }
+    if (!m.tests.noDb) {
+      const up = run(['node', 'scripts/up-fresh.mjs']);
+      if (up.status !== 0) { results.push([m.id, 'BROKEN', 'fresh start failed under the mutation']); continue; }
+    }
     const t = run(m.tests.cmd.flatMap((a) => (a === '--test' ? [a, '--test-reporter=tap'] : [a])), m.tests.cwd);
     const out = `${t.stdout}\n${t.stderr}`;
     const failed = [...out.matchAll(/^not ok \d+ - (.*)$/gm)].map((x) => x[1]);
@@ -447,7 +473,7 @@ for (const m of todo) {
   console.log(results.at(-1).join(' | '));
 }
 // Leave the database matching the restored source.
-run(['node', 'scripts/up-fresh.mjs']);
+if (todo.some((m) => !m.tests.noDb)) run(['node', 'scripts/up-fresh.mjs']);
 console.log('\n' + results.map((r) => r.join(' | ')).join('\n'));
 const bad = results.filter((r) => r[1] !== 'caught');
 console.log(`\n${results.length - bad.length}/${results.length} caught`);
