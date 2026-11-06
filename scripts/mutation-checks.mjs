@@ -176,6 +176,13 @@ const MUTANTS = [
     ['forceclose-no-audit', "action: 'shift.force_close'", "action: 'shift.noop'"],
     ['forceclose-negative-count', 'countedCashPaise: z.number().int().min(0).max(100_000_000)', 'countedCashPaise: z.number().int().max(100_000_000)'],
   ].map(([id, from, to]) => M(id, 'apps/api/src/routes/dayclose.ts', from, to, API_TESTS('sync-push.test.ts'))),
+  // The open-order list behind the blocker (void from the day-close screen): the same rows as the count.
+  ...[
+    ['dayclose-list-any-outlet', "WHERE s.outlet_id = $1 AND s.status = 'open' AND s.business_date <= $2", "WHERE $1::uuid IS NOT NULL AND s.status = 'open' AND s.business_date <= $2"],
+    ['dayclose-list-voided-too', "WHERE s.outlet_id = $1 AND s.status = 'open' AND s.business_date <= $2", "WHERE s.outlet_id = $1 AND s.status IN ('open', 'void') AND s.business_date <= $2"],
+    ['dayclose-list-any-date', "WHERE s.outlet_id = $1 AND s.status = 'open' AND s.business_date <= $2", "WHERE s.outlet_id = $1 AND s.status = 'open' AND $2::date IS NOT NULL"],
+    ['dayclose-list-removed-lines', 'FROM sale_line l WHERE l.sale_id = s.id AND l.removed_at IS NULL)', 'FROM sale_line l WHERE l.sale_id = s.id)'],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/dayclose.ts', from, to, API_TESTS('zz-online-dayclose.test.ts'))),
   // --- phase 7 step 6: settlement import
   ...[
     ['settle-upload-any-outlet', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);\n    const { channel,", "if (p.kind !== 'user') return notFound(reply);\n    const { channel,"],

@@ -228,11 +228,9 @@ try {
 
   // 11. Manager: day close with the gap shown, then reports.
   // The seed leaves, per outlet, a drawer and a waiter's open order from 2026-01-01; both block today's close, as a
-  // forgotten drawer would. The drawer is closed through the screen below. No screen can void an open order, so the
-  // manager's API route stands in for one (a gap, recorded in the phase 12 notes).
-  const stale = sql(`id) FROM sale WHERE outlet_id='${outletId}' AND status='open' AND business_date < current_date`);
-  for (const [id] of stale) await api('POST', `/orders/${id}/void`, { reason: 'stale order from the seed' }, mgr);
-  check('stale open order voided by the manager (API, no screen)', sql(`count(*)) FROM sale WHERE outlet_id='${outletId}' AND status='open'`)[0][0] === '0', `${stale.length} voided`);
+  // forgotten drawer would. Both are cleared through the day-close screen below.
+  // (The seed's unaccepted Swiggy order is expired and voided by the server's expiry job; online orders are not voided here.)
+  const stale = sql(`id) FROM sale WHERE outlet_id='${outletId}' AND status='open' AND channel='counter' AND business_date < current_date`);
   await T('sign-out').click();
   await T('mgr-open').click();
   await T('mgr-email').fill('a1@example.test'); await T('mgr-password').fill('dev-password-123'); await T('mgr-login').click();
@@ -245,6 +243,21 @@ try {
     await T('mgr-force-cash').fill('500'); await T('mgr-force-go').click();
     check('manager force-closes the forgotten drawer', !!(await until(async () => (await T('mgr-force-open').count()) === 0, 8000)));
   }
+  const listed = await page.locator('[data-testid="mgr-open-order"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-order-id')));
+  check('day close lists the stale open order with its lines', stale.length > 0 && stale.every(([id]) => listed.includes(id))
+    && /\d+ × \S/.test(await page.locator('[data-testid="mgr-open-order"]').first().innerText()), `${listed.length} listed, ${stale.length} stale`);
+  for (const [id] of stale) {
+    const row = page.locator(`[data-testid="mgr-open-order"][data-order-id="${id}"]`);
+    await row.locator('[data-testid="mgr-void-open"]').click();
+    check('void needs a reason', await row.locator('[data-testid="mgr-void-go"]').isDisabled());
+    await row.locator('[data-testid="mgr-void-reason"]').fill('stale order from the seed');
+    await row.locator('[data-testid="mgr-void-go"]').click();
+    await until(async () => (await row.count()) === 0, 8000);
+  }
+  check('stale open order voided from the day-close screen; the blocker clears', !!(await until(async () => (await T('mgr-open-count').count()) === 0, 8000))
+    && sql(`count(*)) FROM sale WHERE outlet_id='${outletId}' AND status='open'`)[0][0] === '0', `${stale.length} voided`);
+  const [[voidAudits]] = sql(`count(*)) FROM audit WHERE action='order.void' AND entity_id IN (${stale.map(([id]) => `'${id}'`).join(',') || 'NULL'})`);
+  check('each void is in the audit trail', voidAudits === String(stale.length), voidAudits);
   const date = await T('mgr-date').inputValue();
   check('day close shows the missing receipt', !!(await until(async () => (await page.locator('[data-testid="mgr-gap"]').allInnerTexts()).some((g) => g.includes(String(lost.seq))), 5000)));
   const [[gross]] = sql(`COALESCE(sum(total_paise),0)) FROM sale WHERE outlet_id='${outletId}' AND business_date='${date}' AND status='paid'`);

@@ -20,6 +20,9 @@ const notFound = (reply: FastifyReply) => reply.code(404).send({ error: 'not fou
 interface Blockers {
   openShifts: { id: string; cashier: string; deviceId: string; openedAt: string }[];
   openSales: number;
+  /** The open orders behind `openSales` (first 50), so a manager can void a forgotten one from the day-close screen. */
+  openOrders: { id: string; businessDate: string; channel: string; table: string | null; totalPaise: number; openedBy: string | null;
+                openedAt: string; lines: { name: string; qty: number }[] }[];
   devices: { id: string; label: string | null; counter: string; lastSeenAt: string | null; outboxPending: number | null; blocking: boolean }[];
 }
 
@@ -29,12 +32,21 @@ async function blockers(c: pg.PoolClient, outletId: string, date: string): Promi
        FROM shift s JOIN app_user u ON u.id = s.user_id
       WHERE s.outlet_id = $1 AND s.closed_at IS NULL ORDER BY s.opened_at`, [outletId]);
   const open = await c.query(`SELECT count(*)::int AS n FROM sale WHERE outlet_id = $1 AND status = 'open' AND business_date <= $2`, [outletId, date]);
+  // Same rows as the count above; the caller has already checked the manager holds this outlet.
+  const orders = await c.query(
+    `SELECT s.id, s.business_date::text AS "businessDate", s.channel, t.code AS "table", s.total_paise::bigint AS "totalPaise",
+            u.name AS "openedBy", s.created_at_device AS "openedAt",
+            COALESCE((SELECT json_agg(json_build_object('name', l.name_snapshot, 'qty', l.qty) ORDER BY l.added_at NULLS FIRST, l.name_snapshot)
+                        FROM sale_line l WHERE l.sale_id = s.id AND l.removed_at IS NULL), '[]'::json) AS lines
+       FROM sale s LEFT JOIN dining_table t ON t.id = s.table_id LEFT JOIN app_user u ON u.id = s.created_by
+      WHERE s.outlet_id = $1 AND s.status = 'open' AND s.business_date <= $2
+      ORDER BY s.business_date, s.created_at_device LIMIT 50`, [outletId, date]);
   const devices = await c.query(
     `SELECT d.id, d.label, c.code AS counter, d.last_seen_at AS "lastSeenAt", d.outbox_pending AS "outboxPending",
             COALESCE(d.outbox_pending, 0) > 0 AS blocking
        FROM device d JOIN counter c ON c.id = d.counter_id
       WHERE d.outlet_id = $1 AND d.revoked_at IS NULL ORDER BY c.code, d.enrolled_at`, [outletId]);
-  return { openShifts: shifts.rows, openSales: open.rows[0].n, devices: devices.rows };
+  return { openShifts: shifts.rows, openSales: open.rows[0].n, openOrders: orders.rows.map((r) => ({ ...r, totalPaise: Number(r.totalPaise) })), devices: devices.rows };
 }
 
 async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: string) {

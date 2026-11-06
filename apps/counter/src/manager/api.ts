@@ -12,7 +12,11 @@ export interface Totals {
   receiptGaps?: { deviceId: string; counter: string; missing: number[] }[];
 }
 export interface Device { id: string; label: string | null; counter: string; lastSeenAt: string | null; outboxPending: number | null; blocking: boolean }
-export interface Blockers { openShifts: { id: string; cashier: string; openedAt: string }[]; openSales: number; devices: Device[] }
+export interface OpenOrder {
+  id: string; businessDate: string; channel: string; table: string | null; totalPaise: number; openedBy: string | null; openedAt: string;
+  lines: { name: string; qty: number }[];
+}
+export interface Blockers { openShifts: { id: string; cashier: string; openedAt: string }[]; openSales: number; openOrders: OpenOrder[]; devices: Device[] }
 export interface Preview {
   date: string; closed: boolean; closedAt?: string; provisional?: boolean;
   blockers?: Blockers; totals: Totals | null; lateAdjustments: NonNullable<Totals['lateAdjustments']>; receiptGaps?: NonNullable<Totals['receiptGaps']>;

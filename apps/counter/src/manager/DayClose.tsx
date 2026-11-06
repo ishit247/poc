@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, rs, type Me, type Preview } from './api.ts';
 import { ForceClose } from './ForceClose.tsx';
+import { VoidOrder } from './VoidOrder.tsx';
 
 export function DayClose({ token, onDone }: { token: string; onDone: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -85,7 +86,16 @@ export function DayClose({ token, onDone }: { token: string; onDone: () => void 
               await load();
             }} />
           ))}
-          {b.openSales > 0 && <p className="warn">{b.openSales} open order{b.openSales === 1 ? '' : 's'} not yet paid or voided.</p>}
+          {b.openSales > 0 && <p className="warn" data-testid="mgr-open-count">{b.openSales} open order{b.openSales === 1 ? '' : 's'} not yet paid or voided.</p>}
+          {b.openOrders.map((o) => (
+            <VoidOrder key={o.id} order={o} onVoid={async (reason) => {
+              const r = await api(`/orders/${o.id}/void`, token, { method: 'POST', body: JSON.stringify({ reason }) });
+              if (r.status === 404) setError('That order is no longer open (paid or voided elsewhere).');
+              else if (r.status !== 200) setError('Could not void that order.');
+              await load();
+            }} />
+          ))}
+          {b.openSales > b.openOrders.length && <p className="muted">Showing the first {b.openOrders.length}; void these and the rest appear.</p>}
           {b.devices.map((d) => (
             <p key={d.id} className={d.blocking ? 'warn' : 'muted'} data-testid={`mgr-device-${d.counter}`}>
               Counter {d.counter}{d.label ? ` (${d.label})` : ''}: {d.outboxPending === null ? 'never reported' : `${d.outboxPending} unsent`}

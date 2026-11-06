@@ -405,10 +405,19 @@ a moved item's response carries **only its new code**.
   - manager on the tablet: force-closes a forgotten drawer, gross on screen equals the server's paid sales, closes the
     day (`business_day.closed_at` set), Reports loads; no sideways scroll; no page errors.
 - **Found:**
-  - **A past-day open order blocks day close, and no screen can clear it.** Force-closing a drawer does not void its
-    open orders, and the manager tools have no void. The seed's waiter order from 2026-01-01 is exactly this case; the
-    script voids it with the manager's `POST /orders/:id/void` (marked in the log as API, no screen). A manager screen to
-    void an open order is needed before a pilot.
+  - ~~A past-day open order blocks day close, and no screen can clear it.~~ **Fixed 2026-11-06.** The day-close
+    blockers now carry `openOrders` (the same rows as the `openSales` count, first 50: date, table, channel, total, who
+    opened it, live lines), and `apps/counter/src/manager/VoidOrder.tsx` shows each one in the day-close screen with
+    Void and a required reason, calling the existing `POST /orders/:id/void` (no new route); the blocker reloads after.
+    An online (Zomato/Swiggy) open order is listed but not voidable there: its state lives in the online queue, and
+    voiding only its sale would leave the online order "received" (unaccepted ones are expired and voided by the
+    server's job). Verified: API 235/235 after `fresh` (1 new test in `apps/api/test/zz-online-dayclose.test.ts`:
+    only this outlet's open orders are listed, with live lines only, not later-dated ones; another outlet's manager gets
+    404 for the void and the preview; a paid order 404; the void writes `order.void` with the reason and the manager as
+    actor; the blocker clears and the day closes; voiding twice 404). Mutants `dayclose-list-any-outlet`,
+    `-voided-too`, `-any-date`, `-removed-lines`: 4/4 caught. `browser-flow.mjs` step 11 now voids the seed's stale
+    order through the screen: **44/44** (3 new checks: listed with its lines, void needs a reason, blocker clears and
+    the audit row exists).
   - Day close lists two tablets on one counter as "Counter C1" twice (no label), so a manager cannot tell which one is
     which. Cosmetic until a counter has two tablets.
   - Only Samosa has a Zomato price in the seed; the New online order dialog correctly refuses an unpriced item.
@@ -460,8 +469,8 @@ a moved item's response carries **only its new code**.
 Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 8, 2b and 7b are done and verified (7 and 7b with
 a two-browser run, 8 with `scripts/browser-flow.mjs`, 41/41). Step 8 is uncommitted.
 
-Phase 12's steps are all done. Open before a pilot: a manager screen to void an open order (a past-day one blocks day
-close, step 8 notes), voiding another device's order, and two cashiers paying one table while one is offline (step 7b
+Phase 12's steps are all done, and the day-close void screen (step 8 notes, "Found") is built and browser-checked.
+Open before a pilot: voiding another device's order from the counter, and two cashiers paying one table while one is offline (step 7b
 notes). Then PLAN.md 0.3 item 3.
 
 The notes below were written for step 4 and are kept for reference.
