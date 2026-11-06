@@ -92,7 +92,8 @@ CREATE TABLE sale (
   shift_id        uuid,
   device_id       uuid NOT NULL,
   created_by      uuid NOT NULL,        -- the waiter/cashier who took the order
-  channel         text NOT NULL DEFAULT 'counter' CHECK (channel IN ('counter', 'zomato', 'swiggy')),
+  table_id        uuid,                 -- the table slot the order sits on (PLAN D14); NULL for online orders
+  channel        text NOT NULL DEFAULT 'counter' CHECK (channel IN ('counter', 'zomato', 'swiggy')),
   status          text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'paid', 'refunded', 'void')),
   receipt_no      text,
   receipt_seq     int CHECK (receipt_seq > 0),
@@ -119,7 +120,9 @@ CREATE TABLE sale (
   FOREIGN KEY (tenant_id, business_day_id) REFERENCES business_day(tenant_id, id),
   FOREIGN KEY (tenant_id, shift_id)        REFERENCES shift(tenant_id, id),
   FOREIGN KEY (tenant_id, device_id)       REFERENCES device(tenant_id, id),
-  FOREIGN KEY (tenant_id, created_by)      REFERENCES app_user(tenant_id, id)
+  FOREIGN KEY (tenant_id, created_by)      REFERENCES app_user(tenant_id, id),
+  -- The table must belong to the sale's own outlet (NULL skips the check).
+  FOREIGN KEY (tenant_id, outlet_id, table_id) REFERENCES dining_table(tenant_id, outlet_id, id)
 );
 -- Invariant 5: a receipt number is unique per device per business day.
 CREATE UNIQUE INDEX sale_receipt_uq ON sale (device_id, business_date, receipt_seq) WHERE receipt_seq IS NOT NULL;

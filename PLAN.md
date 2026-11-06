@@ -2,14 +2,83 @@
 
 # Cafeteria POS — design and delivery plan
 
-Status: **v4, ready to hand to a fresh build session.** Nothing is built yet. This
-file is self-contained: it is meant to be copied into a new, empty project folder
-and read by a session that has no other context. Section 16 lists what is
-*unverified*; section 17 what is still undecided.
+Status: **v5 (2026-11-06). Phases 1 to 8 are built; phase 9 is scaffolding; phase 11 is
+partly built. Nothing has run with a real tenant.** The design sections (1 to 20) are
+still the intended design; section 0.1 below is the single place that says what is
+actually built and verified. If a progress note and this table disagree, fix this
+table. Section 16 lists what is *unverified*; section 17 what is still undecided.
 
-## 0. Handover for a new session
+## 0. Progress tracker (keep this current)
 
-**Read this first.**
+Update this table in the same change that finishes or verifies a step. "Verified"
+means a test or run that was executed and passed, with the evidence in the linked
+doc. "Not verified" is stated, never implied.
+
+### 0.1 Phases
+
+| # | Phase | Built | Verified | Not verified / owed | Detail |
+|---|-------|-------|----------|---------------------|--------|
+| 1 | Foundation, tenant isolation, devices | yes | RLS and route-scope tests on real Postgres; mutants | n/a | [handover-phase3.md](docs/handover-phase3.md) |
+| 2 | Menu admin, onboarding, versioned pull | yes | API tests | catalog images doc [handover-catalog-images.md](docs/handover-catalog-images.md) | [catalog-templates.md](docs/catalog-templates.md) |
+| 3 | Offline counter sale | yes | tablet unit tests; browser run (headless Edge) | storage durability and `storage.persist()` on a real tablet | [handover-phase3-progress.md](docs/handover-phase3-progress.md) |
+| 4 | Sync engine | yes | ingest and push tests; 40 mutants | **real-browser run** (offline sales, reconnect, kill tab mid-push); receipt-number gap detection (1..k); N-1 upgrade path (only v1 exists) | [handover-phase4-progress.md](docs/handover-phase4-progress.md) |
+| 5 | Printing | browser print, 58 mm layout, reprint trail | layout tests; 26 mutants | **nothing printed on the real ATPOS H58BT**; no real-browser check; no WebUSB, Bluetooth, ESC/POS or drawer kick | [handover-phase5-progress.md](docs/handover-phase5-progress.md) |
+| 6 | Shifts, day close | yes | API tests | **no real-browser check** of Shift screen or day close; day closed out of date order may mis-list late adjustments | [handover-phase6-progress.md](docs/handover-phase6-progress.md) |
+| 7 | Online orders (manual provider) | yes (steps 1 to 6) | API tests, mutants | browser check of the queue screen; UPI path, reprint | [handover-phase7-progress.md](docs/handover-phase7-progress.md) |
+| 8 | Reports | yes | 5 tests, 31 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; no refund route yet | [handover-phase8-progress.md](docs/handover-phase8-progress.md) |
+| 9 | Aggregator adapters | **scaffold only** (placeholder contract) | webhook tests | everything against real Zomato/Swiggy; no integration or mapping UI; secrets stored plain; counter UI ignores `unmappedLines` | [phase9-notes.md](docs/phase9-notes.md) |
+| 10 | Dynamic UPI | no (optional) | | | |
+| 12 | Tables, running orders, quick codes (D13 to D16) | **steps 1 and 2 of 8 done (schema, manager API and pull)**; design decided 2026-11-06, layout agreed on the prototype | DB 39/39, API 204/204, tablet 25/25, shared 41/41, 22/22 new mutants (see the phase 12 doc) | steps 2b (tags and diet, D17) and 3 to 8: events v2 in shared, server ingest (D18 rules), tablet, UI, multi-device, browser run. No manager or counter screen for any of this yet. Multi-device table visibility (step 7, "12b") is required before any multi-device restaurant pilot | [phase12-plan.md](docs/phase12-plan.md), [prototype](docs/prototypes/sell-prototype.html) |
+| 11 | Platform admin, billing, hardening | steps 1 to 5 | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding | step 6 not started (mutants per gate, secret encryption, rate limits, runbook, backup and restore drill); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md) |
+
+### 0.2 Latest full verification pass (2026-11-06)
+
+Run on this machine after a cold start, one stage at a time: `pnpm install`,
+Docker Desktop started, then `node scripts/validate.mjs` stages.
+
+| Check | Result |
+|-------|--------|
+| typecheck (shared, admin, api, counter) | clean |
+| `up:fresh` (volumes dropped, 0001 to 0011, reseed) | passed, 1m25s |
+| DB tests (`db/test`: rls, trading, online, platform) | 29/29 |
+| API tests (real Postgres, after `up:fresh`) | 197/197 |
+| Tablet tests (`apps/counter`) | 25/25 |
+| Shared tests (`packages/shared`) | 41/41 |
+| Tablet production build | built |
+| Stack up in Docker (api healthy, counter :8080, admin :8081) | yes; `/api/health` ok |
+| Browser smoke, Edge at 1024x768 | counter shows "Set up this counter", admin shows "Platform console", no sideways scroll, no page errors except a 404 for one resource (probably the manifest icons, known gap) and CSP console notes (see below) |
+| **Not run in this pass** | mutation checks (about 30 min, destructive, rewrites source), the full counter flow in a real browser (sell, offline, sync, shift close, day close), UPI and reprint paths, printing on hardware, `EXPLAIN` on large data |
+
+Findings from the pass, not yet fixed:
+- `scripts/validate.mjs` reports "0 ok" for the `db` stage though 29 tests passed (it does not parse the node:test
+  spec output used there). The log is right; the runner's counter is wrong.
+- The `env` stage fails on a cold machine because it requires the containers to be up already; `fresh` brings them up.
+  Run `fresh` first, or change `env` to start them.
+- The counter and admin pages ship a CSP `<meta>` with `frame-ancestors`, which browsers ignore in a meta tag; it
+  needs to be an HTTP header (nginx) to have any effect.
+- The git repo is `app/` itself (there is no `.git` in the parent `pos/` folder). At the start of this pass the working
+  tree was clean, so the "uncommitted" labels in the phase 4 to 6 and 11 notes are out of date.
+
+### 0.3 Next steps, in order
+
+1. **Phase 12 design:** try the Sell prototype, agree the layout, then build schema v2 events and the table model.
+   Do this *before* the browser run, so the Playwright script targets the screens that will ship. Until the new
+   Sell screen exists, keep test ids on the current one (a stable convention: `data-testid` or role only, ids
+   listed in one helper file, assertions on behaviour not pixels).
+2. Real-browser run of the whole counter flow at tablet size (owed since phase 4), against the phase 12 screens.
+3. Resolve Q4 (hosting), Q6 (Hindi receipts), Q7 (hardware); print on the real H58BT.
+4. Phase 11 step 6, then decide the cut-over to additive-only migrations (section 18) before the first real tenant.
+5. Phase 9 UI (integrations, item mapping) once partner access is known.
+
+Open questions raised by D13 (add to section 17 when reached): Q12 which segment is the first paying customer
+(counter-service or dine-in); Q13 does a restaurant need kitchen tickets in the first pilot (if yes, KOT moves into
+phase 12); Q14 GST and service-charge rules for restaurants (extends Q3).
+
+## 0.4 Handover for a new session (original text, still valid except where marked)
+
+**Read this first.** Sections 0.1 to 0.3 say what is already built; do not redo it.
+Where the notes below say "nothing is built" or list "first concrete steps", those
+steps are finished.
 
 - **What this is.** A hosted, multi-tenant, offline-capable POS for school
   cafeterias, sold/operated by a **caterer** who serves several schools. It is a
@@ -106,6 +175,13 @@ A point-of-sale service for school cafeterias, run by a caterer that serves seve
 | D10 | Tenant = a caterer; outlet = the cafeteria in one school; the school is a customer, not a tenant | you (caterer) / me (shape) |
 | D11 | You host and operate the server | you |
 | D12 | **Revised.** The login picks the tenant, not the address: a manager's email is globally unique and belongs to one tenant; session tokens, enrolment codes and device credentials already carry the tenant id. A tenant may have an optional operator-assigned subdomain (`<subdomain>.<BASE_DOMAIN>`), used only to show its name and logo on sign-in screens; nothing is refused because of the address. Enrolled tablets fetch the logo by credential (`/device/logo`), so they work on the bare domain. A manager sets the tenant logo (PNG/JPEG/WebP up to 256 KB, no SVG), shown on sign-in screens, the counter header and the receipt. Original D12 (subdomain decides the tenant) reversed on your recommendation: one address and one TLS certificate suffice, and a wrong address can no longer lock a manager out | you |
+| D13 | **Product scope widened (2026-11-06): cafes and restaurants, not only school cafeterias.** One product, configured per outlet. A school cafeteria is the simplest configuration (counter service, one default table). "Cafeteria" elsewhere in this file means that configuration; the design sections are otherwise unchanged | you |
+| D14 | **Tables are order slots.** A table is a named slot holding at most one open order. Every outlet has tables: a cafe or cafeteria has a default table (say `T1`) that is pre-selected, so counter service has no table step; the cashier can park an order (stuck payment, customer left to fetch cash) by moving to another table (`T2`) and a "held" badge shows it. A restaurant turns on the table map (`outlet.table_mode = map`) and keeps its tables saved. Same Sell screen, Pay dialog and receipt in both | you |
+| D15 | **Open orders are sums of line events, not rewritten rows.** Add, change quantity, remove and void of a line are events (section 7.5), so two devices adding to the same table offline merge by union instead of the last writer winning. Preserves D8 (append-only facts). Rejected: one-owner-per-order, which blocks waiter handoff and a second counter | me; **accepted by you** |
+
+| D16 | **Quick codes (2026-11-06).** Each category has a text code (`01`) and each item a text code unique within its category (`02`); the typed code is the two joined (`0102`). Digits-only search matches the code prefix, Enter adds an exact match, tiles show the code. Text not number (leading zeros); **width fixed at 2 + 2 in v1** (a per-tenant setting is a later decision; at most 99 categories per tenant and 99 items per category); moving an item changes its code, so the manager screen warns first; codes are assigned automatically when omitted. Part of phase 12 (column on `category` and `item`, fixed in the original migration while no real tenant exists) | you |
+| D17 | **Menu browsing: tags and a diet field, no category hierarchy (2026-11-06).** Categories stay flat (up to 99 items each, so codes and billing speed are unchanged). `item.diet` is `veg`, `egg`, `non_veg` or unset (exclusive; shown as a green or red dot). Everything else (Chinese, South Indian, Jain, Spicy) is a free per-tenant tag, many per item. The counter shows one optional filter row (All, Veg, Non-veg, tags); nothing is selected by default; tags never affect price, GST, codes or the cart. Nested categories were considered and set aside; they can be added later on top. Phase 12 step 2b | you |
+| D18 | **Open-order rules (2026-11-06).** A line that arrives after its order was paid is split off into a new open order on the same table, flagged `late_lines`, so a paid sale is never edited. Any signed-in staff at the outlet, on any of its devices, may add to, change or remove lines of an open order (this is what makes waiter handoff and a second counter work); a waiter's "own orders only" rule for *paying and voiding* is unchanged | you |
 
 Superseded from v2: the central LAN server (old D6) and the LAN-printer-from-server
 design. Hosting makes both impossible, and section 13 replaces them.
@@ -116,6 +192,7 @@ design. Hosting makes both impossible, and section 13 replaces them.
 - Tenant onboarding: create a cafeteria, its outlet(s), counters, users, devices.
 - Menu: categories, items, per-channel prices, availability.
 - Offline-capable counter sale: cart, cash/UPI/split, change, receipt, void.
+- **Tables and running orders (D13 to D15, phase 12):** per-outlet table list, default table for counter service, table map for restaurants, park/move an order, order lines as events, a "held" indicator.
 - Sync engine with explicit conflict rules; visible sync status on every counter.
 - Shift open/close with cash reconciliation; day close; reports; CSV.
 - Online order queue (manual provider first), outbox for provider status pushes.
@@ -123,7 +200,8 @@ design. Hosting makes both impossible, and section 13 replaces them.
 - Nightly backup, audit trail.
 
 **Out of v1**
-- Wallet, ERP/fee-ledger integration, inventory/purchasing, kitchen display.
+- Wallet, ERP/fee-ledger integration, inventory/purchasing.
+- **Next after tables (not v1):** kitchen tickets (KOT) and kitchen/bar printers, item modifiers and variants, split bill, merge tables, service charge and tips, waiter handhelds as their own device kind.
 - Subscription billing and payment collection from cafeterias (tenants are created by you; billing designed in phase 11).
 - Dynamic per-order UPI QR (phase 10).
 - Peer-to-peer sync between counters on the same LAN while the internet is down (see section 7.9).
@@ -255,6 +333,7 @@ a per-device sequence number, a schema version, the device's local timestamp, an
 a payload:
 
 - `sale.created` (with lines, snapshotted names and prices)
+- **Planned (phase 12):** `order.line_added`, `order.line_changed` (quantity), `order.line_removed`, `order.moved` (to another table), each carrying the sale id and a line id. The open order is the fold of its line events; two devices' adds merge by union, a remove or quantity change applies to the line id it names, and a payment closes the order at the lines it has seen (later-arriving lines become a flagged adjustment, like a late sale in 7.6). Needs schema version 2 and the N-1 path of 7.8 for the first time.
 - `payment.taken`
 - `sale.voided`
 - `shift.opened`, `shift.closed` (with the counted cash)
@@ -326,6 +405,8 @@ below has `tenant_id` with RLS unless noted.
 **Outlet-specific menus and pricing (decided):** resolution order, most specific first: counter override > outlet override > catalogue. `outlet.menu_mode` (`all` / `listed`), `outlet_item(outlet_id, item_id, available, listed nullable)` (`listed` is NULL = "no opinion" so a stock toggle never lists an item), and `outlet_price(outlet_id, item_id, channel, price_paise)` so each outlet can price counter and aggregator channels differently. A counter can only narrow what its outlet shows. `outlet.gst_enabled` gates GST (see Q3). One resolver, `resolveMenu()` in `packages/shared/src/menu.ts`, serves the tablet and the server.
 
 **Counter-specific menus (decided):** `counter.menu_mode` (`all` = whole catalogue minus hidden items; `listed` = only listed items) and `counter_item(counter_id, item_id, listed, price_paise nullable)`. `price_paise` overrides the *counter-channel* price at that counter only; the GST rate is always the item's. Also `outlet_item(outlet_id, item_id, available)` for the stock toggle. A device pulls only its own counter's rules. The resolution rules live once, in `packages/shared/src/menu.ts` (`resolveCounterMenu`), used by both the tablet and the server. Prices are **tax-exclusive**: `exclusiveLine()` in `packages/shared/src/money.ts`.
+
+**Tables (planned, phase 12):** `outlet.table_mode` (`default` | `map`), `dining_table(outlet_id, code, label, sort, active, is_default)` with one default per outlet; `sale.table_id` nullable; occupancy is derived (a table is busy when it has an open sale), never stored. Two open sales on one table are allowed (offline duplicate) but flagged.
 
 **Trading:**
 - `business_day(outlet_id, date, closed_at, closed_by)`
@@ -544,6 +625,9 @@ offline sync and multi-tenancy are most of the new work.
 | 9 | Aggregator adapters | real Zomato/Swiggy — **gated on partner access** | 5–10 d, unknown |
 | 10 | Dynamic UPI (optional) | gateway QR + webhook | 3–5 d |
 | 11 | Platform admin, billing, hardening | super-admin console, usage, backups/restore drill, rate limits, runbook | 6–9 d |
+| 12 | **Tables and running orders** (D13 to D15) | `dining_table`, default table and table map, park/move, line events (schema v2, N-1), Sell screen redesign for counter and table modes, held badge, fault-injection tests for the new events | 8–12 d |
+
+Phase 12 is numbered last but is **scheduled before the first pilot and before phase 11 step 6**, because it changes the event schema and the Sell screen that every later check depends on.
 
 You have a usable offline till after phase 6, a full operation after 8, and live
 aggregators only after 9. Phases 1 and 4 are where the product succeeds or fails.

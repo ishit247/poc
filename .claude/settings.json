@@ -1,3 +1,16 @@
 {
-  "disableRemoteControl": true
+  "disableRemoteControl": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\":\"Model reminder (CLAUDE.md, Model usage plan): phase 12 steps 3, 4, 5 (local-database design) and 7 are HIGH-model work. Check the running model (/model) before starting one.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"Apply the Model usage plan reminder in CLAUDE.md: before starting a step marked HIGH in docs/phase12-plan.md, compare the model you are running as with the plan and, if lower, stop and warn the user in one line first.\"}}'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }

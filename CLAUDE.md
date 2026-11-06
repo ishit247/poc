@@ -149,3 +149,37 @@ product's runtime and is a separate, decided matter — see D11 in PLAN.md.)
 - One task per session. When a piece of work is finished and the next request is
   unrelated, say plainly that a fresh session would carry less baggage.
 - Name files by path when referring to them.
+
+## Token budget
+
+Policies for keeping sessions cheap. If one is wrong for the task, say so and ask; do not drop it silently.
+
+- **Start from the handover, not from the code.** Read CLAUDE.md, PLAN.md section 0 and the current phase file (for
+  phase 12: `docs/phase12-plan.md`, "Start here"). Read source files only when the step needs them, and by line range.
+- **One phase step per session.** Finish by updating the step's state in the phase file and the PLAN.md tracker, so
+  the next session can start cold. Say plainly when a step is a good place to start a fresh session.
+- **Results in one line.** Report tests as counts plus the names of failures; never paste logs or full output. Use
+  `grep -E "^ℹ (tests|pass|fail)|^✖"` on `.validation/<stage>.log`.
+- **Mutation checks: run only the mutants for the guards that changed**, by id. The full run is for "before a phase is
+  called done", and is run in the background to a log file.
+- **Decisions: a recommendation and the one question that matters**, not a survey of options. Prototype a layout once
+  in `docs/prototypes/`, then treat it as frozen.
+- **Do not re-read what is already in context,** and do not re-print a file after editing it.
+
+## Model usage plan (with a reminder)
+
+A stronger model costs more per token but is worth it where one subtle mistake is expensive and hard to see in tests.
+The recommendation is per step; the user decides, but must be reminded.
+
+| Work | Recommended model |
+|---|---|
+| Sync, ingest, event design, concurrency, payment or money logic, tenant isolation, authorization, migrations that change trading tables, fault-injection tests | **HIGH** (Opus or Fable) |
+| Routes, screens, tablet storage, tests that follow an existing pattern, seeds | STANDARD (Sonnet) |
+| Documentation, tracker updates, running validation, status checks | STANDARD, or cheaper |
+
+**The reminder (a rule for the assistant).** At the start of a session, and again before starting any step marked HIGH
+in a phase file, compare the model you are running as with the plan. If a HIGH step is about to start on a lower model,
+**stop and say so in one line before doing any work** ("Step 4 is marked HIGH; this session is on <model>. Switch with
+/model, or tell me to continue here."), then wait for the user's answer. If a STANDARD step is about to run on a HIGH
+model, mention once that STANDARD would do. The user's answer applies to that step only; do not ask again within it.
+If you cannot tell which model you are running as, say that instead of guessing.

@@ -70,6 +70,8 @@ CREATE TABLE category (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id  uuid NOT NULL REFERENCES tenant(id),
   name       text NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+  -- Quick code (PLAN D16): text, so "01" keeps its zero. Left NULL on insert, a trigger gives the next free one.
+  code       text NOT NULL CHECK (code ~ '^[0-9]{2}$'),
   sort_order int NOT NULL DEFAULT 0,
   version    bigint NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -77,12 +79,35 @@ CREATE TABLE category (
   UNIQUE (tenant_id, id)
 );
 SELECT app.make_versioned('category');
+-- A category code is unique among a tenant's live categories; an item code among the live items of one category.
+-- Together the two give each live item a unique four-digit code (the width is fixed at 2 + 2 in v1).
+CREATE UNIQUE INDEX category_code_live_uq ON category (tenant_id, code) WHERE deleted_at IS NULL;
+
+-- Next free two-digit code. The lock serialises two writers asking for "the next one" in the same scope, so they
+-- cannot both pick it; a code typed by a person is still protected by the unique index.
+CREATE FUNCTION app.assign_category_code() RETURNS trigger
+LANGUAGE plpgsql AS
+$$
+BEGIN
+  IF NEW.code IS NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('category-code:' || NEW.tenant_id::text, 0));
+    SELECT lpad(g::text, 2, '0') INTO NEW.code FROM generate_series(1, 99) g
+     WHERE NOT EXISTS (SELECT 1 FROM category c WHERE c.tenant_id = NEW.tenant_id AND c.deleted_at IS NULL AND c.code = lpad(g::text, 2, '0'))
+     ORDER BY g LIMIT 1;
+    IF NEW.code IS NULL THEN RAISE EXCEPTION 'no free category code: all 99 are in use'; END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER assign_category_code BEFORE INSERT ON category FOR EACH ROW EXECUTE FUNCTION app.assign_category_code();
 
 CREATE TABLE item (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id   uuid NOT NULL REFERENCES tenant(id),
   category_id uuid NOT NULL,
   name        text NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+  -- Quick code within the category (PLAN D16); see category.code.
+  code        text NOT NULL CHECK (code ~ '^[0-9]{2}$'),
   -- Provision for GST invoicing (Q3): HSN/SAC code, 4 to 8 digits. Optional until the receipt format is known.
   hsn_code    text CHECK (hsn_code ~ '^[0-9]{4,8}$'),
   -- Plain text shown on the counter tile. Travels in pull (small).
@@ -98,6 +123,29 @@ CREATE TABLE item (
   FOREIGN KEY (tenant_id, category_id) REFERENCES category(tenant_id, id)
 );
 SELECT app.make_versioned('item');
+CREATE UNIQUE INDEX item_code_live_uq ON item (category_id, code) WHERE deleted_at IS NULL;
+
+-- On insert, or when an item moves to another category: keep the code if it is free there, else take the next free one.
+-- (A moved item's full code changes in any case, because the category part does; the manager screen warns first.)
+CREATE FUNCTION app.assign_item_code() RETURNS trigger
+LANGUAGE plpgsql AS
+$$
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.category_id <> OLD.category_id AND NEW.code = OLD.code
+     AND EXISTS (SELECT 1 FROM item i WHERE i.category_id = NEW.category_id AND i.deleted_at IS NULL AND i.code = NEW.code AND i.id <> NEW.id) THEN
+    NEW.code := NULL;
+  END IF;
+  IF NEW.code IS NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('item-code:' || NEW.category_id::text, 0));
+    SELECT lpad(g::text, 2, '0') INTO NEW.code FROM generate_series(1, 99) g
+     WHERE NOT EXISTS (SELECT 1 FROM item i WHERE i.category_id = NEW.category_id AND i.deleted_at IS NULL AND i.id <> NEW.id AND i.code = lpad(g::text, 2, '0'))
+     ORDER BY g LIMIT 1;
+    IF NEW.code IS NULL THEN RAISE EXCEPTION 'no free item code: all 99 in this category are in use'; END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER assign_item_code BEFORE INSERT OR UPDATE OF category_id ON item FOR EACH ROW EXECUTE FUNCTION app.assign_item_code();
 
 -- Item pictures, content-addressed: one row per distinct image per tenant, however many items use it. This table is the
 -- INDEX only; the bytes live in the S3-compatible object store (Garage) under t/<tenant_id>/<sha256>. The browser
@@ -159,6 +207,8 @@ ALTER TABLE outlet
   ADD COLUMN menu_mode   text NOT NULL DEFAULT 'all' CHECK (menu_mode IN ('all', 'listed')),
   -- GST provision (Q3): a disabled outlet charges no GST whatever the item rate; enabling needs a GSTIN.
   ADD COLUMN gst_enabled boolean NOT NULL DEFAULT false,
+  -- Tables (PLAN D14): 'default' = counter service, one pre-selected table and no table step; 'map' = the table map.
+  ADD COLUMN table_mode  text NOT NULL DEFAULT 'default' CHECK (table_mode IN ('default', 'map')),
   -- Printed on the receipt header and footer (phase 5). Single line each is not required for the address.
   ADD COLUMN address     text CHECK (address IS NULL OR length(address) BETWEEN 1 AND 200),
   ADD COLUMN fssai_no    text CHECK (fssai_no IS NULL OR fssai_no ~ '^[0-9]{14}$'),
@@ -168,6 +218,55 @@ ALTER TABLE outlet
   ADD CONSTRAINT outlet_gst_needs_gstin CHECK (NOT gst_enabled OR gstin IS NOT NULL);
 SELECT app.add_versioning('outlet'); -- RLS already applied in 0001
 CREATE INDEX outlet_version_ix ON outlet (tenant_id, version);
+
+-- A table is a named slot for one running order (PLAN D14). Occupancy is NOT stored: a table is busy when it has an open
+-- sale. Versioned, so tablets pull the table list like the menu; soft delete only, so a removal is a tombstone.
+CREATE TABLE dining_table (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  uuid NOT NULL REFERENCES tenant(id),
+  outlet_id  uuid NOT NULL,
+  code       text NOT NULL CHECK (code ~ '^[A-Za-z0-9][A-Za-z0-9 -]{0,9}$'),   -- what the counter shows: "T1", "Patio 3"
+  sort_order int NOT NULL DEFAULT 0,
+  is_default boolean NOT NULL DEFAULT false,
+  version    bigint NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  deleted_at timestamptz,
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, outlet_id, id),   -- lets sale.table_id prove the table belongs to the sale's outlet
+  FOREIGN KEY (tenant_id, outlet_id) REFERENCES outlet(tenant_id, id)
+);
+SELECT app.make_versioned('dining_table');
+CREATE UNIQUE INDEX dining_table_code_live_uq ON dining_table (outlet_id, lower(code)) WHERE deleted_at IS NULL;
+-- At most one default per outlet; the trigger below makes sure there is one.
+CREATE UNIQUE INDEX dining_table_default_live_uq ON dining_table (outlet_id) WHERE is_default AND deleted_at IS NULL;
+CREATE INDEX dining_table_version_ix ON dining_table (outlet_id, version);
+
+-- Every outlet has a default table from the moment it exists, so counter service never has to ask for one.
+CREATE FUNCTION app.outlet_default_table() RETURNS trigger
+LANGUAGE plpgsql AS
+$$
+BEGIN
+  INSERT INTO dining_table (tenant_id, outlet_id, code, is_default) VALUES (NEW.tenant_id, NEW.id, 'T1', true);
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER outlet_default_table AFTER INSERT ON outlet FOR EACH ROW EXECUTE FUNCTION app.outlet_default_table();
+
+-- The default table can be renamed but not removed, un-defaulted or moved to another outlet: that would leave an
+-- outlet with no table for counter service. (Choosing a different default is a later feature.)
+CREATE FUNCTION app.dining_table_guard() RETURNS trigger
+LANGUAGE plpgsql AS
+$$
+BEGIN
+  IF NEW.outlet_id <> OLD.outlet_id THEN RAISE EXCEPTION 'a table cannot move to another outlet'; END IF;
+  IF OLD.is_default AND OLD.deleted_at IS NULL AND (NOT NEW.is_default OR NEW.deleted_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'the default table cannot be removed or un-defaulted';
+  END IF;
+  IF NOT OLD.is_default AND NEW.is_default THEN RAISE EXCEPTION 'the default table is set when the outlet is created'; END IF;
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER dining_table_guard BEFORE UPDATE ON dining_table FOR EACH ROW EXECUTE FUNCTION app.dining_table_guard();
 
 CREATE TABLE outlet_price (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -24,6 +24,13 @@ const receiptInfoBody = z.object({
   fssaiNo: z.string().regex(/^[0-9]{14}$/).nullable(),
 }).strict();
 const menuQuery = z.object({ channel: channel.default('counter') }).strict();
+// Tables (PLAN D14). The code is what the counter shows, so it matches the database check.
+const tableCode = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9 -]{0,9}$/);
+const tableParams = z.object({ id: uuid, tableId: uuid });
+const tableBody = z.object({ code: tableCode, sortOrder: z.number().int().min(-1_000_000).max(1_000_000).optional() }).strict();
+const tablePatch = tableBody.partial().strict().refine((b) => Object.keys(b).length > 0);
+const tableModeBody = z.object({ mode: z.enum(['default', 'map']) }).strict();
+const TABLE_COLS = 'id, code, sort_order AS "sortOrder", is_default AS "isDefault"';
 
 const bad = (reply: FastifyReply) => reply.code(400).send({ error: 'invalid request' });
 const notFound = (reply: FastifyReply) => reply.code(404).send({ error: 'not found' });
@@ -44,6 +51,101 @@ export const outletRoutes: FastifyPluginAsync = async (app) => {
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'outlet.menu_mode', entity: 'outlet', entityId: ps.data.id, detail: b.data });
     });
     return { ok: true };
+  });
+
+  // --- tables (PLAN D14). Manager, own outlets only; a table is always looked up WITH its outlet, so another
+  // outlet's table id is simply not found. ----------------------------------------------------------------------
+  app.put('/outlets/:id/table-mode', { config: cfg }, async (req, reply) => {
+    const ps = outletParams.safeParse(req.params);
+    const b = tableModeBody.safeParse(req.body);
+    if (!ps.success || !b.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);
+    await withTenant(p.tenantId, async (c) => {
+      await c.query('UPDATE outlet SET table_mode = $2 WHERE id = $1', [ps.data.id, b.data.mode]);
+      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'outlet.table_mode', entity: 'outlet', entityId: ps.data.id, detail: b.data });
+    });
+    return { ok: true };
+  });
+
+  app.get('/outlets/:id/tables', { config: cfg }, async (req, reply) => {
+    const ps = outletParams.safeParse(req.params);
+    if (!ps.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);
+    return withTenant(p.tenantId, async (c) => {
+      const mode = (await c.query('SELECT table_mode AS "tableMode" FROM outlet WHERE id = $1', [ps.data.id])).rows[0]?.tableMode;
+      const tables = await c.query(
+        `SELECT ${TABLE_COLS}, EXISTS (SELECT 1 FROM sale s WHERE s.table_id = dining_table.id AND s.status = 'open') AS "hasOpenOrder"
+           FROM dining_table WHERE outlet_id = $1 AND deleted_at IS NULL ORDER BY sort_order, lower(code)`, [ps.data.id]);
+      return { tableMode: mode, tables: tables.rows };
+    });
+  });
+
+  app.post('/outlets/:id/tables', { config: cfg }, async (req, reply) => {
+    const ps = outletParams.safeParse(req.params);
+    const b = tableBody.safeParse(req.body);
+    if (!ps.success || !b.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);
+    try {
+      const row = await withTenant(p.tenantId, async (c) => {
+        // Appended after the last one unless the manager chose a position.
+        const r = await c.query(
+          `INSERT INTO dining_table (tenant_id, outlet_id, code, sort_order)
+           VALUES ($1, $2, $3, COALESCE($4::int, (SELECT COALESCE(max(sort_order), 0) + 10 FROM dining_table WHERE outlet_id = $2)))
+           RETURNING ${TABLE_COLS}`,
+          [p.tenantId, ps.data.id, b.data.code, b.data.sortOrder ?? null]);
+        await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'table.create', entity: 'dining_table', entityId: r.rows[0].id, detail: { outletId: ps.data.id, code: b.data.code } });
+        return r.rows[0];
+      });
+      return reply.code(201).send(row);
+    } catch (e) {
+      if ((e as { code?: string; constraint?: string }).code === '23505') return reply.code(409).send({ error: 'table code in use' });
+      throw e;
+    }
+  });
+
+  app.patch('/outlets/:id/tables/:tableId', { config: cfg }, async (req, reply) => {
+    const ps = tableParams.safeParse(req.params);
+    const b = tablePatch.safeParse(req.body);
+    if (!ps.success || !b.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);
+    try {
+      const row = await withTenant(p.tenantId, async (c) => {
+        const r = await c.query(
+          `UPDATE dining_table SET code = COALESCE($3, code), sort_order = COALESCE($4::int, sort_order)
+            WHERE id = $2 AND outlet_id = $1 AND deleted_at IS NULL RETURNING ${TABLE_COLS}`,
+          [ps.data.id, ps.data.tableId, b.data.code ?? null, b.data.sortOrder ?? null]);
+        if (r.rowCount) await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'table.update', entity: 'dining_table', entityId: ps.data.tableId, detail: b.data });
+        return r.rows[0];
+      });
+      return row ?? notFound(reply);
+    } catch (e) {
+      if ((e as { code?: string }).code === '23505') return reply.code(409).send({ error: 'table code in use' });
+      throw e;
+    }
+  });
+
+  app.delete('/outlets/:id/tables/:tableId', { config: cfg }, async (req, reply) => {
+    const ps = tableParams.safeParse(req.params);
+    if (!ps.success) return bad(reply);
+    const p = req.principal!;
+    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);
+    const out = await withTenant(p.tenantId, async (c) => {
+      const t = (await c.query('SELECT is_default FROM dining_table WHERE id = $2 AND outlet_id = $1 AND deleted_at IS NULL FOR UPDATE', [ps.data.id, ps.data.tableId])).rows[0];
+      if (!t) return 'missing' as const;
+      if (t.is_default) return 'default' as const;
+      // A table with an unpaid order on it cannot disappear from under the cashier.
+      if ((await c.query("SELECT 1 FROM sale WHERE table_id = $1 AND status = 'open' LIMIT 1", [ps.data.tableId])).rowCount) return 'busy' as const;
+      await c.query('UPDATE dining_table SET deleted_at = now() WHERE id = $1', [ps.data.tableId]);
+      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'table.delete', entity: 'dining_table', entityId: ps.data.tableId, detail: { outletId: ps.data.id } });
+      return 'ok' as const;
+    });
+    if (out === 'default') return reply.code(409).send({ error: 'the default table cannot be removed' });
+    if (out === 'busy') return reply.code(409).send({ error: 'table has an open order' });
+    return out === 'ok' ? { ok: true } : notFound(reply);
   });
 
   // GST provision (Q3): enabling needs a well-formed GSTIN; the format check is also a DB constraint.

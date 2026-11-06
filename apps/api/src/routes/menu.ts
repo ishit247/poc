@@ -7,18 +7,29 @@ import type { Principal } from '../scope.js';
 import { ITEM_DESCRIPTION_MAX, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_TYPES } from '@pos/shared';
 import { checkImage, lockItemImages, purgeItemImage, releaseItemImage, serveItemImage, storeItemImage } from '../itemImages.js';
 
-const ITEM_COLS = 'id, category_id AS "categoryId", name, hsn_code AS "hsnCode", description, image_sha256 AS "imageSha256", sort_order AS "sortOrder"';
+const ITEM_COLS = 'id, category_id AS "categoryId", name, code, hsn_code AS "hsnCode", description, image_sha256 AS "imageSha256", sort_order AS "sortOrder"';
 
 const uuid = z.string().uuid();
 const channel = z.enum(['counter', 'zomato', 'swiggy']);
 const name = z.string().trim().min(1).max(100);
 const sortOrder = z.number().int().min(-1_000_000).max(1_000_000);
 
-const categoryBody = z.object({ name, sortOrder: sortOrder.optional() }).strict();
+// Quick code (PLAN D16): two digits, text. Left out on create, the database hands out the next free one.
+const quickCode = z.string().regex(/^[0-9]{2}$/);
+
+/** A code someone typed is taken, or a scope has no free code left. Anything else is a real fault and stays a 500. */
+function codeProblem(e: unknown): 'code in use' | 'no free code' | null {
+  const x = e as { code?: string; constraint?: string; message?: string };
+  if (x.code === '23505' && /_code_live_uq$/.test(x.constraint ?? '')) return 'code in use';
+  if (x.code === 'P0001' && /^no free (category|item) code/.test(x.message ?? '')) return 'no free code';
+  return null;
+}
+
+const categoryBody = z.object({ name, code: quickCode.optional(), sortOrder: sortOrder.optional() }).strict();
 const categoryPatch = categoryBody.partial().strict().refine((b) => Object.keys(b).length > 0);
 const hsn = z.string().regex(/^[0-9]{4,8}$/).nullable();
 const description = z.string().trim().min(1).max(ITEM_DESCRIPTION_MAX).nullable();
-const itemBody = z.object({ categoryId: uuid, name, hsnCode: hsn.optional(), description: description.optional(), sortOrder: sortOrder.optional() }).strict();
+const itemBody = z.object({ categoryId: uuid, name, code: quickCode.optional(), hsnCode: hsn.optional(), description: description.optional(), sortOrder: sortOrder.optional() }).strict();
 const itemPatch = itemBody.partial().strict().refine((b) => Object.keys(b).length > 0);
 const priceBody = z.object({
   pricePaise: z.number().int().min(0).max(100_000_000),
@@ -55,7 +66,7 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const p = req.principal!;
     return withTenant(p.tenantId, async (c) => {
       const [cats, items, prices] = await Promise.all([
-        c.query('SELECT id, name, sort_order AS "sortOrder" FROM category WHERE deleted_at IS NULL ORDER BY sort_order, name'),
+        c.query('SELECT id, name, code, sort_order AS "sortOrder" FROM category WHERE deleted_at IS NULL ORDER BY sort_order, name'),
         c.query(`SELECT ${ITEM_COLS} FROM item WHERE deleted_at IS NULL ORDER BY sort_order, name`),
         c.query('SELECT item_id AS "itemId", channel, price_paise::int AS "pricePaise", gst_rate_bp AS "gstRateBp" FROM item_price WHERE deleted_at IS NULL'),
       ]);
@@ -68,14 +79,20 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const b = categoryBody.safeParse(req.body);
     if (!b.success) return bad(reply);
     const p = req.principal!;
-    const row = await withTenant(p.tenantId, async (c) => {
-      const r = await c.query(
-        'INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id, name, sort_order AS "sortOrder"',
-        [p.tenantId, b.data.name, b.data.sortOrder ?? 0]);
-      await audit(c, { ...actor(p), action: 'category.create', entity: 'category', entityId: r.rows[0].id });
-      return r.rows[0];
-    });
-    return reply.code(201).send(row);
+    try {
+      const row = await withTenant(p.tenantId, async (c) => {
+        const r = await c.query(
+          'INSERT INTO category (tenant_id, name, code, sort_order) VALUES ($1, $2, $3, $4) RETURNING id, name, code, sort_order AS "sortOrder"',
+          [p.tenantId, b.data.name, b.data.code ?? null, b.data.sortOrder ?? 0]);
+        await audit(c, { ...actor(p), action: 'category.create', entity: 'category', entityId: r.rows[0].id });
+        return r.rows[0];
+      });
+      return reply.code(201).send(row);
+    } catch (e) {
+      const why = codeProblem(e);
+      if (why) return reply.code(409).send({ error: why });
+      throw e;
+    }
   });
 
   app.patch('/categories/:id', { config: mgr }, async (req, reply) => {
@@ -83,15 +100,21 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const b = categoryPatch.safeParse(req.body);
     if (!ids.success || !b.success) return bad(reply);
     const p = req.principal!;
-    const set = setClause(b.data, { name: 'name', sortOrder: 'sort_order' }, 2);
-    const row = await withTenant(p.tenantId, async (c) => {
-      const r = await c.query(
-        `UPDATE category SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING id, name, sort_order AS "sortOrder"`,
-        [ids.data.id, ...set.values]);
-      if (r.rowCount) await audit(c, { ...actor(p), action: 'category.update', entity: 'category', entityId: ids.data.id });
-      return r.rows[0];
-    });
-    return row ?? notFound(reply);
+    const set = setClause(b.data, { name: 'name', code: 'code', sortOrder: 'sort_order' }, 2);
+    try {
+      const row = await withTenant(p.tenantId, async (c) => {
+        const r = await c.query(
+          `UPDATE category SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING id, name, code, sort_order AS "sortOrder"`,
+          [ids.data.id, ...set.values]);
+        if (r.rowCount) await audit(c, { ...actor(p), action: 'category.update', entity: 'category', entityId: ids.data.id });
+        return r.rows[0];
+      });
+      return row ?? notFound(reply);
+    } catch (e) {
+      const why = codeProblem(e);
+      if (why) return reply.code(409).send({ error: why });
+      throw e;
+    }
   });
 
   app.delete('/categories/:id', { config: mgr }, async (req, reply) => {
@@ -115,15 +138,21 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const b = itemBody.safeParse(req.body);
     if (!b.success) return bad(reply);
     const p = req.principal!;
-    const row = await withTenant(p.tenantId, async (c) => {
-      if (!(await liveExists(c, 'category', b.data.categoryId))) return null;
-      const r = await c.query(
-        `INSERT INTO item (tenant_id, category_id, name, hsn_code, description, sort_order) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${ITEM_COLS}`,
-        [p.tenantId, b.data.categoryId, b.data.name, b.data.hsnCode ?? null, b.data.description ?? null, b.data.sortOrder ?? 0]);
-      await audit(c, { ...actor(p), action: 'item.create', entity: 'item', entityId: r.rows[0].id });
-      return r.rows[0];
-    });
-    return row ? reply.code(201).send(row) : bad(reply);
+    try {
+      const row = await withTenant(p.tenantId, async (c) => {
+        if (!(await liveExists(c, 'category', b.data.categoryId))) return null;
+        const r = await c.query(
+          `INSERT INTO item (tenant_id, category_id, name, code, hsn_code, description, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${ITEM_COLS}`,
+          [p.tenantId, b.data.categoryId, b.data.name, b.data.code ?? null, b.data.hsnCode ?? null, b.data.description ?? null, b.data.sortOrder ?? 0]);
+        await audit(c, { ...actor(p), action: 'item.create', entity: 'item', entityId: r.rows[0].id });
+        return r.rows[0];
+      });
+      return row ? reply.code(201).send(row) : bad(reply);
+    } catch (e) {
+      const why = codeProblem(e);
+      if (why) return reply.code(409).send({ error: why });
+      throw e;
+    }
   });
 
   app.patch('/items/:id', { config: mgr }, async (req, reply) => {
@@ -131,18 +160,26 @@ export const menuRoutes: FastifyPluginAsync = async (app) => {
     const b = itemPatch.safeParse(req.body);
     if (!ids.success || !b.success) return bad(reply);
     const p = req.principal!;
-    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', hsnCode: 'hsn_code', description: 'description', sortOrder: 'sort_order' }, 2);
-    const out = await withTenant(p.tenantId, async (c) => {
-      if (b.data.categoryId && !(await liveExists(c, 'category', b.data.categoryId))) return 'bad-category' as const;
-      const r = await c.query(
-        `UPDATE item SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING ${ITEM_COLS}`,
-        [ids.data.id, ...set.values]);
-      if (!r.rowCount) return 'missing' as const;
-      await audit(c, { ...actor(p), action: 'item.update', entity: 'item', entityId: ids.data.id });
-      return r.rows[0];
-    });
-    if (out === 'bad-category') return bad(reply);
-    return out === 'missing' ? notFound(reply) : out;
+    const set = setClause(b.data, { categoryId: 'category_id', name: 'name', code: 'code', hsnCode: 'hsn_code', description: 'description', sortOrder: 'sort_order' }, 2);
+    // A move to another category may change the item's code (kept if free there, else the next free one). The row
+    // returned carries the code the item has now; the old one is not reported.
+    try {
+      const out = await withTenant(p.tenantId, async (c) => {
+        if (b.data.categoryId && !(await liveExists(c, 'category', b.data.categoryId))) return 'bad-category' as const;
+        const r = await c.query(
+          `UPDATE item SET ${set.sql} WHERE id = $1 AND deleted_at IS NULL RETURNING ${ITEM_COLS}`,
+          [ids.data.id, ...set.values]);
+        if (!r.rowCount) return 'missing' as const;
+        await audit(c, { ...actor(p), action: 'item.update', entity: 'item', entityId: ids.data.id });
+        return r.rows[0];
+      });
+      if (out === 'bad-category') return bad(reply);
+      return out === 'missing' ? notFound(reply) : out;
+    } catch (e) {
+      const why = codeProblem(e);
+      if (why) return reply.code(409).send({ error: why });
+      throw e;
+    }
   });
 
   app.delete('/items/:id', { config: mgr }, async (req, reply) => {

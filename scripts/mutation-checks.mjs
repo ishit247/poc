@@ -18,6 +18,9 @@ const ADMIN = 'apps/api/src/routes/admin.ts';
 const SYNC = 'apps/api/src/routes/sync.ts';
 const ORDERS = 'apps/api/src/routes/orders.ts';
 const TRADING = 'db/migrations/0004_trading.sql';
+const MENU = 'db/migrations/0003_menu.sql';
+const OUTLETS = 'apps/api/src/routes/outlets.ts';
+const TABLES_DB = { cwd: '.', cmd: ['node', '--test', 'db/test/tables.test.mjs'] };
 const M = (id, file, from, to, tests, all = false) => ({ id, file, from, to, tests, all });
 
 const staff = API_TESTS('staff.test.ts');
@@ -381,6 +384,34 @@ const MUTANTS = [
   M('email-unique-per-tenant', 'db/migrations/0001_tenancy.sql', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (lower(email));', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (tenant_id, lower(email));', API_TESTS('tenancy-host.test.ts')),
   M('device-logo-from-host', 'apps/api/src/routes/branding.ts', 'serveLogo(req, reply, req.principal!.tenantId)', 'serveLogo(req, reply, req.hostTenantId ?? req.principal!.tenantId)', API_TESTS('tenancy-host.test.ts')),
   M('outbox-one-tenant-only','apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
+  // --- tables and quick codes (phase 12 step 1; db/test/tables.test.mjs)
+  ...[
+    ['tbl-default-not-unique', MENU, 'CREATE UNIQUE INDEX dining_table_default_live_uq ON dining_table (outlet_id) WHERE is_default AND deleted_at IS NULL;', 'CREATE INDEX dining_table_default_live_uq ON dining_table (outlet_id) WHERE is_default AND deleted_at IS NULL;'],
+    ['tbl-code-not-unique', MENU, 'CREATE UNIQUE INDEX dining_table_code_live_uq ON dining_table (outlet_id, lower(code))', 'CREATE INDEX dining_table_code_live_uq ON dining_table (outlet_id, lower(code))'],
+    ['tbl-default-guard-missing', MENU, 'CREATE TRIGGER dining_table_guard BEFORE UPDATE ON dining_table', 'CREATE TRIGGER dining_table_guard BEFORE DELETE ON dining_table'],
+    ['tbl-no-default-on-outlet', MENU, 'CREATE TRIGGER outlet_default_table AFTER INSERT ON outlet', 'CREATE TRIGGER outlet_default_table AFTER DELETE ON outlet'],
+    ['tbl-not-versioned-or-protected', MENU, "SELECT app.make_versioned('dining_table');", "SELECT app.enable_tenant_rls('dining_table');"],
+    ['tbl-sale-table-any-outlet', TRADING, 'FOREIGN KEY (tenant_id, outlet_id, table_id) REFERENCES dining_table(tenant_id, outlet_id, id)', 'FOREIGN KEY (tenant_id, table_id) REFERENCES dining_table(tenant_id, id)'],
+    ['code-category-not-unique', MENU, 'CREATE UNIQUE INDEX category_code_live_uq ON category (tenant_id, code) WHERE deleted_at IS NULL;', 'CREATE INDEX category_code_live_uq ON category (tenant_id, code) WHERE deleted_at IS NULL;'],
+    ['code-item-not-unique', MENU, 'CREATE UNIQUE INDEX item_code_live_uq ON item (category_id, code) WHERE deleted_at IS NULL;', 'CREATE INDEX item_code_live_uq ON item (category_id, code) WHERE deleted_at IS NULL;'],
+    ['code-category-deleted-keeps-code', MENU, 'WHERE NOT EXISTS (SELECT 1 FROM category c WHERE c.tenant_id = NEW.tenant_id AND c.deleted_at IS NULL AND', 'WHERE NOT EXISTS (SELECT 1 FROM category c WHERE c.tenant_id = NEW.tenant_id AND'],
+    ['code-item-move-clash-unhandled', MENU, 'NEW.code := NULL;', 'NULL;'],
+    ['code-item-global-not-per-category', MENU, "WHERE NOT EXISTS (SELECT 1 FROM item i WHERE i.category_id = NEW.category_id AND i.deleted_at IS NULL AND i.id <> NEW.id AND", "WHERE NOT EXISTS (SELECT 1 FROM item i WHERE i.deleted_at IS NULL AND i.id <> NEW.id AND"],
+  ].map(([id, file, from, to]) => M(id, file, from, to, TABLES_DB)),
+  // --- tables and quick codes over the API (phase 12 step 2; apps/api/test/tables.test.ts)
+  ...[
+    ['tblapi-get-no-scope', OUTLETS, /(app\.get\('\/outlets\/:id\/tables'[\s\S]*?)if \(p\.kind !== 'user' \|\| !mine\(p\.outletIds, ps\.data\.id\)\) return notFound\(reply\);/, '$1'],
+    ['tblapi-post-no-scope', OUTLETS, /(app\.post\('\/outlets\/:id\/tables'[\s\S]*?)if \(p\.kind !== 'user' \|\| !mine\(p\.outletIds, ps\.data\.id\)\) return notFound\(reply\);/, '$1'],
+    ['tblapi-mode-no-scope', OUTLETS, /(app\.put\('\/outlets\/:id\/table-mode'[\s\S]*?)if \(p\.kind !== 'user' \|\| !mine\(p\.outletIds, ps\.data\.id\)\) return notFound\(reply\);/, '$1'],
+    ['tblapi-patch-table-any-outlet', OUTLETS, "WHERE id = $2 AND outlet_id = $1 AND deleted_at IS NULL RETURNING ${TABLE_COLS}", "WHERE id = $2 AND $1::uuid IS NOT NULL AND deleted_at IS NULL RETURNING ${TABLE_COLS}"],
+    ['tblapi-delete-table-any-outlet', OUTLETS, "FROM dining_table WHERE id = $2 AND outlet_id = $1 AND deleted_at IS NULL FOR UPDATE", "FROM dining_table WHERE id = $2 AND $1::uuid IS NOT NULL AND deleted_at IS NULL FOR UPDATE"],
+    ['tblapi-delete-default', OUTLETS, "if (t.is_default) return 'default' as const;", ''],
+    ['tblapi-delete-busy', OUTLETS, "if ((await c.query(\"SELECT 1 FROM sale WHERE table_id = $1 AND status = 'open' LIMIT 1\", [ps.data.tableId])).rowCount) return 'busy' as const;", ''],
+    ['tblapi-permission-staff', OUTLETS, "const cfg = { scope: 'outlet', permission: 'manager' } as const;", "const cfg = { scope: 'outlet', permission: 'staff' } as const;"],
+    ['tblapi-pull-other-outlets', SYNC, 'FROM dining_table WHERE version > $1 AND outlet_id = $2', 'FROM dining_table WHERE version > $1 AND $2::uuid IS NOT NULL'],
+    ['codeapi-conflict-is-500', 'apps/api/src/routes/menu.ts', "return 'code in use';", 'return null;'],
+    ['codeapi-full-is-500', 'apps/api/src/routes/menu.ts', "return 'no free code';", 'return null;'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('tables.test.ts'))),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
@@ -403,7 +434,7 @@ for (const m of todo) {
     writeFileSync(m.file, isRe ? original.replace(m.from, m.to) : m.all ? original.split(m.from).join(m.to) : original.replace(m.from, () => m.to));
     const up = run(['node', 'scripts/up-fresh.mjs']);
     if (up.status !== 0) { results.push([m.id, 'BROKEN', 'fresh start failed under the mutation']); continue; }
-    const t = run(m.tests.cmd, m.tests.cwd);
+    const t = run(m.tests.cmd.flatMap((a) => (a === '--test' ? [a, '--test-reporter=tap'] : [a])), m.tests.cwd);
     const out = `${t.stdout}\n${t.stderr}`;
     const failed = [...out.matchAll(/^not ok \d+ - (.*)$/gm)].map((x) => x[1]);
     const fail = Number(/^# fail (\d+)/m.exec(out)?.[1] ?? NaN);

@@ -13,11 +13,11 @@ const query = z.object({ cursor: z.coerce.number().int().min(0).max(Number.MAX_S
 // commit-ordered versions (app.next_version), a snapshot is a prefix of history.
 const PULL_SQL = `
   SELECT 'category' AS type, id, version, deleted_at IS NOT NULL AS deleted,
-         jsonb_build_object('name', name, 'sortOrder', sort_order) AS data
+         jsonb_build_object('name', name, 'code', code, 'sortOrder', sort_order) AS data
     FROM category WHERE version > $1
   UNION ALL
   SELECT 'item', id, version, deleted_at IS NOT NULL,
-         jsonb_build_object('categoryId', category_id, 'name', name, 'hsnCode', hsn_code, 'description', description,
+         jsonb_build_object('categoryId', category_id, 'name', name, 'code', code, 'hsnCode', hsn_code, 'description', description,
                             'imageSha256', image_sha256, 'sortOrder', sort_order)
     FROM item WHERE version > $1
   UNION ALL
@@ -30,8 +30,14 @@ const PULL_SQL = `
     FROM outlet_item WHERE version > $1 AND outlet_id = $2
   UNION ALL
   SELECT 'outlet', id, version, false,
-         jsonb_build_object('menuMode', menu_mode, 'gstEnabled', gst_enabled, 'gstin', gstin, 'address', address, 'fssaiNo', fssai_no)
+         jsonb_build_object('menuMode', menu_mode, 'gstEnabled', gst_enabled, 'gstin', gstin, 'address', address, 'fssaiNo', fssai_no,
+                            'tableMode', table_mode)
     FROM outlet WHERE version > $1 AND id = $2
+  UNION ALL
+  -- This outlet's table slots (PLAN D14); a removed table is a tombstone.
+  SELECT 'dining_table', id, version, deleted_at IS NOT NULL,
+         jsonb_build_object('code', code, 'sortOrder', sort_order, 'isDefault', is_default)
+    FROM dining_table WHERE version > $1 AND outlet_id = $2
   UNION ALL
   SELECT 'outlet_price', id, version, deleted_at IS NOT NULL,
          jsonb_build_object('itemId', item_id, 'channel', channel, 'pricePaise', price_paise)

@@ -166,7 +166,12 @@ test('pull pages without gaps or duplicates across the page boundary', async () 
   const app = buildApp();
   const ta = await token(app, A, 'a1@example.test');
   const cred = await enrol(app, ta, A, 'a1@example.test');
-  await withTenant(A, (c) => c.query("INSERT INTO category (tenant_id, name) SELECT $1, 'bulk ' || g FROM generate_series(1, 1100) g", [A]));
+  // A category holds at most 99 live items (quick codes, D16), so spread 1100 items over 12 categories.
+  await withTenant(A, (c) => c.query(
+    `WITH cats AS (INSERT INTO category (tenant_id, name) SELECT $1, 'bulk ' || g FROM generate_series(1, 12) g RETURNING id),
+          numbered AS (SELECT id, row_number() OVER () AS rn FROM cats)
+     INSERT INTO item (tenant_id, category_id, name)
+     SELECT $1, n.id, 'bulk item ' || g FROM generate_series(1, 1100) g JOIN numbered n ON n.rn = (g % 12) + 1`, [A]));
 
   const seen: number[] = [];
   let cursor = 0;
@@ -186,6 +191,7 @@ test('pull pages without gaps or duplicates across the page boundary', async () 
     SELECT version::int FROM category UNION ALL SELECT version::int FROM item UNION ALL SELECT version::int FROM item_price
     UNION ALL SELECT version::int FROM outlet_item WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM outlet WHERE id = $1
+    UNION ALL SELECT version::int FROM dining_table WHERE outlet_id = $1
     UNION ALL SELECT version::int FROM tenant_setting
     UNION ALL SELECT version::int FROM tenant_logo
     UNION ALL SELECT version::int FROM outlet_price WHERE outlet_id = $1
