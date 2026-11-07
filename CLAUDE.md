@@ -40,6 +40,37 @@ The switch to additive-only migrations is a one-way door. **Ask before:** editin
 a migration once anything real depends on it — the first real tenant, or any
 environment holding data a person typed and would miss.
 
+## Code and UI practice
+
+**Code**
+- **One rule, one place.** A business rule (who may void, when an order is empty, what a total is) lives in one
+  function; the screen, the tablet store and the server call or mirror it, and a comment names the mirror. When a rule
+  changes, grep for every copy (tablet `order.ts`/`sale.ts`, server `ingest.ts`/`routes/`, `Sell.tsx`) before calling it done.
+- **Fix the cause, not the symptom.** Before changing code for a reported bug, find why it happened (the data, the
+  event log, the code path) and say so. A UI patch over a data bug is not a fix.
+- **A multi-step change cannot stop halfway.** If step 2 can fail after step 1 is saved (remove lines, then void),
+  check step 2's preconditions first, or make step 2 unable to fail.
+- **Small and plain.** No new abstraction, dependency or option until a second real use needs it. Delete dead code and
+  stale comments in the same change. Names say what a thing is in the cafe's words (order, line, held, void).
+- **Efficient by default.** Query only the columns and rows needed, filter in SQL not in JS, no query inside a loop
+  over rows, no re-render-heavy work in a component body (use `useMemo` for derived lists).
+- Tests follow the existing pattern in the nearest test file; a change to a guard updates its mutant in
+  `scripts/mutation-checks.mjs` in the same change.
+
+**UI and UX**
+- **One screen per job, roles vary by what is shown.** Cashier and waiter share `Sell.tsx`; a role hides controls, it
+  never gets a copied screen. After a UI change, check every role and state the screen has (cashier/waiter, draft/open
+  order, default/map table mode, empty/full cart).
+- **Lay out by slot, not by name.** CSS never positions a specific button by `data-testid`; test ids are for tests.
+  Buttons that replace each other share one slot, so the layout does not jump when state changes.
+- **Primary action first and largest, destructive actions never prominent.** Pay is the big button; Void and Clear are
+  plain and ask for confirmation or a reason. No layout shift when a control is disabled: disable, don't remove.
+- **Touch-first at tablet size:** targets at least 44px, no hover-only affordances, no horizontal scroll, no wasted
+  space at the top (actions first).
+- **Every action gives feedback:** a disabled button says why (title), an error says what to do next, and an
+  impossible action is not offered (hide or disable it rather than let it fail).
+- Copy is short and in the user's words; numbers are money-formatted (₹, two decimals) everywhere the same way.
+
 ## Editing files
 
 - Change files with the Edit tool, or Write for new ones. Do not patch files

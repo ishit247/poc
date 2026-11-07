@@ -212,9 +212,14 @@ async function saleOf(c: pg.PoolClient, p: DevicePrincipal, saleId: string, as: 
   return sale as { device_id: string; status: string; total_paise: string; receipt_no: string | null; order_root_id: string | null; created_by: string };
 }
 
+/** An order sale with no live line (every one removed, or none added). Read under the visit lock `saleOf` took. */
+async function isEmpty(c: pg.PoolClient, saleId: string): Promise<boolean> {
+  return !(await c.query('SELECT 1 FROM sale_line WHERE sale_id = $1 AND removed_at IS NULL LIMIT 1', [saleId])).rowCount;
+}
+
 /**
  * A cashier or waiter cancels an open table order from any device of its outlet (step 7c). Same rule as the online
- * void (`ORDER_SCOPE`): a cashier any open order here, a waiter only one they opened. A manager voids online; no
+ * void (`ORDER_SCOPE`): a cashier any open order here, a waiter only one they opened, or any EMPTY one (no live lines). A manager voids online; no
  * tablet signs a manager in. The status check is what makes the payment win, in either order of arrival: a void after
  * the payment finds it paid (`not_open`); a payment after the void finds it void (`sale_void`, in `applyPayment`).
  */
@@ -224,7 +229,8 @@ async function applyOrderVoid(c: pg.PoolClient, p: DevicePrincipal, ev: OrderVoi
     `SELECT u.role FROM app_user u JOIN user_outlet uo ON uo.user_id = u.id
       WHERE u.id = $1 AND uo.outlet_id = $2 AND u.role IN ('cashier', 'waiter')`, [ev.voidedBy, p.outletId])).rows[0] as { role: string } | undefined;
   if (!who) throw new Reject('unknown_user');
-  if (who.role === 'waiter' && sale.created_by !== ev.voidedBy) throw new Reject('not_own_order');
+  // An order with no live lines holds nothing to lose: anyone here may cancel it, so emptying one can never leave it open.
+  if (who.role === 'waiter' && sale.created_by !== ev.voidedBy && !(await isEmpty(c, ev.saleId))) throw new Reject('not_own_order');
   if (sale.status !== 'open') throw new Reject(sale.status === 'void' ? 'already_void' : 'not_open'); // the payment wins
   await c.query(`UPDATE sale SET status = 'void', void_reason = $2 WHERE id = $1`, [ev.saleId, ev.reason]);
   await audit(c, {

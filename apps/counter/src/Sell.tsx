@@ -57,7 +57,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const activeOrder = order && order.status === 'open' ? order : null;
   const otherDevice = !!activeOrder?.ownerDeviceId; // another device's order: it may be added to and paid here (step 7b)
   // Step 7c: a cashier voids any open order here, a waiter only one they opened (the server checks the same).
-  const mayVoid = !!activeOrder && (actor.role === 'cashier' || activeOrder.createdBy === actor.id);
+  const mayVoid = !!activeOrder && (actor.role === 'cashier' || activeOrder.createdBy === actor.id || activeOrder.lines.length === 0);
   useEffect(() => setVoiding(null), [activeOrder?.id]);
   const defaultTable = states.find((s) => s.table.isDefault)?.table;
 
@@ -122,6 +122,17 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     setCart([]);
     return true;
   };
+  // Leaving Sell (another tab, sign-out, manager tools) unmounts it and would lose the draft: hold it instead, as the
+  // signed-in person, so it waits under Held orders. A ref, because the cleanup runs after the last render's closure.
+  const leaving = useRef({ cart, device, actor, menu });
+  leaving.current = { cart, device, actor, menu };
+  useEffect(() => () => {
+    const { cart: left, device: d, actor: a, menu: m } = leaving.current;
+    if (left.length === 0) return;
+    void openOrder({ device: d, actor: a, settings: m.settings, menuVersion: m.menuVersion, cart: left })
+      .catch((e) => console.error('could not hold the draft on leaving Sell', e));
+  }, []);
+
   const hold = () => guard(async () => { await holdDraft(); setOrderId(null); setHeldOpen(false); });
   const resume = (id: string) => guard(async () => { await holdDraft(); setOrderId(id); setHeldOpen(false); });
   /** Freezes what is on screen as a draft bill (nothing is saved; no receipt number is used). */
@@ -343,8 +354,9 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           {!inOrder && mode === 'default' && (
             <button data-testid="save-order" disabled={cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage('Order saved.'); })}>Save order</button>
           )}
+          {/* Same slot as Save order: that one is for a draft, this one for an open order, never both at once. */}
+          {mayVoid && <button data-testid="void-order" disabled={voiding !== null} onClick={() => setVoiding('')}>Void order</button>}
           <button data-testid="print-bill" disabled={lines.length === 0} onClick={showBill}>Print bill</button>
-          {mayVoid && voiding === null && <button data-testid="void-order" onClick={() => setVoiding('')}>Void order</button>}
         </div>
         {mayVoid && voiding !== null && (
           <div className="row" data-testid="void-form">

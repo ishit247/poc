@@ -321,6 +321,15 @@ test('7c: a waiter voids only an order they opened; another person\'s order is r
   await voidOrder({ device, actor: waiter, saleId: s.id, reason: 'mistake' });
   assert.equal((await db.sales.get(s.id))?.status, 'void');
   assert.equal(await db.orderEvents.where('saleId').equals(s.id).count(), 0);
+
+  // Someone else's order, emptied: nothing to lose, so the other waiter may cancel it (it is never left open with no lines).
+  const e = await openOrder({ ...base, actor: waiter, menuVersion: 1, tableId: T2 });
+  const full = await addToOrder({ ...base, actor: waiter, saleId: e.id, entry: tea });
+  await assert.rejects(voidOrder({ device, actor: other, saleId: e.id, reason: 'x' }), /cashier/);
+  await setLineQty({ ...base, actor: other, saleId: e.id, lineId: full.lines[0]!.lineId!, qty: 0 });
+  await voidOrder({ device, actor: other, saleId: e.id, reason: 'All items removed' });
+  assert.equal((await db.sales.get(e.id))?.status, 'void');
+
   await closeShift({ device, actor: cashier, countedCashPaise: 0 });
   assert.equal((await db.outbox.toArray()).filter((r) => r.payload.type === 'sale.voided').length, 0);
 });

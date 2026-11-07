@@ -397,7 +397,9 @@ a moved item's response carries **only its new code**.
   payment and is not folded. `sale.voided` v1 stays for the shift-close void, opener only, unchanged.
 - **Ingest** (`apps/api/src/ingest.ts`, `applyOrderVoid`): `saleOf(…, 'void')` locks the root then the sale, and for a table
   order checks only the outlet (`wrong_outlet`); a whole (v1) sale stays opener-only, as with paying. Then: `voidedBy` must
-  be a cashier or waiter of this outlet (`unknown_user`); a waiter on someone else's order is `not_own_order`; the status
+  be a cashier or waiter of this outlet (`unknown_user`); a waiter on someone else's order is `not_own_order`, unless it has no live
+  lines (2026-11-07: an emptied order holds nothing to lose, so anyone may cancel it and Clear can never leave a 0-item
+  order open; the tablet's `voidOrder` and Sell's `mayVoid` follow the same rule); the status
   must still be `open` (`not_open` after a payment, `already_void`). **The payment wins in both orders of arrival:** a void
   after it is `not_open`; a payment after the void is `sale_void` (unchanged rule in `applyPayment`); later line events are
   `sale_void` (unchanged). A retry is `duplicate` by event id. Audit `order.voided`, actor the user, detail `reason`, `at`,

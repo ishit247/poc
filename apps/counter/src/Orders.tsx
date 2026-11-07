@@ -8,6 +8,8 @@ import { Receipt } from './Receipt.tsx';
 import { DraftBill } from './DraftBill.tsx';
 
 const rs = (n: number) => formatRupees(paise(n));
+/** 08:51:41 PM: two-digit hours, so the rows of a list line up. */
+const when = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 const svgProps = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
 const PrintIcon = () => (
@@ -50,11 +52,12 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
       <ul>
         {orders.map((o) => (
           <li key={o.id} data-testid="order">
-            <div>
-              <b>₹{rs(o.totalPaise)}</b> <span className="muted">{new Date(o.createdAt).toLocaleTimeString()} · {o.createdByName}</span>
+            <div className="what">
+              <span className="muted"><span className="when">{when(o.createdAt)}</span> · {o.createdByName}</span>
               <div>{o.lines.map((l) => `${l.qty} × ${l.name}`).join(', ')}</div>
             </div>
             <span className="row">
+              <b className="amt">₹{rs(o.totalPaise)}</b>
               {actor.role === 'cashier' && <button data-testid="pay-order" className="pay-btn" onClick={() => setPaying(o)}>Pay</button>}
               <button data-testid="print-order" className="icon-btn" title="Print bill" aria-label="Print bill" onClick={() => setBill(o)}><PrintIcon /></button>
             </span>
@@ -67,8 +70,11 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
           <ul>
             {recent.map((s) => (
               <li key={s.id} data-testid="recent-receipt">
-                <div><b>₹{rs(s.totalPaise)}</b> <span className="muted">{s.receiptNo} · {new Date(s.createdAt).toLocaleTimeString()}</span></div>
-                <button data-testid="reprint" className="icon-btn" title="Reprint" aria-label="Reprint" onClick={() => setCopy(s)}><PrintIcon /></button>
+                <div className="what"><span className="muted"><span className="when">{when(s.createdAt)}</span> ·</span> {s.receiptNo}</div>
+                <span className="row">
+                  <b className="amt">₹{rs(s.totalPaise)}</b>
+                  <button data-testid="reprint" className="icon-btn" title="Reprint" aria-label="Reprint" onClick={() => setCopy(s)}><PrintIcon /></button>
+                </span>
               </li>
             ))}
           </ul>

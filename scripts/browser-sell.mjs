@@ -72,14 +72,21 @@ try {
 
   // Draft: hold and resume
   const totalBefore = await text('total');
-  await T('held-btn').click(); await T('hold').click();
+  // Dev data may already hold orders: count relative to them, and resume the newest (the list is oldest first).
+  await T('held-btn').click();
+  const heldAtStart = await settled(() => T('held-order').count());
+  await T('hold').click();
   check('hold empties the cart', (await lineCount()) === 0);
   await T('held-btn').click();
-  check('held order appears in the popup', (await settled(() => T('held-order').count())) === 1);
-  await T('held-order').click();
+  check('held order appears in the popup', (await settled(() => T('held-order').count())) === heldAtStart + 1);
+  await T('held-order').last().click();
   await page.waitForTimeout(400);
   check('resume restores the same total', (await text('total')) === totalBefore, totalBefore);
   await shot('2-resumed-order');
+  // An open order: Void order takes Save order's middle slot, on one row with Clear and Print bill.
+  const rowY = async (id) => Math.round((await T(id).boundingBox()).y);
+  check('Void order sits in the middle slot of the action row',
+    (await rowY('void-order')) === (await rowY('clear')) && (await rowY('void-order')) === (await rowY('print-bill')));
 
   // Edit the running order, then one-tap pay with quick cash
   await page.locator('[aria-label^="more "]').first().click();
@@ -96,6 +103,21 @@ try {
   await shot('4-receipt');
   await T('search').waitFor({ timeout: 9000 });
   check('auto-returns to Sell after ~6 s', true);
+
+  // Leaving Sell with a draft holds it rather than losing it.
+  const heldCount = async () => Number((await T('held-btn').getAttribute('aria-label')).split(' ')[0]);
+  const heldBefore = await heldCount();
+  await page.locator('.item:not([disabled])').first().click();
+  await T('tab-orders').click(); await T('tab-sell').click();
+  await T('search').waitFor();
+  check('a draft left behind on switching tabs is held', (await settled(heldCount)) === heldBefore + 1 && (await lineCount()) === 0);
+
+  // Orders tab: each row reads time first, the amount right-aligned before its buttons.
+  await T('tab-orders').click();
+  await T('recent-receipt').first().waitFor();
+  check('a recent receipt row starts with its two-digit-hour time', /^\d{2}:\d{2}:\d{2}/.test((await T('recent-receipt').first().innerText()).trim()));
+  await shot('5-orders-list');
+  await T('tab-sell').click(); await T('search').waitFor();
 
   // Pay-now draft with UPI
   await firstItem().click();
@@ -117,20 +139,22 @@ try {
 
   // Restaurant mode: tables
   await api('PUT', `/outlets/${outlet.id}/table-mode`, { mode: 'map' }, mgr);
-  for (const c of ['T2', 'T3']) await api('POST', `/outlets/${outlet.id}/tables`, { code: c }, mgr);
+  // Fresh tables each run: an earlier run's order stays open on its tables and would be resumed here.
+  const n = 100 + Math.floor(Math.random() * 800), busyT = `T${n}`, freeT = `T${n + 1}`;
+  for (const c of [busyT, freeT]) await api('POST', `/outlets/${outlet.id}/tables`, { code: c }, mgr);
   await T('sync-now').click();
   await T('table-strip').waitFor({ timeout: 10000 });
   check('map mode shows the table strip', true);
   check('no table chosen: items are refused with a message', await (async () => { await firstItem().click(); return /table/i.test(await text('sell-message')); })());
-  await T('table-T2').click();
+  await T(`table-${busyT}`).click();
   await firstItem().click();
   check('first item on a table opens its order', (await lineCount()) === 1);
-  check('table shows busy', (await T('table-T2').getAttribute('class')).includes('busy'));
-  await T('table-T3').click();
+  check('table shows busy', (await T(`table-${busyT}`).getAttribute('class')).includes('busy'));
+  await T(`table-${freeT}`).click();
   check('another table starts empty', (await lineCount()) === 0);
   await T('all-tables').click();
   await shot('5-table-map');
-  await T('map-T2').click();
+  await T(`map-${busyT}`).click();
   check('map opens the busy table with its lines', (await lineCount()) === 1);
   await shot('6-restaurant-1024x768');
 

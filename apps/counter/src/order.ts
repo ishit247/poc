@@ -293,7 +293,8 @@ export async function voidOrder(args: { device: DeviceInfo; actor: Actor; saleId
   if (reason.length > 200) throw new Error('Keep the reason under 200 characters.');
   return db.transaction('rw', ALL(), async () => {
     const sale = await openOrderRow(args.saleId);
-    if (args.actor.role !== 'cashier' && sale.createdBy !== args.actor.id) throw new Error('Only a cashier, or whoever opened it, may void this order.');
+    // An empty order holds nothing to lose: anyone may cancel it (the server agrees), so emptying one never leaves it open.
+    if (args.actor.role !== 'cashier' && sale.createdBy !== args.actor.id && sale.lines.length > 0) throw new Error('Only a cashier, or whoever opened it, may void this order.');
     await queue({ type: 'order.voided', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, voidedBy: args.actor.id, reason, at: await stamp(args.now ?? new Date()) });
     const { ownerDeviceId, anomalies: _a, ...rest } = sale;
     const voided: LocalSale = { ...rest, status: 'void' };

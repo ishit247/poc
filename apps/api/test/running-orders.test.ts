@@ -579,6 +579,10 @@ test('7c: a waiter voids only an order they opened, from any device; another\'s 
   assert.equal((await sale(theirs!)).status, 'open');
   assert.deepEqual(statuses(await b.push([voidBy(b, mine!, b.waiterId)])), ['applied']);
   assert.equal((await sale(mine!)).status, 'void');
+
+  // Emptied, someone else's order holds nothing to lose: the waiter may cancel it, so it is never left open with no lines.
+  assert.deepEqual(statuses(await b.push([b.remove(theirs!, l2!), voidBy(b, theirs!, b.waiterId, 'All items removed')])), ['applied', 'applied']);
+  assert.equal((await sale(theirs!)).status, 'void');
 });
 
 test('7c: the payment wins: a void arriving after it is refused; a split made after it is voidable', async () => {

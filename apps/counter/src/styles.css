@@ -105,6 +105,10 @@ header button { min-height: 40px; }
 .orders li { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px 10px; }
 .orders h2 { margin: 4px 0; font-size: 18px; }
 .orders .row { display: flex; align-items: center; gap: 6px; }
+/* Every row: what it is on the left (time first), the amount right-aligned in one column before the buttons. */
+.orders .what { flex: 1; min-width: 0; }
+.orders .when { font-variant-numeric: tabular-nums; }
+.orders .amt { min-width: 90px; text-align: right; font-variant-numeric: tabular-nums; margin-right: 6px; }
 .orders .pay-btn { height: 36px; padding: 0 16px; background: #d9f0e1; color: #14532d; border: 1px solid #a8d8b9; font-weight: 600; }
 :root[data-theme='dark'] .orders .pay-btn { background: #25483a; color: #cdeedb; border-color: #3b6b57; }
 .orders .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 36px; padding: 0; }
@@ -165,10 +169,10 @@ button.primary[data-testid='add-code'] { font-size: 28px; line-height: 1; paddin
 .cart { background: var(--surface); border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 12px; }
 .qty button { border: 0; border-radius: 50%; background: var(--active-bg); }
 .cart .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; gap: 8px; }
-.cart .actions [data-testid='clear'] { justify-self: start; grid-column: 1; }
-.cart .actions [data-testid='save-order'] { justify-self: center; grid-column: 2; }
-.cart .actions [data-testid='print-bill'] { justify-self: end; grid-column: 3; }
-.cart .actions [data-testid='void-order'] { grid-column: 1 / -1; }
+/* Placed by position, not by name: the middle slot is Save order (a draft) or Void order (an open order), never both. */
+.cart .actions > :first-child { justify-self: start; grid-column: 1; }
+.cart .actions > :nth-child(2):not(:last-child) { justify-self: center; grid-column: 2; }
+.cart .actions > :last-child { justify-self: end; grid-column: 3; }
 
 .item .nm, .item .pr { font-weight: 400; }
 .item small .code { color: var(--muted); opacity: 0.55; }
