@@ -3,6 +3,7 @@
 import { EVENT_SCHEMA_VERSION, expectedCash, type ShiftSlipView } from '@pos/shared';
 import { currentShift, db, type DeviceInfo, type LocalShift } from './db.ts';
 import { queue, type Actor } from './sale.ts';
+import { api } from './manager/api.ts';
 
 export async function openShift(args: { actor: Actor; openingCashPaise: number; now?: Date }): Promise<LocalShift> {
   if (args.actor.role !== 'cashier') throw new Error('Only a cashier opens a shift.');
@@ -39,6 +40,36 @@ export async function closeShift(args: { device: DeviceInfo; actor: Actor; count
     await queue({ type: 'shift.closed', schemaVersion: EVENT_SCHEMA_VERSION, shiftId: shift.id, countedCashPaise: args.countedCashPaise, at });
     await db.shifts.put({ ...shift, closedAt: at, countedCashPaise: args.countedCashPaise });
     return slipFor({ ...shift, closedAt: at, countedCashPaise: args.countedCashPaise }, args.device);
+  });
+}
+
+/**
+ * A manager closes another cashier's drawer from this tablet (they left without closing it). Uses the server's
+ * force-close, the same as Day close, so the count, variance and audit are the server's.
+ *
+ * The caller must have just synced: the server works out "expected" from the sales IT holds, and a sale still in this
+ * tablet's outbox would be missing from it (and refused once it arrived after the close). So this refuses while
+ * anything is waiting to be sent. Online only, like every manager tool.
+ */
+export async function managerCloseShift(args: { device: DeviceInfo; token: string; shiftId: string; countedCashPaise: number }): Promise<void> {
+  if (!Number.isInteger(args.countedCashPaise) || args.countedCashPaise < 0) throw new RangeError('The count must be zero or more.');
+  if ((await db.outbox.filter((r) => !r.rejected).count()) > 0) {
+    throw new Error('Some sales on this tablet have not reached the server yet. Connect to the network, press Sync, and try again.');
+  }
+  const r = await api(`/outlets/${args.device.outletId}/shifts/${args.shiftId}/force-close`, args.token,
+    { method: 'POST', body: JSON.stringify({ countedCashPaise: args.countedCashPaise }) });
+  if (r.status === 409) return; // already closed (another manager, or Day close): the next pull brings their figures
+  if (r.status === 404) throw new Error('The server has no record of this drawer, or you do not manage this outlet.');
+  if (r.status === 401) throw new Error('Your manager session has ended. Sign in again.');
+  if (r.status !== 200) throw new Error('Could not close the drawer.');
+  const { expectedCashPaise, variancePaise } = r.body as { expectedCashPaise: number; variancePaise: number };
+  // Apply at once rather than wait for the pull, so the next cashier is not blocked if that pull fails. The pull later
+  // finds the shift closed with a manager's figures and leaves it alone (sync.ts).
+  await db.transaction('rw', db.shifts, async () => {
+    const s = await db.shifts.get(args.shiftId);
+    if (s && !s.closedAt) {
+      await db.shifts.put({ ...s, closedAt: new Date().toISOString(), countedCashPaise: args.countedCashPaise, closedByManager: { expectedCashPaise, variancePaise } });
+    }
   });
 }
 

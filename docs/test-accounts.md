@@ -40,6 +40,7 @@ Shared password for every web login: `dev-password-123`. Shared staff PIN: `4829
 | `a2@example.test` | manager | email + password | A: School 2 Canteen only |
 | `b1@example.test` | manager | email + password | B: Main Canteen only |
 | "School 1 Canteen cashier" / "waiter" | cashier / waiter | PIN `482913`, on an enrolled tablet | A: School 1 |
+| "School 1 Canteen cashier 2" | cashier | PIN `482913`, on an enrolled tablet | A: School 1 (for a drawer one cashier left open) |
 | "School 2 Canteen cashier" / "waiter" | cashier / waiter | PIN `482913`, on an enrolled tablet | A: School 2 |
 | "Main Canteen cashier" / "waiter" | cashier / waiter | PIN `482913`, on an enrolled tablet | B: Main |
 

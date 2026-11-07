@@ -4,13 +4,15 @@
  * an Authorization header. Reconnects after a pause; `onLive` says whether the stream is up, so a screen can fall back
  * to polling while it is not. Returns a function that stops everything.
  */
-export function watchStream(path: string, authorization: string, onChange: () => void, onLive: (live: boolean) => void = () => {}): () => void {
+export function watchStream(path: string, authorization: string, onChange: () => void, onLive: (live: boolean) => void = () => {}, onUnauthorized?: () => void): () => void {
   const ac = new AbortController();
   let stopped = false;
   void (async () => {
     while (!stopped) {
       try {
         const r = await fetch(`/api${path}`, { headers: { authorization }, signal: ac.signal });
+        // Retrying cannot fix a refused credential: stop, and let the caller send the user to sign in.
+        if (r.status === 401 && onUnauthorized) { stopped = true; onLive(false); onUnauthorized(); return; }
         if (!r.ok || !r.body) throw new Error(String(r.status));
         onLive(true);
         onChange();

@@ -8,6 +8,16 @@ import { applyVisits, localSettings, type PulledVisit } from './order.ts';
 import { watchStream } from './stream.ts';
 import { markRefused } from './refused.ts';
 
+// The server refused this tablet's credential (401): it was revoked, or the server no longer knows it. The app registers
+// one handler that sends the user back to the set-up screen.
+let rejectedHandler: (() => void) | null = null;
+export function onDeviceRejected(fn: () => void): () => void {
+  rejectedHandler = fn;
+  return () => { if (rejectedHandler === fn) rejectedHandler = null; };
+}
+export function deviceRejected(): void { rejectedHandler?.(); }
+function checkAuth(r: Response): void { if (r.status === 401) deviceRejected(); }
+
 interface Change { type: string; id: string; version: number; deleted: boolean; data: Record<string, any> }
 
 /** Events still waiting to be sent (parked rejections are not coming back, so they are not "waiting"). Day close shows it. */
@@ -22,6 +32,7 @@ export async function pull(device: DeviceInfo): Promise<number> {
     const r = await fetch(`/api/sync/pull?cursor=${cursor}`, {
       headers: { authorization: `Device ${device.credential}`, 'x-app-version': __APP_VERSION__, 'x-outbox-pending': await waiting() },
     });
+    checkAuth(r);
     if (!r.ok) throw new Error(`pull failed: ${r.status}`);
     const j = (await r.json()) as { cursor: number; hasMore: boolean; changes: Change[] };
     await db.transaction('rw', db.entities, db.meta, db.shifts, async () => {
@@ -73,6 +84,7 @@ async function pullOrdersNow(device: DeviceInfo): Promise<number> {
     const r = await fetch(`/api/sync/orders?cursor=${cursor}${fresh ? '&fresh=1' : ''}`, {
       headers: { authorization: `Device ${device.credential}`, 'x-app-version': __APP_VERSION__ },
     });
+    checkAuth(r);
     if (!r.ok) throw new Error(`orders pull failed: ${r.status}`);
     const j = (await r.json()) as { cursor: number; hasMore: boolean; visits: PulledVisit[] };
     const settings = await localSettings();
@@ -90,7 +102,7 @@ async function pullOrdersNow(device: DeviceInfo): Promise<number> {
 
 /** Pulls open orders whenever the server says one at this outlet changed. Returns a function that stops it. */
 export function watchOrders(device: DeviceInfo, onLive?: (live: boolean) => void): () => void {
-  return watchStream('/sync/orders/stream', `Device ${device.credential}`, () => { void pullOrders(device).catch(() => {}); }, onLive);
+  return watchStream('/sync/orders/stream', `Device ${device.credential}`, () => { void pullOrders(device).catch(() => {}); }, onLive, deviceRejected);
 }
 
 export interface PushSummary { sent: number; done: number; parked: number; deferred: number }
@@ -111,6 +123,7 @@ export async function push(device: DeviceInfo): Promise<PushSummary> {
       headers: { authorization: `Device ${device.credential}`, 'content-type': 'application/json', 'x-app-version': __APP_VERSION__, 'x-outbox-pending': await waiting() },
       body: JSON.stringify({ events: batch.map((b) => ({ eventId: b.eventId, seq: b.seq, createdAt: b.createdAt, payload: b.payload })) }),
     });
+    checkAuth(r);
     if (!r.ok) throw new Error(`push failed: ${r.status}`);
     const { results } = (await r.json()) as { results: { eventId: string; status: string; reason?: string }[] };
     const bySeq = new Map(batch.map((b) => [b.eventId, b.seq!]));

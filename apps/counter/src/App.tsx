@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { liveQuery } from 'dexie';
 import { currentShift, db, getMeta, type DeviceInfo, type LocalShift } from './db.ts';
-import { enrol, pull, pullOrders, push, watchOrders } from './sync.ts';
+import { enrol, onDeviceRejected, pull, pullOrders, push, watchOrders } from './sync.ts';
 import { loadMenu, type MenuView } from './menu.ts';
 import type { Actor } from './sale.ts';
 import { PinScreen } from './PinScreen.tsx';
@@ -30,6 +30,25 @@ export function App() {
     void navigator.storage?.persist?.(); // ask the browser not to evict the sales database
     void getMeta('device').then((d) => setDevice(d ?? null));
   }, []);
+  const [notice, setNotice] = useState('');
+  // The server no longer accepts this tablet's credential. Forget the device and the server-side copies (menu, cursors)
+  // so set-up starts clean, but KEEP the outbox and local sales: nothing the cashier typed is thrown away.
+  useEffect(() => onDeviceRejected(() => {
+    void (async () => {
+      await db.transaction('rw', [db.meta, db.entities, db.outbox, db.shifts, db.sales, db.orderEvents, db.visits, db.pinState], async () => {
+        await db.meta.bulkDelete(['device', 'cursor', 'orderCursor', 'ordersPrimed', 'lastPull']);
+        await db.entities.clear();
+        // Nothing waiting to be sent means every local shift, sale and order was already delivered to a server that no
+        // longer knows us. Left behind, an old shift (opened by a user id that no longer exists) would block all payments.
+        // With unsent events we keep everything: those sales are the only copy.
+        if ((await db.outbox.filter((r) => !r.rejected).count()) === 0) {
+          await Promise.all([db.shifts.clear(), db.sales.clear(), db.orderEvents.clear(), db.visits.clear(), db.pinState.clear()]);
+        }
+      });
+      setNotice('This counter is no longer recognised by the server (it was removed, or the server was reset). Please set it up again.');
+      setDevice(null);
+    })();
+  }), []);
   // A manager invite link carries its token in the fragment: `/#invite=<token>`.
   const [invite, setInvite] = useState(() => /^#invite=(.+)$/.exec(window.location.hash)?.[1] ?? '');
   const [invitedEmail, setInvitedEmail] = useState('');
@@ -41,11 +60,11 @@ export function App() {
     }} />;
   }
   if (device === undefined) return <main className="center">Loading…</main>;
-  if (!device) return <EnrolScreen onDone={setDevice} invitedEmail={invitedEmail} />;
+  if (!device) return <EnrolScreen onDone={(d) => { setNotice(''); setDevice(d); }} invitedEmail={invitedEmail} notice={notice} />;
   return <Counter device={device} />;
 }
 
-function EnrolScreen({ onDone, invitedEmail }: { onDone: (d: DeviceInfo) => void; invitedEmail: string }) {
+function EnrolScreen({ onDone, invitedEmail, notice }: { onDone: (d: DeviceInfo) => void; invitedEmail: string; notice: string }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -72,6 +91,7 @@ function EnrolScreen({ onDone, invitedEmail }: { onDone: (d: DeviceInfo) => void
     <main className="center">
       <Branding />
       <h1>Set up this counter</h1>
+      {notice && <p data-testid="enrol-notice" className="error" role="alert">{notice}</p>}
       <p>Ask your manager for an enrolment code and type it here. This tablet must be online for this step.</p>
       <input data-testid="enrol-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Enrolment code" autoCapitalize="off" autoComplete="off" />
       <button data-testid="enrol-go" className="primary" disabled={busy || !code.trim()} onClick={() => go()}>{busy ? 'Setting up…' : 'Set up'}</button>

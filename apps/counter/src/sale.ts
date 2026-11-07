@@ -27,7 +27,7 @@ export async function queue(event: OutboxEvent): Promise<number> {
 async function drawerFor(actor: Actor): Promise<string> {
   const shift = await currentShift();
   if (!shift) throw new Error('Open a shift before taking payment.');
-  if (shift.userId !== actor.id) throw new Error(`The open shift belongs to ${shift.userName}. Close it before taking payment as someone else.`);
+  if (shift.userId !== actor.id) throw new Error(`The open shift belongs to ${shift.userName}. Close it before taking payment as someone else (if they are not here, a manager can close it from the Shift tab).`);
   return shift.id;
 }
 

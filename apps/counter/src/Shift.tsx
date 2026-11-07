@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { formatRupees, paise, parseRupees, renderShiftSlip, type ShiftSlipView } from '@pos/shared';
 import { db, type DeviceInfo, type LocalShift } from './db.ts';
 import type { Actor } from './sale.ts';
-import { closeShift, openShift, slipFor } from './shift.ts';
+import { closeShift, managerCloseShift, openShift, slipFor } from './shift.ts';
+import { ManagerLogin } from './manager/index.ts';
 
 const money = (text: string, what: string): number => {
   try { return parseRupees(text); } catch { throw new RangeError(`Enter ${what} as rupees, like 500 or 500.50.`); }
@@ -17,6 +18,8 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [slip, setSlip] = useState<ShiftSlipView | null>(null);
+  // Closing another cashier's drawer: null = not started; '' = manager signing in; otherwise their token (memory only).
+  const [mgr, setMgr] = useState<string | null>(null);
   // The latest drawer a manager closed for someone on this tablet, so the next cashier is not left wondering why it vanished.
   const [forced, setForced] = useState<LocalShift | null>(null);
   useEffect(() => {
@@ -61,10 +64,30 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
   }
 
   if (shift.userId !== actor.id) {
+    if (mgr === '') return <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />;
     return (
       <main className="center">
         <h2>Shift open</h2>
         <p data-testid="shift-other">The shift is open under <b>{shift.userName}</b> since {new Date(shift.openedAt).toLocaleTimeString()}. They need to close it before you can take payment.</p>
+        {mgr === null ? (
+          <p><button data-testid="mgr-close-other" onClick={() => { setError(''); setMgr(''); }}>{shift.userName} is not here? A manager can close it</button></p>
+        ) : (
+          <>
+            <p>Manager: count all the cash in the drawer, including the float, and enter it. The server works out the difference.</p>
+            <input data-testid="mgr-close-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="Counted cash ₹" />
+            <button data-testid="mgr-close-go" className="primary" disabled={busy || !cash.trim()}
+              onClick={() => run(async () => {
+                const counted = money(cash, 'the counted cash');
+                await onSync(); // send everything first: the server's expected figure is only right once it has every sale
+                await managerCloseShift({ device, token: mgr, shiftId: shift.id, countedCashPaise: counted });
+                setCash('');
+                setMgr(null);
+                await onSync().catch(() => {}); // brings the server's figures (and a closure by someone else, on a 409)
+              })}>{busy ? 'Closing…' : 'Close drawer'}</button>{' '}
+            <button onClick={() => { setMgr(null); setCash(''); setError(''); }}>Cancel</button>
+          </>
+        )}
+        {error && <p className="error" role="alert">{error}</p>}
       </main>
     );
   }

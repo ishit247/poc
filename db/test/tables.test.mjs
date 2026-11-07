@@ -93,7 +93,7 @@ test('a sale may sit on a table of its own outlet only', async () => {
   await inTx(async (c) => {
     const [o1, o2] = await outlets(c);
     const x = (await c.query(
-      `SELECT d.id AS device, d.outlet_id AS outlet, (SELECT id FROM app_user WHERE role = 'cashier' AND name LIKE 'School 1%' LIMIT 1) AS cashier
+      `SELECT d.id AS device, d.outlet_id AS outlet, (SELECT id FROM app_user WHERE role = 'cashier' AND name = 'School 1 Canteen cashier') AS cashier
          FROM device d WHERE d.outlet_id = $1 LIMIT 1`, [o1.id])).rows[0];
     const mine = (await c.query('SELECT id FROM dining_table WHERE outlet_id = $1 AND is_default', [o1.id])).rows[0].id;
     const theirs = (await c.query('SELECT id FROM dining_table WHERE outlet_id = $1 AND is_default', [o2.id])).rows[0].id;

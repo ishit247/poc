@@ -88,6 +88,16 @@ for (const t of Object.values(SEED)) {
       await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, s.rows[0].id, outletId]);
       await client.query("INSERT INTO login_lockout (tenant_id, user_id, kind) VALUES ($1, $2, 'pin')", [t.id, s.rows[0].id]);
     }
+    // A second cashier at School 1, so a drawer left open by one cashier and closed by a manager for the next one
+    // can be tried on a real tablet. Same dev PIN as the others. Not pushed to cashierIds: the trading rows below
+    // stay with the first cashier.
+    if (`${t.key}${i}` === 'a1') {
+      const s = await client.query(
+        "INSERT INTO app_user (tenant_id, name, pin_verifier, role) VALUES ($1, $2, $3, 'cashier') RETURNING id",
+        [t.id, `${o} cashier 2`, pinHash]);
+      await client.query('INSERT INTO user_outlet (tenant_id, user_id, outlet_id) VALUES ($1, $2, $3)', [t.id, s.rows[0].id, outletId]);
+      await client.query("INSERT INTO login_lockout (tenant_id, user_id, kind) VALUES ($1, $2, 'pin')", [t.id, s.rows[0].id]);
+    }
     managerIds.push(u.rows[0].id);
     cashierIds.push(staff['cashier']!);
     waiterIds.push(staff['waiter']!);

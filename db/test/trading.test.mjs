@@ -16,7 +16,7 @@ async function inTx(fn) {
     await c.query("SELECT set_config('app.tenant_id', $1, true)", [A]);
     const ctx = (await c.query(
       `SELECT d.id AS device, d.outlet_id AS outlet,
-              (SELECT id FROM app_user WHERE role = 'cashier' AND name LIKE 'School 1%') AS cashier,
+              (SELECT id FROM app_user WHERE role = 'cashier' AND name = 'School 1 Canteen cashier') AS cashier,
               (SELECT id FROM item LIMIT 1) AS item
          FROM device d JOIN outlet o ON o.id = d.outlet_id WHERE o.name = 'School 1 Canteen' LIMIT 1`)).rows[0];
     return await fn(c, ctx);
