@@ -4,7 +4,8 @@ import type { DeviceInfo, LocalSale } from './db.ts';
 import { useLogoUrl } from './logo.ts';
 import { outletInfo, toReceiptView } from './receipt.ts';
 
-const rs = (n: number) => formatRupees(paise(n));
+const svgProps = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
+const rs =(n: number) => formatRupees(paise(n));
 
 /**
  * A paid sale shows the exact text that prints (58 mm, 32 columns) and a Print button that uses the
@@ -51,9 +52,13 @@ export function Receipt({ sale, device, reprint = false, onReprint, onClose }: {
   return (
     <main className="center">
       <div className="no-print toolbar">
-        <button data-testid="print" onClick={print}>{reprint ? 'Print copy' : 'Print'}</button>
-        <button data-testid="new-sale" className="primary" onClick={onClose}>{reprint ? 'Close' : 'New sale'}</button>
-        <span className="muted">Receipt <b data-testid="receipt-no">{sale.receiptNo}</b>{reprint ? ' (reprint)' : ''}</span>
+        <button data-testid="print" className="icon-btn" title={reprint ? 'Print copy' : 'Print'} aria-label={reprint ? 'Print copy' : 'Print'} onClick={print}>
+          <svg {...svgProps}><path d="M6 9V3h12v6" /><rect x="3" y="9" width="18" height="9" rx="2" /><rect x="7" y="14" width="10" height="7" /></svg>
+        </button>
+        <button data-testid="new-sale" className="icon-btn primary" title={reprint ? 'Close' : 'New sale'} aria-label={reprint ? 'Close' : 'New sale'} onClick={onClose}>
+          <svg {...svgProps}><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+        <span className="muted"><b data-testid="receipt-no">{sale.receiptNo}</b>{reprint ? ' (reprint)' : ''}</span>
       </div>
       {problem && <p role="alert" className="no-print">{problem}</p>}
       <div className="receipt print-area" data-testid="receipt">

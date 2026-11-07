@@ -85,13 +85,23 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     ? activeOrder.lines.map((l) => ({
       key: l.lineId ?? l.itemId, name: l.name, qty: l.qty, netPaise: l.netPaise,
       more: () => void guard(async () => { await setLineQty({ device, actor, settings: menu.settings, saleId: activeOrder.id, lineId: l.lineId!, qty: l.qty + 1 }); }),
-      less: () => void guard(async () => { await setLineQty({ device, actor, settings: menu.settings, saleId: activeOrder.id, lineId: l.lineId!, qty: l.qty - 1 }); }),
+      less: () => void guard(async () => {
+        const s = await setLineQty({ device, actor, settings: menu.settings, saleId: activeOrder.id, lineId: l.lineId!, qty: l.qty - 1 });
+        await dropIfEmpty(s);
+      }),
     }))
     : draftT.lines.map((l) => ({
       key: l.itemId, name: l.name, qty: l.qty, netPaise: l.net,
       more: () => void guard(() => { setCart(setQty(cart, l.itemId, l.qty + 1, menu.settings)); }),
       less: () => void guard(() => { setCart(setQty(cart, l.itemId, l.qty - 1, menu.settings)); }),
     }));
+
+  /** An order whose last line was removed is cancelled, so no 0-item order is left open. */
+  const dropIfEmpty = async (s: { id: string; lines: unknown[] }) => {
+    if (s.lines.length > 0) return;
+    await voidOrder({ device, actor, saleId: s.id, reason: 'All items removed' });
+    setOrderId(null);
+  };
 
   const add = (entry: MenuEntry) => guard(async () => {
     if (inOrder) { await addToOrder({ device, actor, settings: menu.settings, saleId: activeOrder.id, entry }); return; }
@@ -129,7 +139,9 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   });
   const clear = () => guard(async () => {
     if (inOrder) {
-      for (const l of activeOrder.lines) await setLineQty({ device, actor, settings: menu.settings, saleId: activeOrder.id, lineId: l.lineId!, qty: 0 });
+      let last = activeOrder;
+      for (const l of activeOrder.lines) last = await setLineQty({ device, actor, settings: menu.settings, saleId: activeOrder.id, lineId: l.lineId!, qty: 0 });
+      await dropIfEmpty(last);
     } else setCart([]);
   });
 
@@ -217,6 +229,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     : '';
 
   if (done) return <Receipt sale={done} device={device} onClose={() => setDone(null)} />;
+  if (bill) return <DraftBill lines={bill.lines} totals={bill.totals} device={device} staffName={actor.name} onClose={() => setBill(null)} />;
 
   const heldOrders = states.filter((s) => s.table.isDefault).flatMap((s) => s.orders).filter((o) => o.id !== activeOrder?.id);
   const stateOf = (orders: LocalSale[]) => (orders.length ? 'busy' : 'free');
@@ -369,7 +382,6 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           </div>
         </div>
       )}
-      {bill && <DraftBill lines={bill.lines} totals={bill.totals} device={device} staffName={actor.name} onClose={() => setBill(null)} />}
       {paying && <PayDialog key={paying} initialMode={paying} total={paise(total)} onCancel={() => setPaying(null)} onConfirm={finish} />}
     </div>
   );

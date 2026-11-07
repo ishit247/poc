@@ -121,5 +121,6 @@ export async function recordReprint(args: { actor: Actor; saleId: string; now?: 
 /** Orders this person may see: a cashier sees every open order here, a waiter only their own. */
 export async function visibleOpenOrders(actor: Actor): Promise<LocalSale[]> {
   const open = await db.sales.where('status').equals('open').toArray();
-  return open.filter((s) => actor.role === 'cashier' || s.createdBy === actor.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // An order with nothing on it (everything removed) is not worth listing or paying.
+  return open.filter((s) => s.lines.length > 0 && (actor.role === 'cashier' || s.createdBy === actor.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }

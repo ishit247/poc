@@ -4,6 +4,8 @@ import type { DeviceInfo } from './db.ts';
 import { useLogoUrl } from './logo.ts';
 import { outletInfo } from './receipt.ts';
 
+const svgProps = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
+
 export interface DraftLine { name: string; qty: number; unitPaise: number; netPaise: number; gstRateBp: number; taxPaise: number }
 export interface DraftTotals { subtotalPaise: number; taxPaise: number; roundOffPaise: number; totalPaise: number }
 
@@ -35,18 +37,21 @@ export function DraftBill({ lines, totals, device, staffName, onClose }: {
   };
 
   return (
-    <div className="overlay" role="dialog" aria-label="Draft bill">
-      <div className="dialog">
-        <div className="receipt print-area" data-testid="draft-bill">
-          {logoUrl && <img className="receipt-logo" src={logoUrl} alt="" />}
-          <pre data-testid="draft-bill-text">{text ? text.join('\n') : ''}</pre>
-        </div>
-        {problem && <p role="alert" className="error no-print">{problem}</p>}
-        <div className="row no-print">
-          <button data-testid="draft-print" className="primary" disabled={!text} onClick={print}>Print</button>
-          <button data-testid="draft-close" onClick={onClose}>Close</button>
-        </div>
+    <main className="center">
+      <div className="no-print toolbar">
+        <button data-testid="draft-print" className="icon-btn" title="Print" aria-label="Print" disabled={!text} onClick={print}>
+          <svg {...svgProps}><path d="M6 9V3h12v6" /><rect x="3" y="9" width="18" height="9" rx="2" /><rect x="7" y="14" width="10" height="7" /></svg>
+        </button>
+        <button data-testid="draft-close" className="icon-btn primary" title="Close" aria-label="Close" onClick={onClose}>
+          <svg {...svgProps}><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+        <span className="muted">Draft bill</span>
       </div>
-    </div>
+      {problem && <p role="alert" className="error no-print">{problem}</p>}
+      <div className="receipt print-area" data-testid="draft-bill">
+        {logoUrl && <img className="receipt-logo" src={logoUrl} alt="" />}
+        <pre data-testid="draft-bill-text">{text ? text.join('\n') : ''}</pre>
+      </div>
+    </main>
   );
 }

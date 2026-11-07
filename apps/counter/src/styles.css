@@ -100,9 +100,14 @@ header button { min-height: 40px; }
   .print-area .receipt-logo { height: 40px; max-width: 48mm; filter: grayscale(1) contrast(2); }
   .no-print { display: none !important; }
 }
-.orders { padding: 0 14px; overflow: auto; }
-.orders ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-.orders li { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.orders { padding: 0 14px 4px; overflow: auto; }
+.orders ul { list-style: none; padding: 0; margin: 0 0 4px; display: flex; flex-direction: column; gap: 4px; }
+.orders li { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px 10px; }
+.orders h2 { margin: 4px 0; font-size: 18px; }
+.orders .row { display: flex; align-items: center; gap: 6px; }
+.orders .pay-btn { height: 36px; padding: 0 16px; background: #d9f0e1; color: #14532d; border: 1px solid #a8d8b9; font-weight: 600; }
+:root[data-theme='dark'] .orders .pay-btn { background: #25483a; color: #cdeedb; border-color: #3b6b57; }
+.orders .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 36px; padding: 0; }
 .online h2 { display: flex; align-items: center; gap: 12px; }
 .online h2 button { margin-left: auto; }
 .online li.fresh { border-color: var(--primary); box-shadow: 0 0 0 2px var(--active-bg); }
@@ -173,6 +178,7 @@ button.primary[data-testid='add-code'] { font-size: 28px; line-height: 1; paddin
 
 /* Rule: no wasted space at the top of a screen. Actions go first, headings have no top margin. */
 .center h2, .mgr h2, .orders h2, .online h2, .mgr h3 { margin-top: 0; }
+.toolbar .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 38px; padding: 0; }
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dialog .actions button { white-space: nowrap; }
