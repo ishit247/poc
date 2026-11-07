@@ -17,6 +17,8 @@ export interface ReceiptView {
   timezone: string; // the outlet's, e.g. Asia/Kolkata
   staffName: string;
   reprint: boolean;
+  /** A bill printed before payment: headed "DRAFT BILL", no tax-invoice wording, no payments. */
+  draft?: boolean;
   lines: { name: string; qty: number; unitPaise: number; netPaise: number; gstRateBp: number; taxPaise: number }[];
   subtotalPaise: number;
   taxPaise: number;
@@ -126,10 +128,11 @@ export function renderReceipt(v: ReceiptView, width = RECEIPT_WIDTH): string[] {
   centered(v.outletName.toUpperCase());
   if (v.address) centered(v.address);
   if (v.gstEnabled && v.gstin) centered(`GSTIN: ${v.gstin}`);
-  centered(v.gstEnabled ? 'Tax Invoice' : 'Bill of Supply');
+  centered(v.draft ? '*** DRAFT BILL ***' : v.gstEnabled ? 'Tax Invoice' : 'Bill of Supply');
+  if (v.draft) centered('Not paid. Not a tax invoice.');
   if (v.reprint) centered('*** RE-PRINT ***');
   out.push(dash);
-  out.push(`Bill# ${v.receiptNo}`);
+  if (!v.draft) out.push(`Bill# ${v.receiptNo}`);
   out.push(stamp(v.at, v.timezone));
   out.push(`User: ${v.staffName}`.slice(0, width));
   out.push(dash);
@@ -157,6 +160,6 @@ export function renderReceipt(v: ReceiptView, width = RECEIPT_WIDTH): string[] {
   }
   out.push(dash);
   if (v.fssaiNo) out.push(center(`FSSAI: ${v.fssaiNo}`, width));
-  out.push(center('Thank you. Visit again.', width));
+  out.push(center(v.draft ? 'Please pay at the counter.' : 'Thank you. Visit again.', width));
   return out;
 }

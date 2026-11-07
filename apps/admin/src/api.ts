@@ -64,11 +64,13 @@ export const DESCRIPTION_MAX = 300;
 export async function shrinkImage(file: File): Promise<Blob> {
   const bmp = await createImageBitmap(file).catch(() => null);
   if (!bmp) throw new Error('That file is not a picture this browser can read.');
-  const k = Math.min(1, IMAGE_EDGE / Math.max(bmp.width, bmp.height));
+  // Centre-crop to a square, then shrink: every picture is the same shape, so tiles line up whatever the photo was.
+  const side = Math.min(bmp.width, bmp.height);
+  const edge = Math.max(1, Math.min(IMAGE_EDGE, side));
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(bmp.width * k));
-  canvas.height = Math.max(1, Math.round(bmp.height * k));
-  canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  canvas.width = edge;
+  canvas.height = edge;
+  canvas.getContext('2d')!.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, edge, edge);
   bmp.close();
   for (const q of [0.82, 0.7, 0.55, 0.4]) {
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/webp', q));

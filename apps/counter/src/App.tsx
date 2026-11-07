@@ -14,6 +14,7 @@ import { Branding } from './Branding.tsx';
 import { EnrolCodeMaker, InviteScreen, ManagerLogin, ManagerTools } from './manager/index.ts';
 import { RefusedBanner } from './RefusedBanner.tsx';
 import { isRefusedPayment } from './refused.ts';
+import { getFont, getTheme, setFont, setTheme, type FontSize, type Theme } from './prefs.ts';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -104,7 +105,8 @@ function EnrolScreen({ onDone, invitedEmail, notice }: { onDone: (d: DeviceInfo)
 function Counter({ device }: { device: DeviceInfo }) {
   const [menu, setMenu] = useState<MenuView | null>(null);
   const [actor, setActor] = useState<Actor | null>(null);
-  const [tab, setTab] = useState<'sell' | 'orders' | 'shift' | 'online'>('sell');
+  const [tab, setTab] = useState<'sell' | 'orders' | 'shift'>('sell');
+  const [ordersView, setOrdersView] = useState<'home' | 'online'>('home'); // inside Orders: this counter's open orders, or the online queue
   const [onlineWaiting, setOnlineWaiting] = useState(0);
   // null = not in manager tools; '' = signing in; otherwise the session token. Memory only, never stored.
   const [mgr, setMgr] = useState<string | null>(null);
@@ -166,21 +168,27 @@ function Counter({ device }: { device: DeviceInfo }) {
   }, [sync, refresh]);
 
   if (!menu) return <main className="center">Loading…</main>;
+  // A cashier with no open drawer cannot take money: send them to open one first.
+  const needShift = !!actor && actor.role === 'cashier' && shift === null && tab !== 'shift';
   return (
     <div className="shell">
       <header>
         {logoUrl && <img data-testid="logo" className="logo" src={logoUrl} alt="" />}
-        <strong>{device.outletName}</strong> <span className="muted">· counter {device.counterCode}</span>
+        <strong>{device.outletName}</strong> <span className="muted">· {device.counterCode}</span>
         <span className="spacer" />
-        <span data-testid="sync-status" className={online ? 'ok' : 'warn'}>{online ? '● Online' : '● Offline'}</span>
-        <span data-testid="pending" className="muted" title="Sales waiting to reach the server">{pending} waiting{lastPush ? ` · last sent ${new Date(lastPush).toLocaleTimeString()}` : ''}</span>
-        <button data-testid="sync-now" onClick={sync}>Sync</button>
-        {actor && (
-          <>
-            <span data-testid="who">{actor.name}</span>
-            <button data-testid="sign-out" onClick={() => setActor(null)}>Sign out</button>
-          </>
+        <span data-testid="sync-status" className={online ? 'ok' : 'warn'} title={online ? 'Online' : 'Offline'} aria-label={online ? 'Online' : 'Offline'}>●</span>
+        <span data-testid="pending" className="muted" title={`Sales waiting to reach the server${lastPush ? ` · last sent ${new Date(lastPush).toLocaleTimeString()}` : ''}`}>
+          {pending}{lastPush ? ` · ${new Date(lastPush).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+        </span>
+        <button data-testid="sync-now" className="iconbtn" aria-label="Sync now" title="Sync now" onClick={sync}>⟳</button>
+        {actor && !needShift && (
+          <div className="seg" role="tablist">
+            <button data-testid="tab-sell" role="tab" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
+            <button data-testid="tab-orders" role="tab" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Orders{onlineWaiting > 0 && <span data-testid="online-badge" className="badge">{onlineWaiting}</span>}</button>
+          </div>
         )}
+        <span className="spacer" />
+        {actor && <MoreMenu actor={actor} onShift={actor.role === 'cashier' ? () => setTab('shift') : undefined} onSignOut={() => setActor(null)} />}
       </header>
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
@@ -191,21 +199,56 @@ function Counter({ device }: { device: DeviceInfo }) {
           <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
           <p className="center"><button data-testid="mgr-open" onClick={() => setMgr('')}>Manager tools</button></p>
         </>
-      ) : actor.role === 'cashier' && shift === null && tab !== 'shift' ? (
-        // A cashier with no open drawer cannot take money: send them to open one first.
+      ) : needShift ? (
         <><RefusedBanner /><Shift device={device} actor={actor} shift={undefined} onSync={sync} /></>
       ) : (
         <>
           {(tab === 'sell' || tab === 'shift') && <RefusedBanner />}
-          <nav>
-            <button data-testid="tab-sell" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
-            <button data-testid="tab-orders" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Open orders</button>
-            {actor.role === 'cashier' && <button data-testid="tab-online" className={tab === 'online' ? 'active' : ''} onClick={() => setTab('online')}>Online{onlineWaiting > 0 && <span data-testid="online-badge" className="badge">{onlineWaiting}</span>}</button>}
-            {actor.role === 'cashier' && <button data-testid="tab-shift" className={tab === 'shift' ? 'active' : ''} onClick={() => setTab('shift')}>Shift</button>}
-          </nav>
-          {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : tab === 'orders' ? <Orders device={device} actor={actor} /> : tab === 'shift' ? <Shift device={device} actor={actor} shift={shift ?? undefined} onSync={sync} /> : null}
-          {actor.role === 'cashier' && <OnlineQueue device={device} actor={actor} menu={menu} hidden={tab !== 'online'} onCount={setOnlineWaiting} />}
+          {tab === 'orders' && actor.role === 'cashier' && (
+            <div className="seg sub" role="tablist">
+              <button data-testid="orders-home" role="tab" className={ordersView === 'home' ? 'active' : ''} onClick={() => setOrdersView('home')}>Home</button>
+              <button data-testid="tab-online" role="tab" className={ordersView === 'online' ? 'active' : ''} onClick={() => setOrdersView('online')}>Online{onlineWaiting > 0 && <span className="badge">{onlineWaiting}</span>}</button>
+            </div>
+          )}
+          {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : tab === 'orders' ? (ordersView === 'home' || actor.role !== 'cashier' ? <Orders device={device} actor={actor} /> : null) : tab === 'shift' ? <Shift device={device} actor={actor} shift={shift ?? undefined} onSync={sync} /> : null}
+          {actor.role === 'cashier' && <OnlineQueue device={device} actor={actor} menu={menu} hidden={!(tab === 'orders' && ordersView === 'online')} onCount={setOnlineWaiting} />}
         </>
+      )}
+    </div>
+  );
+}
+
+/** The ⋮ menu: who is signed in, the drawer (Shift) and Sign out. Closes on any tap outside it. */
+function MoreMenu({ actor, onShift, onSignOut }: { actor: Actor; onShift?: () => void; onSignOut: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const [font, setFontState] = useState<FontSize>(getFont);
+  const [theme, setThemeState] = useState<Theme>(getTheme);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', away);
+    return () => document.removeEventListener('pointerdown', away);
+  }, [open]);
+  return (
+    <div className="more" ref={ref}>
+      <button data-testid="more-menu" className="iconbtn" aria-label="More" aria-expanded={open} onClick={() => setOpen(!open)}>⋮</button>
+      {open && (
+        <div className="popmenu" role="menu">
+          <div className="profile" data-testid="who"><b>{actor.name}</b><small>{actor.role}</small></div>
+          <div className="prefrow"><span>Text</span>
+            <div className="seg">
+              {(['s', 'm', 'l'] as const).map((f) => <button key={f} data-testid={`font-${f}`} className={font === f ? 'active' : ''} aria-pressed={font === f} onClick={() => { setFont(f); setFontState(f); }}>{f.toUpperCase()}</button>)}
+            </div>
+          </div>
+          <div className="prefrow"><span>Theme</span>
+            <div className="seg">
+              {([['dark', 'D'], ['light', 'L']] as const).map(([t, label]) => <button key={t} data-testid={`theme-${t}`} className={theme === t ? 'active' : ''} aria-pressed={theme === t} aria-label={`${t} theme`} onClick={() => { setTheme(t); setThemeState(t); }}>{label}</button>)}
+            </div>
+          </div>
+          {onShift && <button role="menuitem" data-testid="tab-shift" onClick={() => { setOpen(false); onShift(); }}>Shift</button>}
+          <button role="menuitem" data-testid="sign-out" onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>
+        </div>
       )}
     </div>
   );

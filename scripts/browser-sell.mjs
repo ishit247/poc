@@ -72,9 +72,10 @@ try {
 
   // Draft: hold and resume
   const totalBefore = await text('total');
-  await T('hold').click();
+  await T('held-btn').click(); await T('hold').click();
   check('hold empties the cart', (await lineCount()) === 0);
-  check('held chip appears', (await settled(() => T('held-order').count())) === 1);
+  await T('held-btn').click();
+  check('held order appears in the popup', (await settled(() => T('held-order').count())) === 1);
   await T('held-order').click();
   await page.waitForTimeout(400);
   check('resume restores the same total', (await text('total')) === totalBefore, totalBefore);

@@ -102,6 +102,7 @@ try {
   check('enrolled, signed in, shift open', (await text('sync-status')).includes('Online'));
 
   // 2. Diet and tag filter row (not exercised in step 6)
+  await T('tags-toggle').click(); // the Tags section starts collapsed
   check('filter row shows this tenant\'s tags only', (await T('filter-Hot').count()) === 1 && (await T('filter-Spicy').count()) === 0);
   await T('filter-Hot').click();
   const hot = await until(async () => { const n = await page.locator('button.item:not([data-testid^="pop-"])').allInnerTexts(); return n.length ? n : null; }, 3000);
@@ -208,7 +209,7 @@ try {
   check('a lost receipt was removed from the outbox', lost.removed >= 1, `receipt ${lostNo}, seq ${lost.seq}, ${lost.removed} event(s)`);
 
   // 8. Online order (manual provider): new, accept, ready, hand over
-  await T('tab-online').click();
+  await T('tab-orders').click(); await T('tab-online').click();
   if (await until(() => T('online-pin').isVisible().then((v) => v || T('online-add').isVisible()), 5000) && (await T('online-pin').isVisible())) {
     await T('online-pin').fill(PIN); await T('online-connect-go').click();
   }
@@ -226,7 +227,7 @@ try {
   await shot('3-online');
 
   // 9. Close the shift
-  await T('tab-shift').click();
+  await T('more-menu').click(); await T('tab-shift').click();
   await T('counted-cash').fill('700'); await T('close-shift').click();
   await T('shift-slip-text').waitFor({ timeout: 15000 });
   const slip = await text('shift-slip-text');
@@ -251,7 +252,7 @@ try {
   // forgotten drawer would. Both are cleared through the day-close screen below.
   // (The seed's unaccepted Swiggy order is expired and voided by the server's expiry job; online orders are not voided here.)
   const stale = sql(`id) FROM sale WHERE outlet_id='${outletId}' AND status='open' AND channel='counter' AND business_date < current_date`);
-  await T('sign-out').click();
+  await T('more-menu').click(); await T('sign-out').click();
   await T('mgr-open').click();
   await T('mgr-email').fill('a1@example.test'); await T('mgr-password').fill('dev-password-123'); await T('mgr-login').click();
   await T('mgr-tab-close').click();

@@ -247,7 +247,7 @@ try {
   check('C: neither table comes back busy on C', !(await c.busy(racePaid)) && !(await c.busy(raceVoid)));
 
   // Shift: the banner is there too; the cashier counts the float plus both amounts, and the slip says where it went.
-  await c.T('tab-shift').click();
+  await c.T('more-menu').click(); await c.T('tab-shift').click();
   check('C: the banner shows on the Shift screen', await c.T('refused-banner').isVisible());
   const counted = 500 + lostToPay.amount + lostToVoid.amount;
   await c.T('counted-cash').fill(counted.toFixed(2)); await c.T('close-shift').click();
@@ -266,7 +266,7 @@ try {
   check('server: C\'s shift expects the refused cash, variance 0, and names it', srow === `R|${paise(counted)}|0|${paise(lostToPay.amount + lostToVoid.amount)}`, srow);
 
   // A manager signs in on C and acknowledges both; the banner is gone when the cashier signs back in.
-  await c.T('sign-out').click();
+  await c.T('more-menu').click(); await c.T('sign-out').click();
   await c.T('mgr-open').click();
   await c.T('mgr-email').fill('a1@example.test'); await c.T('mgr-password').fill('dev-password-123'); await c.T('mgr-login').click();
   check('Manager on C: both refused payments listed', (await c.until(async () => (await c.T('mgr-refused-ack').count()) === 2)) >= 0);

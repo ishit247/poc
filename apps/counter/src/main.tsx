@@ -2,6 +2,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import './styles.css';
+import { applyPrefs } from './prefs.ts';
+
+applyPrefs();
 
 // Only in the production build: in dev the module URLs are not hashed and a cache would serve stale code.
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

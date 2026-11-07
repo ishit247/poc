@@ -8,6 +8,7 @@ import { addToOrder, openOrder, orderById, setLineQty, tableMode, tableStates, v
 import { useItemImageUrl } from './itemImages.ts';
 import { PayDialog } from './PayDialog.tsx';
 import { Receipt } from './Receipt.tsx';
+import { DraftBill, type DraftLine, type DraftTotals } from './DraftBill.tsx';
 
 const rs = (n: number) => formatRupees(paise(n));
 const AUTO_RETURN_MS = 6000;
@@ -25,7 +26,7 @@ function useLive<T>(query: () => Promise<T>, initial: T, deps: unknown[] = []): 
 /** The cached picture, or nothing: a tile without one (or before it has arrived) is just text, as before. */
 function ItemPicture({ sha }: { sha: string | null | undefined }) {
   const url = useItemImageUrl(sha);
-  return url ? <img src={url} alt="" loading="lazy" decoding="async" width={120} height={120} data-testid="item-picture" /> : null;
+  return url ? <img src={url} alt="" loading="lazy" decoding="async" width={48} height={48} data-testid="item-picture" /> : null;
 }
 
 /** One line as the cart shows it, whether it belongs to a draft cart or to a running order. */
@@ -36,11 +37,16 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const [orderId, setOrderId] = useState<string | null>(null); // the running order being edited, if any
   const [tableId, setTableId] = useState<string | null>(null); // restaurant: the table chosen (its order, or the one to open)
   const [category, setCategory] = useState<string>('all');
-  const [filter, setFilter] = useState<string>('');    // '' | 'veg' | 'egg' | 'non_veg' | tag id
+  const [diet, setDiet] = useState<string>('');        // '' | 'veg' | 'egg' | 'non_veg'
+  const [tag, setTag] = useState<string>('');          // '' | a tag id
+  const [catsOpen, setCatsOpen] = useState(true);      // sidebar sections: Category starts open, Tags closed
+  const [tagsOpen, setTagsOpen] = useState(false);
   const [q, setQ] = useState('');
   const [message, setMessage] = useState('');
   const [paying, setPaying] = useState<'cash' | 'upi' | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
+  const [heldOpen, setHeldOpen] = useState(false);     // the held-orders popup
+  const [bill, setBill] = useState<{ lines: DraftLine[]; totals: DraftTotals } | null>(null); // snapshot for the draft bill
   const [done, setDone] = useState<LocalSale | null>(null);
   const [popular, setPopular] = useState<string[]>([]);
   const [voiding, setVoiding] = useState<string | null>(null); // the reason being typed, while the void form is open
@@ -107,8 +113,15 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     setCart([]);
     return true;
   };
-  const hold = () => guard(async () => { await holdDraft(); setOrderId(null); });
-  const resume = (id: string) => guard(async () => { await holdDraft(); setOrderId(id); });
+  const hold = () => guard(async () => { await holdDraft(); setOrderId(null); setHeldOpen(false); });
+  const resume = (id: string) => guard(async () => { await holdDraft(); setOrderId(id); setHeldOpen(false); });
+  /** Freezes what is on screen as a draft bill (nothing is saved; no receipt number is used). */
+  const showBill = () => setBill({
+    lines: inOrder
+      ? activeOrder.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.netPaise, gstRateBp: l.gstRateBp, taxPaise: l.taxPaise }))
+      : draftT.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.net, gstRateBp: l.gstRateBp, taxPaise: l.tax })),
+    totals: { subtotalPaise: subtotal, taxPaise: tax, roundOffPaise: roundOff, totalPaise: total },
+  });
   const pickTable = (id: string) => guard(async () => {
     const s = states.find((x) => x.table.id === id);
     setTableId(id);
@@ -156,25 +169,26 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     if (byCode) return (x?.code ?? '').startsWith(q);
     if (q) return e.name.toLowerCase().includes(q.toLowerCase());
     if (category !== 'all' && e.categoryId !== category) return false;
-    if (!filter) return true;
-    return x?.diet === filter || (x?.tagIds ?? []).includes(filter);
-  }), [menu, q, byCode, category, filter]);
+    if (diet && x?.diet !== diet) return false;
+    return !tag || (x?.tagIds ?? []).includes(tag);
+  }), [menu, q, byCode, category, diet, tag]);
   const exact = byCode ? menu.entries.filter((e) => menu.extras[e.itemId]?.code === q) : [];
   const exactEntry = exact.length === 1 && exact[0]!.available ? exact[0]! : null;
   const quickAdd = () => { if (!exactEntry) return; void add(exactEntry); setQ(''); searchRef.current?.focus(); };
 
   const dietMarks = (['veg', 'egg', 'non_veg'] as const).filter((d) => Object.values(menu.extras).some((x) => x.diet === d));
-  const showPopular = !q && category === 'all' && !filter;
+  const showPopular = !q && category === 'all' && !diet && !tag;
   const popularEntries = popular.map((id) => menu.entries.find((e) => e.itemId === id)).filter((e): e is MenuEntry => !!e && e.available);
 
   const tile = (e: MenuEntry, prefix = '') => {
     const x = menu.extras[e.itemId];
     return (
-      <button key={prefix + e.itemId} data-testid={`${prefix}item-${e.name}`} className="item" disabled={!e.available} onClick={() => void add(e)}>
+      <button key={prefix + e.itemId} data-testid={`${prefix}item-${e.name}`} className="item" title={x?.description || undefined} disabled={!e.available} onClick={() => void add(e)}>
         <ItemPicture sha={x?.imageSha256} />
-        <span>{e.name}</span>
-        {x?.description && <span className="desc" data-testid={`desc-${e.name}`}>{x.description}</span>}
-        <small>{e.available ? <>₹{rs(e.pricePaise)}{x?.code && <> · <span className="code" data-testid={`code-${e.name}`}>{x.code}</span></>}</> : 'Sold out'}</small>
+        <span className="txt">
+          <span className="nm">{e.name}</span>
+          <small>{e.available ? <>₹{rs(e.pricePaise)}{x?.code && <> · <span className="code" data-testid={`code-${e.name}`}>{x.code}</span></>}</> : 'Sold out'}</small>
+        </span>
       </button>
     );
   };
@@ -192,7 +206,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   return (
     <div className="sell">
       <section className="menu">
-        {mode === 'map' ? (
+        {mode === 'map' && (
           <div className="strip" data-testid="table-strip">
             <div className="tables">
               {states.map(({ table, orders }) => (
@@ -203,39 +217,51 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
             </div>
             <button data-testid="all-tables" onClick={() => setMapOpen(true)}>⊞ All tables</button>
           </div>
-        ) : (
-          <div className="strip" data-testid="held-strip">
-            <span className="muted">Order on <b>{defaultTable?.code ?? '…'}</b></span>
-            <div className="tables">
-              {heldOrders.map((o) => (
-                <button key={o.id} data-testid="held-order" className="tbl busy" onClick={() => void resume(o.id)}>held · ₹{rs(o.totalPaise)}</button>
-              ))}
-            </div>
-            <button data-testid="hold" disabled={cart.length === 0 && !inOrder} onClick={() => void hold()}>Hold &amp; new</button>
-          </div>
         )}
-        <div className="srow">
+        <div className="srow" data-testid="held-strip">
+          {mode !== 'map' && (
+            <>
+              <button data-testid="held-btn" className={`chipbtn ${heldOrders.length ? 'busy' : ''}`} aria-label={`${heldOrders.length} held orders`} onClick={() => setHeldOpen(true)}>H{heldOrders.length}</button>
+              <span className="chipbtn static" data-testid="order-table" title="Table">{defaultTable?.code ?? '…'}</span>
+            </>
+          )}
           <input ref={searchRef} className="search" data-testid="search" value={q} onChange={(e) => setQ(e.target.value.trim())} onKeyDown={(e) => { if (e.key === 'Enter') quickAdd(); }}
             placeholder="Search item, or type a code (e.g. 0102)" aria-label="Search item or code" inputMode="search" autoComplete="off" />
           <button className="primary" data-testid="add-code" disabled={!exactEntry} onClick={quickAdd}>Add</button>
         </div>
-        <div className="muted hint" data-testid="code-hint">{hint}</div>
+        {hint && <div className="muted hint" data-testid="code-hint">{hint}</div>}
         {showPopular && popularEntries.length > 0 && (
           <div data-testid="popular"><h3>Popular</h3><div className="grid pop">{popularEntries.map((e) => tile(e, 'pop-'))}</div></div>
         )}
-        <div className="cats">
-          <button className={category === 'all' ? 'active' : ''} onClick={() => setCategory('all')}>All</button>
-          {menu.categories.map((c) => <button key={c.id} className={category === c.id ? 'active' : ''} onClick={() => setCategory(c.id)}>{c.name}</button>)}
-        </div>
-        {(dietMarks.length > 0 || menu.tags.length > 0) && (
-          <div className="cats" data-testid="filter-row">
-            {dietMarks.map((d) => <button key={d} data-testid={`filter-${d}`} className={filter === d ? 'active' : ''} onClick={() => setFilter(filter === d ? '' : d)}>{d === 'non_veg' ? 'Non-veg' : d[0]!.toUpperCase() + d.slice(1)}</button>)}
-            {menu.tags.map((t) => <button key={t.id} data-testid={`filter-${t.name}`} className={filter === t.id ? 'active' : ''} onClick={() => setFilter(filter === t.id ? '' : t.id)}>{t.name}</button>)}
+        <div className="browse">
+          <nav className="side" data-testid="filter-row" aria-label="Menu filters">
+            {dietMarks.length > 0 && ( // only when the manager has marked items veg / egg / non-veg
+              <div className="diets">
+                {dietMarks.map((d) => <button key={d} data-testid={`filter-${d}`} className={diet === d ? 'active' : ''} aria-pressed={diet === d} onClick={() => setDiet(diet === d ? '' : d)}>{d === 'non_veg' ? 'Non-veg' : d[0]!.toUpperCase() + d.slice(1)}</button>)}
+              </div>
+            )}
+            <button className="sechead" data-testid="cats-toggle" aria-expanded={catsOpen} onClick={() => setCatsOpen(!catsOpen)}>Category <span>{catsOpen ? '▾' : '▸'}</span></button>
+            {catsOpen && (
+              <div className="seclist">
+                <button className={category === 'all' ? 'active' : ''} onClick={() => setCategory('all')}>All</button>
+                {menu.categories.map((c) => <button key={c.id} className={category === c.id ? 'active' : ''} onClick={() => setCategory(c.id)}>{c.name}</button>)}
+              </div>
+            )}
+            {menu.tags.length > 0 && (
+              <>
+                <button className="sechead" data-testid="tags-toggle" aria-expanded={tagsOpen} onClick={() => setTagsOpen(!tagsOpen)}>Tags <span>{tagsOpen ? '▾' : '▸'}</span></button>
+                {tagsOpen && (
+                  <div className="seclist">
+                    {menu.tags.map((t) => <button key={t.id} data-testid={`filter-${t.name}`} className={tag === t.id ? 'active' : ''} aria-pressed={tag === t.id} onClick={() => setTag(tag === t.id ? '' : t.id)}>{t.name}</button>)}
+                  </div>
+                )}
+              </>
+            )}
+          </nav>
+          <div className="grid">
+            {visible.length === 0 && <p className="muted">{q ? 'No match.' : 'Nothing to sell here yet.'}</p>}
+            {visible.map((e) => tile(e))}
           </div>
-        )}
-        <div className="grid">
-          {visible.length === 0 && <p className="muted">{q ? 'No match.' : 'Nothing to sell here yet.'}</p>}
-          {visible.map((e) => tile(e))}
         </div>
       </section>
       <aside className="cart">
@@ -269,6 +295,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           </div>
         )}
         <div className="actions">
+          <button data-testid="print-bill" disabled={lines.length === 0} onClick={showBill}>Print bill</button>
           <button data-testid="clear" disabled={lines.length === 0} onClick={() => void clear()}>Clear</button>
           {!inOrder && mode === 'default' && (
             <button data-testid="save-order" disabled={cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage('Order saved.'); })}>Save order</button>
@@ -297,6 +324,21 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           </div>
         </div>
       )}
+      {heldOpen && (
+        <div className="overlay" role="dialog" aria-label="Held orders">
+          <div className="dialog">
+            <div className="row"><h2>Held orders</h2><span className="spacer" /><button data-testid="held-close" onClick={() => setHeldOpen(false)}>Close</button></div>
+            <button data-testid="hold" className="primary" disabled={cart.length === 0 && !inOrder} onClick={() => void hold()}>Hold current &amp; start new</button>
+            {heldOrders.length === 0 && <p className="muted">No held orders.</p>}
+            {heldOrders.map((o) => (
+              <button key={o.id} data-testid="held-order" className="tbl busy" onClick={() => void resume(o.id)}>
+                {o.lines.map((l) => `${l.qty} × ${l.name}`).join(', ')} · ₹{rs(o.totalPaise)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {bill && <DraftBill lines={bill.lines} totals={bill.totals} device={device} staffName={actor.name} onClose={() => setBill(null)} />}
       {paying && <PayDialog key={paying} initialMode={paying} total={paise(total)} onCancel={() => setPaying(null)} onConfirm={finish} />}
     </div>
   );
