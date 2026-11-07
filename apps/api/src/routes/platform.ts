@@ -338,35 +338,63 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
     return tpl ?? notFound(reply);
   });
 
+  /** Writes a template's categories and items in order. Returns the new template id. */
+  async function insertTemplate(c: import('pg').PoolClient, data: z.infer<typeof templateBody>): Promise<string> {
+    const t = (await c.query('INSERT INTO catalog_template (name) VALUES ($1) RETURNING id', [data.name])).rows[0];
+    for (const [ci, cat] of data.categories.entries()) {
+      const k = (await c.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat.name, ci])).rows[0];
+      for (const [ii, it] of cat.items.entries()) {
+        await c.query(
+          `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, description, image_sha256, gst_rate_bp, price_paise, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [t.id, k.id, it.name, it.hsnCode ?? null, it.description ?? null, it.imageSha256 ?? null, it.gstRateBp, it.pricePaise, ii]);
+      }
+    }
+    return t.id as string;
+  }
+  const tooManyPictures = (data: z.infer<typeof templateBody>) =>
+    // The tenant keeps at most ITEM_IMAGE_MAX_PER_TENANT distinct pictures, so a template may not need more than that.
+    new Set(data.categories.flatMap((k) => k.items.map((i) => i.imageSha256)).filter(Boolean)).size > ITEM_IMAGE_MAX_PER_TENANT;
+  const templateWriteError = (e: unknown, reply: FastifyReply) => {
+    const code = (e as { code?: string }).code;
+    if (code === '23505') return reply.code(409).send({ error: 'template name taken' });
+    if (code === '23514' || code === '23503') return bad(reply); // HSN or GST rate outside the table checks, or a picture that was never uploaded
+    throw e;
+  };
+
   app.post('/platform/catalog-templates', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
     const body = templateBody.safeParse(req.body);
-    if (!body.success) return bad(reply);
-    // The tenant keeps at most ITEM_IMAGE_MAX_PER_TENANT distinct pictures, so a template may not need more than that.
-    const distinct = new Set(body.data.categories.flatMap((k) => k.items.map((i) => i.imageSha256)).filter(Boolean));
-    if (distinct.size > ITEM_IMAGE_MAX_PER_TENANT) return bad(reply);
+    if (!body.success || tooManyPictures(body.data)) return bad(reply);
     const a = req.admin!;
     try {
       const out = await withPlatform(async (c) => {
-        const t = (await c.query('INSERT INTO catalog_template (name) VALUES ($1) RETURNING id', [body.data.name])).rows[0];
-        for (const [ci, cat] of body.data.categories.entries()) {
-          const k = (await c.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat.name, ci])).rows[0];
-          for (const [ii, it] of cat.items.entries()) {
-            await c.query(
-              `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, description, image_sha256, gst_rate_bp, price_paise, sort_order)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-              [t.id, k.id, it.name, it.hsnCode ?? null, it.description ?? null, it.imageSha256 ?? null, it.gstRateBp, it.pricePaise, ii]);
-          }
-        }
-        await platformAudit(c, { adminId: a.adminId, action: 'catalog.create', entity: 'catalog_template', entityId: t.id, detail: { name: body.data.name } });
-        return loadTemplate(c, t.id);
+        const id = await insertTemplate(c, body.data);
+        await platformAudit(c, { adminId: a.adminId, action: 'catalog.create', entity: 'catalog_template', entityId: id, detail: { name: body.data.name } });
+        return loadTemplate(c, id);
       });
       return reply.code(201).send(out);
-    } catch (e) {
-      const code = (e as { code?: string }).code;
-      if (code === '23505') return reply.code(409).send({ error: 'template name taken' });
-      if (code === '23514' || code === '23503') return bad(reply); // HSN or GST rate outside the table checks, or a picture that was never uploaded
-      throw e;
-    }
+    } catch (e) { return templateWriteError(e, reply); }
+  });
+
+  // Saving an edited template. Template rows are never deleted or rewritten (the platform role holds no DELETE on them),
+  // so an edit retires the current version (soft delete) and writes the new content as a fresh template, in one
+  // transaction. The reply carries the new id; the old version stays in the database as history. Tenants seeded earlier
+  // are unaffected either way: a seed copies the template and keeps no link to it.
+  app.put('/platform/catalog-templates/:id', { config: { ...owner, ...strict(30) } }, async (req, reply) => {
+    const params = idParams.safeParse(req.params);
+    const body = templateBody.safeParse(req.body);
+    if (!params.success || !body.success || tooManyPictures(body.data)) return bad(reply);
+    const a = req.admin!;
+    try {
+      const out = await withPlatform(async (c) => {
+        const old = await c.query('UPDATE catalog_template SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id', [params.data.id]);
+        if (old.rowCount === 0) return null;
+        const id = await insertTemplate(c, body.data);
+        await platformAudit(c, { adminId: a.adminId, action: 'catalog.update', entity: 'catalog_template', entityId: id, detail: { name: body.data.name, replaces: params.data.id } });
+        return loadTemplate(c, id);
+      });
+      return out ?? notFound(reply);
+    } catch (e) { return templateWriteError(e, reply); }
   });
 
   // Pictures are uploaded first, by content, and templates then refer to them by hash. Idempotent: the same bytes give

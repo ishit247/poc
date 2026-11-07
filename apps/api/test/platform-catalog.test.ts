@@ -153,3 +153,30 @@ test('the tenant API role cannot read or write the catalog', async () => {
     await assert.rejects(pool.query(`SELECT 1 FROM ${t}`), /permission denied/, t);
   }
 });
+
+test('an edit retires the old version and returns the new one; support, unknown ids and taken names are refused', async () => {
+  const app = buildApp();
+  const owner = await signIn(app, OWNER);
+  const name = `Edit ${uniq()}`;
+  const made = (await send(app, 'POST', '/platform/catalog-templates', owner, body(name))).json();
+  const put = (id: string, t: string, payload: object) => app.inject({ method: 'PUT', url: `/platform/catalog-templates/${id}`, headers: plat(t), payload });
+
+  const edited = { ...body(name), categories: [{ name: 'Snacks', items: [{ name: 'Samosa XL', hsnCode: '21069099', gstRateBp: 500, pricePaise: 1800 }] }] };
+  const r = await put(made.id, owner, edited);
+  assert.equal(r.statusCode, 200);
+  const next = r.json();
+  assert.notEqual(next.id, made.id, 'the edit is a new version');
+  assert.equal(next.categories[0].items[0].name, 'Samosa XL');
+  assert.equal((await get(app, `/platform/catalog-templates/${made.id}`, owner)).statusCode, 404, 'the old version is retired');
+  const listed = (await get(app, '/platform/catalog-templates', owner)).json() as { id: string; name: string }[];
+  assert.equal(listed.filter((t) => t.name === name).length, 1, 'one live template under that name');
+
+  assert.equal((await put(made.id, owner, edited)).statusCode, 404, 'the retired id cannot be edited again');
+  const other = (await send(app, 'POST', '/platform/catalog-templates', owner, body(`Other ${uniq()}`))).json();
+  assert.equal((await put(other.id, owner, { ...edited, name })).statusCode, 409, 'renaming onto a live name is refused');
+  assert.equal((await get(app, `/platform/catalog-templates/${other.id}`, owner)).statusCode, 200, 'a refused edit leaves the template as it was');
+
+  const support = await signIn(app, SUPPORT);
+  assert.equal((await put(next.id, support, edited)).statusCode, 403);
+  assert.equal((await put(next.id, owner, { name, categories: [] })).statusCode, 400);
+});

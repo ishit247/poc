@@ -78,10 +78,31 @@ check as `item_price.gst_rate_bp` (0 to 4000 basis points). `price_paise` is the
 | `GET /platform/catalog-templates` | any console user | List templates with item counts. |
 | `GET /platform/catalog-templates/:id` | any console user | One template with categories and items. |
 | `POST /platform/catalog-templates` | owner | Create a template with its categories and items in one body. |
+| `PUT /platform/catalog-templates/:id` | owner | Save an edited template (same body as POST). The platform role has no DELETE on template rows, so an edit retires the current version (soft delete) and writes the new content as a fresh template in one transaction; the reply carries the **new id**. 404 for a retired or unknown id, 409 if the name is taken by another live template. |
 | `DELETE /platform/catalog-templates/:id` | owner | Soft-delete a template. Already-seeded tenants are unaffected. |
 | `PUT /platform/catalog-images` | owner | Upload one picture (raw body, `image/png`, `image/jpeg` or `image/webp`, at most 64 KB). Returns `{ sha256 }`; a template item refers to that hash. |
 | `GET /platform/catalog-images/:sha256` | any console user | The picture's bytes. |
 | `POST /platform/tenants/:id/seed-catalog` | owner | Copy a template into the tenant. Body `{ templateId }`. 409 if the tenant already has a menu. |
 
-Every write is recorded in `platform_audit` (`catalog.create`, `catalog.delete`, `catalog.seed`) and the seed also
+Every write is recorded in `platform_audit` (`catalog.create`, `catalog.update`, `catalog.delete`, `catalog.seed`) and the seed also
 writes a tenant `audit` row.
+
+## Editing and bulk import (console, Catalog)
+
+The Catalog screen edits a template in a grid (inline cells, paste from a spreadsheet, bulk GST/HSN, undo) and saves it with
+`PUT`. **Import folder** takes a folder holding `catalog.csv` and the pictures, dropped on the dialog or the grid, or chosen with
+a picker:
+
+```
+category,item,hsn,gst,price,description,image
+Snacks,Samosa,21069099,5,12,Crisp pastry,images/samosa.jpg
+```
+
+- Columns are found by header name, in any order; without a header they are read in the order above. Prices are rupees excluding
+  GST; GST is a percent.
+- The `image` column names the picture file (a bare name or a path ending in it). A row with no `image` value is matched to a
+  picture by item name (case, dashes and extension ignored). A picture serves one row; pictures nothing uses wait in a tray.
+- The preview reports items and categories, pictures found and missing, unused pictures and rows with problems before anything
+  changes. Rows with problems are still imported and marked in the grid; Save is blocked until they are fixed.
+- Pictures are shrunk in the browser (320 px, WebP, under 64 KB) and uploaded, by content hash, when the template is saved.
+- Export CSV writes the data only; the `image` column is left empty.
