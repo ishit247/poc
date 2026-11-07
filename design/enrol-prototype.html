@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Counter setup prototype</title>
+<style>
+:root{
+  --bg:#f4f5f3; --surface:#fff; --fg:#1b1f1d; --muted:#667069; --line:#e4e7e1; --border:#d3d7cf;
+  --s1:#fbfcfb; --s2:#f1f4f1;
+  --primary:#1f4e3d; --primary-600:#2a6650; --primary-50:#e6f0eb; --on-soft:#1f4e3d;
+  --rail:#1f4e3d; --rail-fg:#e4f1ea; --rail-mute:#a9c9ba;
+  --warn:#b25e00; --warn-bg:#fff4e0; --warn-line:#f0dcb3;
+  --danger:#b3261e; --danger-bg:#fdecea; --danger-line:#f4c7c3;
+  --ok:#1a7f37; --ok-bg:#e8f5ec; --ok-line:#bfe3c8;
+  --shadow:0 1px 2px rgba(20,30,25,.06),0 6px 20px rgba(20,30,25,.06);
+  color-scheme:light;
+}
+:root[data-theme=dark]{
+  --bg:#16191a; --surface:#22282a; --fg:#e8ebe9; --muted:#9aa5a2; --line:#2f3739; --border:#3f484b;
+  --s1:#262d2f; --s2:#2b3335;
+  --primary:#3b8c6d; --primary-600:#4aa07f; --primary-50:#24433a; --on-soft:#c4ead9;
+  --rail:#1b2d27; --rail-fg:#e4f1ea; --rail-mute:#8fb2a2;
+  --warn:#f0a24a; --warn-bg:#3d3417; --warn-line:#5b4d20;
+  --danger:#ff8a8a; --danger-bg:#442626; --danger-line:#6b3a3a;
+  --ok:#5fd68a; --ok-bg:#1e3a2a; --ok-line:#2f5a41;
+  --shadow:none; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
+.hidden{display:none!important}
+.muted{color:var(--muted)}
+.sp{flex:1}
+
+/* buttons: same scale as the manager screens */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 20px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--fg);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--s2)}
+.btn:focus-visible,input:focus-visible,select:focus-visible,.chipb:focus-visible,.tile:focus-visible,.key:focus-visible{outline:3px solid #6fae96;outline-offset:2px}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn.primary:hover{background:var(--primary-600)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--on-soft)}
+.btn.ghost:hover{background:var(--primary-50)}
+.btn.block{width:100%}
+.btn.sm{min-height:38px;padding:0 14px;font-size:15px;border-radius:8px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+input[type=text],input[type=email],input[type=password]{width:100%;min-height:52px;padding:0 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--fg);font:inherit}
+input.err{border-color:var(--danger);background:var(--danger-bg)}
+label.f{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:var(--muted)}
+.hint{font-size:14px;color:var(--muted)}
+.fielderr{display:flex;gap:8px;color:var(--danger);font-size:14px;font-weight:600}
+
+/* page: card sits near the top, no scrolling at 1024x768 */
+.page{max-width:1024px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.topline{display:flex;align-items:center;gap:10px;padding:0 4px}
+.topline .sync{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--ok);display:inline-block}
+.dot.off{background:var(--danger)}
+
+.shell{display:grid;grid-template-columns:280px 1fr;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);overflow:hidden;min-height:560px}
+@media (max-width:760px){.shell{grid-template-columns:1fr}.rail{display:none}}
+.rail{background:var(--rail);color:var(--rail-fg);padding:24px 22px;display:flex;flex-direction:column;gap:22px}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:40px;height:40px;border-radius:10px;background:#fff;color:var(--primary);display:grid;place-items:center;font-weight:800;font-size:18px}
+.brand b{display:block;font-size:17px;line-height:1.1}
+.brand small{color:var(--rail-mute)}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.steps li{display:flex;gap:12px;align-items:flex-start;padding:10px 0;position:relative;color:var(--rail-mute)}
+.steps li::before{content:"";position:absolute;left:13px;top:38px;bottom:-10px;width:2px;background:rgba(255,255,255,.18)}
+.steps li:last-child::before{display:none}
+.steps .n{width:28px;height:28px;border-radius:50%;border:2px solid rgba(255,255,255,.35);display:grid;place-items:center;font-size:13px;font-weight:700;flex:none;background:var(--rail)}
+.steps b{display:block;color:inherit;font-weight:600}
+.steps small{font-size:13px;opacity:.85}
+.steps li.cur{color:#fff}
+.steps li.cur .n{background:#fff;color:var(--primary);border-color:#fff}
+.steps li.done .n{background:#5fd68a;border-color:#5fd68a;color:#0e2a1b}
+.steps li.done{color:var(--rail-fg)}
+.railnote{margin-top:auto;font-size:13px;color:var(--rail-mute);border-top:1px solid rgba(255,255,255,.15);padding-top:14px}
+
+.pane{padding:28px 34px;display:flex;flex-direction:column;gap:16px;max-width:620px;width:100%;margin:0 auto}
+.pane h1{margin:0;font-size:26px;line-height:1.15}
+.pane .lead{margin:-6px 0 0;color:var(--muted)}
+.alert{display:flex;gap:10px;padding:10px 14px;border-radius:12px;border:1px solid;font-size:15px;align-items:flex-start}
+.alert.warn{background:var(--warn-bg);border-color:var(--warn-line)}
+.alert.bad{background:var(--danger-bg);border-color:var(--danger-line);color:var(--danger)}
+.alert.info{background:var(--primary-50);border-color:var(--border)}
+.linkrow{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:15px;flex-wrap:wrap}
+.divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:13px}
+.divider::before,.divider::after{content:"";height:1px;background:var(--line);flex:1}
+
+/* code entry */
+.codebox{font-family:ui-monospace,Consolas,monospace;letter-spacing:.02em;font-size:17px}
+.inputrow{display:flex;gap:8px}
+.inputrow .btn{flex:none}
+
+/* progress */
+.prog{display:flex;flex-direction:column;gap:6px;padding:6px 0}
+.prow{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--s1)}
+.prow .st{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:14px;font-weight:700;flex:none;border:2px solid var(--border);color:var(--muted)}
+.prow.done .st{background:var(--ok);border-color:var(--ok);color:#fff}
+.prow.run .st{border-color:var(--primary);border-top-color:transparent;animation:spin .8s linear infinite}
+.prow.run{border-color:var(--primary);background:var(--primary-50)}
+.prow.wait{opacity:.55}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.prow.run .st{animation:none}}
+
+/* segmented choice chips */
+.chipset{display:flex;gap:8px;flex-wrap:wrap}
+.chipb{min-height:48px;min-width:72px;padding:0 18px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--fg);font:inherit;font-weight:700;cursor:pointer}
+.chipb[aria-pressed=true]{background:var(--primary-50);border-color:var(--primary);color:var(--on-soft);box-shadow:inset 0 0 0 1px var(--primary)}
+
+/* the created code */
+.codecard{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--s1)}
+.codecard .top{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:14px}
+.codecard code{display:block;padding:14px;font:600 15px/1.5 ui-monospace,Consolas,monospace;word-break:break-all;color:var(--fg);background:var(--surface)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:700;border:1px solid}
+.pill.ok{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
+.summary{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:15px;padding:12px 14px;border-radius:12px;background:var(--s2)}
+.summary dt{color:var(--muted)} .summary dd{margin:0;font-weight:600}
+
+/* password */
+.pwwrap{position:relative}
+.pwwrap .btn{position:absolute;right:6px;top:7px;min-height:38px}
+.meter{display:flex;gap:4px;margin-top:2px}
+.meter i{flex:1;height:5px;border-radius:3px;background:var(--line)}
+.meter i.on1{background:var(--danger)}.meter i.on2{background:var(--warn)}.meter i.on3{background:var(--ok)}
+.reqs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:15px}
+.reqs li{display:flex;gap:8px;align-items:center;color:var(--muted)}
+.reqs li.ok{color:var(--ok)}
+.reqs .tick{width:20px;height:20px;border-radius:50%;border:2px solid var(--border);display:grid;place-items:center;font-size:12px;flex:none}
+.reqs li.ok .tick{background:var(--ok);border-color:var(--ok);color:#fff}
+
+/* staff + pin */
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.tile{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--border);border-radius:14px;background:var(--surface);color:var(--fg);font:inherit;text-align:left;cursor:pointer;min-height:72px}
+.tile:hover{border-color:var(--primary);background:var(--primary-50)}
+.avatar{width:44px;height:44px;border-radius:50%;background:var(--primary-50);color:var(--on-soft);display:grid;place-items:center;font-weight:800;flex:none}
+.tile b{display:block}.tile small{color:var(--muted);text-transform:capitalize}
+.pinwrap{display:grid;grid-template-columns:1fr 280px;gap:24px;align-items:center}
+@media (max-width:760px){.pinwrap{grid-template-columns:1fr}}
+.dots{display:flex;gap:10px;justify-content:center;margin:6px 0 4px}
+.dots i{width:16px;height:16px;border-radius:50%;border:2px solid var(--border)}
+.dots i.on{background:var(--primary);border-color:var(--primary)}
+.shake{animation:shake .35s}
+@keyframes shake{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.key{min-height:64px;border-radius:14px;border:1px solid var(--border);background:var(--surface);color:var(--fg);font:600 24px system-ui;cursor:pointer}
+.key:active{background:var(--primary-50)}
+.key.ghost{border-color:transparent;background:transparent;font-size:16px;color:var(--muted)}
+.success{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:30px 0}
+.success .big{width:64px;height:64px;border-radius:50%;background:var(--ok-bg);color:var(--ok);display:grid;place-items:center;font-size:30px;border:1px solid var(--ok-line)}
+
+.proto{background:#16211c;color:#cfe3d9;font-size:13px;padding:6px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.proto button{background:#2a3a33;border:1px solid #3d5247;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit}
+.proto button.on{background:#e4f1ea;color:#0e2a1b;border-color:#e4f1ea}
+</style>
+</head>
+<body>
+<div class="proto">
+  <b>Prototype</b> jump to a screen:
+  <button data-go="code">1 Enter code</button>
+  <button data-go="busy">2 Setting up</button>
+  <button data-go="login">Manager sign-in</button>
+  <button data-go="maker">Create code</button>
+  <button data-go="invite">Invite / password</button>
+  <button data-go="staff">3 Who is working</button>
+  <span class="sp"></span>
+  <button id="themeBtn">Dark</button>
+</div>
+
+<div class="page">
+  <div class="topline">
+    <span class="sync" id="net"><span class="dot"></span> Online</span>
+    <span class="sp"></span>
+    <span class="hint">Enrolment needs a connection</span>
+  </div>
+
+  <div class="shell">
+    <!-- left rail: where you are in setup -->
+    <aside class="rail">
+      <div class="brand"><div class="logo">B</div><div><b>Bodhchakra POS</b><small>Counter setup</small></div></div>
+      <ol class="steps" id="steps">
+        <li data-s="1"><span class="n">1</span><div><b>Enrol this tablet</b><small>Enter the code from your manager</small></div></li>
+        <li data-s="2"><span class="n">2</span><div><b>Connect</b><small>Load the menu and staff list</small></div></li>
+        <li data-s="3"><span class="n">3</span><div><b>Sign in</b><small>Pick your name and enter your PIN</small></div></li>
+      </ol>
+      <div class="railnote">Managers: use “Create a code” to set up another counter.</div>
+    </aside>
+
+    <section class="pane" id="pane"></section>
+  </div>
+</div>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const pane=$('#pane');
+let screen='code', code='', madeCode='', tick=null, fromMaker=false;
+
+const setStep=n=>$$('#steps li').forEach(li=>{const k=+li.dataset.s;li.className=k<n?'done':k===n?'cur':'';li.querySelector('.n').textContent=k<n?'✓':k;});
+
+const SCREENS={
+/* ---------------- 1. enter code ---------------- */
+code:()=>{setStep(1);return `
+  <h1>Set up this counter</h1>
+  <p class="lead">Type the enrolment code your manager gave you. Each code works once.</p>
+  <label class="f">Enrolment code
+    <div class="inputrow"><input id="codeIn" class="codebox" type="text" value="${esc(code)}" placeholder="Paste or type the code" autocapitalize="off" autocomplete="off" spellcheck="false">
+    <button class="btn" id="pasteBtn" type="button">Paste</button></div></label>
+  <div class="fielderr hidden" id="codeErr" role="alert"><span>⚠</span><span>That code wasn’t accepted. It may be used, expired or mistyped. Ask your manager for a new one.</span></div>
+  <button class="btn primary block" id="goBtn" disabled>Set up this counter</button>
+  <div class="divider">or</div>
+  <div class="linkrow">Are you the manager? <button class="btn ghost sm" id="mgrBtn">Sign in to create a code</button></div>`},
+
+/* ---------------- 2. setting up ---------------- */
+busy:()=>{setStep(2);return `
+  <h1>Setting up…</h1>
+  <p class="lead">Keep this tablet online. It only takes a moment.</p>
+  <div class="prog" id="prog">
+    <div class="prow wait"><span class="st">1</span><div><b>Checking the code</b></div></div>
+    <div class="prow wait"><span class="st">2</span><div><b>Registering this tablet</b></div></div>
+    <div class="prow wait"><span class="st">3</span><div><b>Downloading the menu and staff list</b></div></div>
+  </div>`},
+
+/* ---------------- manager sign-in ---------------- */
+login:()=>{setStep(1);return `
+  <h1>Manager sign-in</h1>
+  <p class="lead">Sign in to create a code for this or another counter.</p>
+  <label class="f">Email<input type="email" id="em" value="a1@example.test" autocomplete="username"></label>
+  <label class="f">Password<div class="pwwrap"><input type="password" id="pw" value="dev-password-123" autocomplete="current-password"><button class="btn ghost sm" type="button" data-show="pw">Show</button></div></label>
+  <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-top:4px">
+    <button class="btn" id="backBtn">Back</button>
+    <button class="btn primary" id="loginGo">Sign in</button></div>`},
+
+/* ---------------- create a code ---------------- */
+maker:()=>{setStep(1);return madeCode?`
+  <h1>Your code is ready</h1>
+  <p class="lead">Use it on this tablet now, or read it out for another one.</p>
+  <dl class="summary"><dt>Outlet</dt><dd>School 1 Canteen</dd><dt>Counter</dt><dd id="sumC">${sel.counter}</dd></dl>
+  <div class="codecard">
+    <div class="top"><span class="pill ok">One use</span><span class="pill warn" id="exp">Expires in 10:00</span><span class="sp"></span>
+      <button class="btn sm" id="copyBtn">Copy</button></div>
+    <code id="theCode">${madeCode}</code>
+  </div>
+  <button class="btn primary block" id="useNow">Set up this tablet now</button>
+  <div style="display:flex;gap:10px"><button class="btn" id="backBtn">Back</button><button class="btn ghost" id="newCode">Make a different code</button></div>`:`
+  <h1>Create an enrolment code</h1>
+  <p class="lead">Choose which counter the new tablet will be.</p>
+  <label class="f">Outlet
+    <select id="outlet" style="min-height:52px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--fg);font:inherit"><option>School 1 Canteen</option><option>School 2 Canteen</option></select></label>
+  <div class="f" style="display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:var(--muted)">Counter
+    <div class="chipset" id="counters">${['C1','C2'].map(c=>`<button class="chipb" data-c="${c}" aria-pressed="${c===sel.counter}">${c}</button>`).join('')}</div></div>
+  <button class="btn primary block" id="makeBtn">Create code</button>
+  <button class="btn" id="backBtn" style="align-self:flex-start">Back</button>`},
+
+/* ---------------- invite: choose password ---------------- */
+invite:()=>{setStep(1);return `
+  <h1>Welcome. Choose your password</h1>
+  <p class="lead">You’ll use it with your email to sign in as manager. Nobody else sees it.</p>
+  <label class="f">New password<div class="pwwrap"><input type="password" id="np" autocomplete="new-password" placeholder="12 or more characters"><button class="btn ghost sm" type="button" data-show="np">Show</button></div></label>
+  <div class="meter" id="meter" aria-hidden="true"><i></i><i></i><i></i></div>
+  <label class="f">Type it again<input type="password" id="np2" autocomplete="new-password"></label>
+  <ul class="reqs" id="reqs">
+    <li data-r="len"><span class="tick">✓</span>At least 12 characters</li>
+    <li data-r="match"><span class="tick">✓</span>Both passwords match</li></ul>
+  <button class="btn primary block" id="saveBtn" disabled>Save password</button>`},
+
+/* ---------------- 3. who is working ---------------- */
+staff:()=>{setStep(3);return `
+  <h1>Who is working?</h1>
+  <p class="lead">School 1 Canteen · Counter C1</p>
+  <div class="tiles">
+    ${[['School 1 Canteen cashier','cashier'],['School 1 Canteen waiter','waiter'],['School 1 Canteen manager','manager']].map(([n,r])=>`
+    <button class="tile" data-who="${n}"><span class="avatar">${n.split(' ').pop()[0].toUpperCase()}</span><span><b>${n.replace('School 1 Canteen ','')}</b><small>${r}</small></span></button>`).join('')}
+  </div>`},
+pin:(who)=>{setStep(3);return `
+  <button class="btn ghost sm" id="whoBack" style="align-self:flex-start">‹ Not you?</button>
+  <div class="pinwrap">
+    <div style="display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center">
+      <span class="avatar" style="width:64px;height:64px;font-size:26px">${who.split(' ').pop()[0].toUpperCase()}</span>
+      <h1 style="font-size:24px">${who.replace('School 1 Canteen ','').replace(/^./,c=>c.toUpperCase())}</h1>
+      <div class="hint">Enter your PIN</div>
+      <div class="dots" id="dots">${'<i></i>'.repeat(6)}</div>
+      <div class="fielderr hidden" id="pinErr" role="alert"><span>⚠</span><span>Wrong PIN. Try again.</span></div>
+      <button class="btn primary" id="pinGo" style="min-width:200px" disabled>Sign in</button>
+    </div>
+    <div class="pad" id="pad">${[1,2,3,4,5,6,7,8,9].map(d=>`<button class="key" data-k="${d}">${d}</button>`).join('')}
+      <button class="key ghost" data-k="clear">Clear</button><button class="key" data-k="0">0</button><button class="key ghost" data-k="del" aria-label="Delete">⌫</button></div>
+  </div>`},
+done:(who)=>{setStep(4);return `<div class="success"><div class="big">✓</div><h1>You’re signed in</h1><p class="lead">${who} · opening the drawer next.</p><button class="btn" data-go="code">Restart demo</button></div>`}
+};
+const sel={counter:'C1'};
+function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+function show(name,arg){
+  screen=name; clearInterval(tick); pane.innerHTML=SCREENS[name](arg);
+  $$('.proto [data-go]').forEach(b=>b.classList.toggle('on',b.dataset.go===name));
+  wire(name,arg);
+  const first=pane.querySelector('input:not([type=hidden]),button.tile'); if(first&&name!=='busy')first.focus({preventScroll:true});
+}
+
+function wire(name,arg){
+  if(name==='code'){
+    const inp=$('#codeIn'), go=$('#goBtn'), err=$('#codeErr');
+    const upd=()=>{code=inp.value;go.disabled=!inp.value.trim();inp.classList.remove('err');err.classList.add('hidden');};
+    inp.addEventListener('input',upd); upd();
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter'&&!go.disabled)go.click();});
+    $('#pasteBtn').addEventListener('click',async()=>{try{inp.value=await navigator.clipboard.readText();}catch{inp.value='00000000-0000-4000-8000-00000000000a.29fed3f-9dcb-4b7a-94e1-962fe5b0f347.YNNWKGHFX4FHBA3Y';}upd();inp.focus();});
+    go.addEventListener('click',()=>{ if(inp.value.trim().toLowerCase()==='wrong'){inp.classList.add('err');err.classList.remove('hidden');return;} show('busy'); });
+    $('#mgrBtn').addEventListener('click',()=>{fromMaker=true;show('login');});
+  }
+  if(name==='busy'){
+    const rows=$$('#prog .prow'); let i=0;
+    const step=()=>{rows.forEach((r,k)=>{r.className='prow '+(k<i?'done':k===i?'run':'wait');r.querySelector('.st').textContent=k<i?'✓':k+1;});
+      if(i>=rows.length){clearInterval(tick);return show('staff');} i++;};
+    step(); tick=setInterval(step,900);
+  }
+  if(name==='login'){
+    $('#backBtn').addEventListener('click',()=>show('code'));
+    $('#loginGo').addEventListener('click',()=>{madeCode='';show('maker');});
+  }
+  if(name==='maker'){
+    $('#backBtn').addEventListener('click',()=>{madeCode='';show('code');});
+    if(!madeCode){
+      $$('#counters .chipb').forEach(b=>b.addEventListener('click',()=>{sel.counter=b.dataset.c;$$('#counters .chipb').forEach(x=>x.setAttribute('aria-pressed',x===b));}));
+      $('#makeBtn').addEventListener('click',()=>{madeCode='00000000-0000-4000-8000-00000000000a.29fed3f-9dcb-4b7a-94e1-962fe5b0f347.YNNWKGHFX4FHBA3Y';show('maker');});
+    } else {
+      let left=600; const exp=$('#exp');
+      tick=setInterval(()=>{left--;exp.textContent='Expires in '+Math.floor(left/60)+':'+String(left%60).padStart(2,'0');if(left<=0){clearInterval(tick);exp.className='pill warn';exp.textContent='Expired';}},1000);
+      $('#copyBtn').addEventListener('click',async e=>{const b=e.currentTarget;try{await navigator.clipboard.writeText(madeCode);}catch{} b.textContent='✓ Copied';setTimeout(()=>b.textContent='Copy',1500);});
+      $('#useNow').addEventListener('click',()=>{code=madeCode;madeCode='';show('busy');});
+      $('#newCode').addEventListener('click',()=>{madeCode='';show('maker');});
+    }
+  }
+  if(name==='invite'){
+    const a=$('#np'),b=$('#np2'),save=$('#saveBtn');
+    const upd=()=>{const len=a.value.length>=12, match=b.value!==''&&a.value===b.value;
+      $('[data-r=len]').classList.toggle('ok',len);$('[data-r=match]').classList.toggle('ok',match);
+      const score=a.value.length>=16?3:a.value.length>=12?2:a.value.length>0?1:0;
+      $$('#meter i').forEach((i,k)=>i.className=k<score?'on'+score:'');
+      save.disabled=!(len&&match);};
+    a.addEventListener('input',upd);b.addEventListener('input',upd);
+    save.addEventListener('click',()=>show('login'));
+  }
+  if(name==='staff'){ $$('.tile').forEach(t=>t.addEventListener('click',()=>show('pin',t.dataset.who))); }
+  if(name==='pin'){
+    let pin=''; const dots=$$('#dots i'), go=$('#pinGo'), err=$('#pinErr');
+    const paint=()=>{dots.forEach((d,i)=>d.classList.toggle('on',i<pin.length));go.disabled=pin.length<6;err.classList.add('hidden');};
+    $('#pad').addEventListener('click',e=>{const k=e.target.closest('[data-k]')?.dataset.k;if(!k)return;
+      if(k==='del')pin=pin.slice(0,-1);else if(k==='clear')pin='';else if(pin.length<8)pin+=k; paint();});
+    document.onkeydown=e=>{if(screen!=='pin')return;if(/^\d$/.test(e.key)&&pin.length<8){pin+=e.key;paint();}else if(e.key==='Backspace'){pin=pin.slice(0,-1);paint();}else if(e.key==='Enter'&&!go.disabled)go.click();};
+    go.addEventListener('click',()=>{ if(pin==='482913')return show('done',arg);
+      pin='';paint();err.classList.remove('hidden');const d=$('#dots');d.classList.remove('shake');void d.offsetWidth;d.classList.add('shake');});
+    $('#whoBack').addEventListener('click',()=>show('staff'));
+    $('#pinHint')?.remove();
+  }
+  $$('[data-show]').forEach(b=>b.addEventListener('click',()=>{const i=$('#'+b.dataset.show);const t=i.type==='password';i.type=t?'text':'password';b.textContent=t?'Hide':'Show';}));
+  $$('[data-go]',pane).forEach(b=>b.addEventListener('click',()=>show(b.dataset.go)));
+}
+
+$$('.proto [data-go]').forEach(b=>b.addEventListener('click',()=>{madeCode=b.dataset.go==='maker'?'':madeCode;show(b.dataset.go);}));
+$('#themeBtn').addEventListener('click',e=>{const d=document.documentElement;const dark=d.dataset.theme!=='dark';d.dataset.theme=dark?'dark':'light';e.target.textContent=dark?'Light':'Dark';});
+show('code');
+</script>
+</body>
+</html>

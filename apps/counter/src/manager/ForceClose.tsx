@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { parseRupees } from '@pos/shared';
 import type { Blockers } from './api.ts';
+import { Modal } from './Modal.tsx';
 
 /**
  * A drawer its cashier cannot close. The manager counts the cash and enters it; the server works out the
@@ -17,17 +18,28 @@ export function ForceClose({ shift, onClose }: { shift: Blockers['openShifts'][n
     setBusy(true);
     try { await onClose(counted); } catch { setError('Could not reach the server.'); } finally { setBusy(false); }
   };
+  const dismiss = () => { setOpen(false); setCash(''); setError(''); };
   return (
-    <p className="warn" data-testid="mgr-shift">
-      {shift.cashier} still has a drawer open (since {new Date(shift.openedAt).toLocaleTimeString()}).{' '}
-      {!open ? <button data-testid="mgr-force-open" onClick={() => setOpen(true)}>Close it for them</button> : (
-        <span className="row">
-          <input data-testid="mgr-force-cash" inputMode="decimal" value={cash} onChange={(e) => { setCash(e.target.value); setError(''); }} placeholder="Cash counted, ₹" />
-          <button data-testid="mgr-force-go" className="primary" disabled={busy || !cash.trim()} onClick={go}>{busy ? 'Closing…' : 'Close drawer'}</button>
-          <button onClick={() => setOpen(false)}>Cancel</button>
-        </span>
+    <div className="m-row" data-testid="mgr-shift">
+      <div className="main">
+        <b>{shift.cashier}</b>
+        <span>Drawer open since {new Date(shift.openedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+      </div>
+      <button className="sm" data-testid="mgr-force-open" onClick={() => setOpen(true)}>Count &amp; close</button>
+      {open && (
+        <Modal title="Close drawer" onClose={dismiss}>
+          <p className="muted" style={{ margin: 0 }}>{shift.cashier}. Count the cash in the drawer and enter it. The server works out any difference.</p>
+          <label className="m-field">Cash counted (₹)
+            <input data-testid="mgr-force-cash" inputMode="decimal" autoFocus value={cash} onChange={(e) => { setCash(e.target.value); setError(''); }} placeholder="e.g. 500 or 500.50" autoComplete="off"
+              onKeyDown={(e) => { if (e.key === 'Enter' && cash.trim() && !busy) void go(); }} />
+          </label>
+          {error && <p className="error" role="alert" style={{ margin: 0 }}>{error}</p>}
+          <div className="m-dialog-actions">
+            <button onClick={dismiss}>Cancel</button>
+            <button data-testid="mgr-force-go" className="primary" disabled={busy || !cash.trim()} onClick={go}>{busy ? 'Closing…' : 'Close drawer'}</button>
+          </div>
+        </Modal>
       )}
-      {error && <span className="error" role="alert"> {error}</span>}
-    </p>
+    </div>
   );
 }

@@ -67,91 +67,115 @@ export function Settlements({ token }: { token: string }) {
   };
 
   const s = report?.summary;
+  const [over, setOver] = useState(false);
+  const pick = (f: File | undefined) => { if (f) { setFile(f); setFaults([]); setError(''); } };
+  const stat = (label: string, value: string | number, testid?: string, bad = false) => (
+    <div className="m-kpi"><small>{label}</small><div className={`v${bad ? ' warn' : ''}`} data-testid={testid}>{value}</div></div>
+  );
   return (
     <main className="mgr">
-      <h1>Platform settlements</h1>
-      <p className="muted">Upload the payout statement a platform sent. It is compared with our orders and reported; nothing we recorded is changed.</p>
+      <div className="m-head"><h1>Platform settlements</h1></div>
       {me && me.outlets.length === 0 && <p className="error">No outlet is assigned to you.</p>}
       {me && me.outlets.length > 0 && (
-        <div className="row wrap">
-          {me.outlets.length > 1 && (
-            <select data-testid="set-outlet" value={outletId} onChange={(e) => { setOutletId(e.target.value); setFaults([]); setError(''); }}>
-              {me.outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-            </select>
-          )}
-          <select data-testid="set-channel" value={channel} onChange={(e) => setChannel(e.target.value as 'zomato' | 'swiggy')}>
-            <option value="zomato">Zomato</option><option value="swiggy">Swiggy</option>
-          </select>
-          <label>From <input data-testid="set-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-          <label>To <input data-testid="set-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-          <input key={fileKey} data-testid="set-file" type="file" accept=".csv,text/csv" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setFaults([]); setError(''); }} />
-          <button data-testid="set-send" className="primary" disabled={!file || !from || !to || busy} onClick={send}>{busy ? 'Importing…' : 'Import'}</button>
-        </div>
+        <section className="m-card">
+          <header><h2>Import a payout statement</h2></header>
+          <div className="m-form">
+            <div className="muted">Upload the payout statement a platform sent. It is compared with our orders and reported; nothing we recorded is changed.</div>
+            <div className="m-filters" style={{ padding: 0 }}>
+              {me.outlets.length > 1 && (
+                <label>Outlet
+                  <select data-testid="set-outlet" value={outletId} onChange={(e) => { setOutletId(e.target.value); setFaults([]); setError(''); }}>
+                    {me.outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <label>Platform
+                <select data-testid="set-channel" value={channel} onChange={(e) => setChannel(e.target.value as 'zomato' | 'swiggy')}>
+                  <option value="zomato">Zomato</option><option value="swiggy">Swiggy</option>
+                </select>
+              </label>
+              <label>From <input data-testid="set-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+              <label>To <input data-testid="set-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+            </div>
+            <label className={`m-drop${over ? ' over' : ''}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+              onDrop={(e) => { e.preventDefault(); setOver(false); pick(e.dataTransfer.files[0]); }}>
+              <strong>{file ? file.name : 'Drop the CSV here'}</strong>
+              <span className="muted">{file ? `${Math.max(1, Math.round(file.size / 1024))} KB · ready to import` : 'or click to choose a file'}</span>
+              <span className="muted" style={{ fontSize: 13 }}>.csv, up to {Math.round((MAX_BYTES / 1_000_000) * 10) / 10} MB</span>
+              <input key={fileKey} data-testid="set-file" type="file" accept=".csv,text/csv" onChange={(e) => pick(e.target.files?.[0])} />
+            </label>
+            <div className="m-dialog-actions">
+              {file && <button onClick={() => { setFile(null); setFileKey((k) => k + 1); }}>Remove file</button>}
+              <button data-testid="set-send" className="primary" disabled={!file || !from || !to || busy} onClick={send}>{busy ? 'Importing…' : 'Import and compare'}</button>
+            </div>
+          </div>
+        </section>
       )}
-      {error && <p className="error" role="alert" data-testid="set-error">{error}</p>}
+      {error && <div className="m-alert bad" role="alert" data-testid="set-error"><span>⚠</span><div className="grow">{error}</div></div>}
       {faults.length > 0 && (
-        <ul data-testid="set-faults">{faults.map((f, i) => <li key={i}>{f.row > 0 ? `Row ${f.row}: ` : ''}{f.message}</li>)}</ul>
+        <ul data-testid="set-faults" className="m-card" style={{ margin: 0, padding: '10px 14px 10px 32px' }}>{faults.map((f, i) => <li key={i}>{f.row > 0 ? `Row ${f.row}: ` : ''}{f.message}</li>)}</ul>
       )}
 
       {report && s && (
-        <section data-testid="set-report">
-          <h2>{report.filename}</h2>
-          <p className="muted">{report.channel} · {report.periodFrom} to {report.periodTo} · uploaded by {report.uploadedBy}</p>
-          <table>
-            <tbody>
-              <tr><td>Lines in the statement</td><td>{s.lines}</td></tr>
-              <tr><td>Match our orders</td><td data-testid="set-matched">{s.matched}</td></tr>
-              <tr><td>Amount differs</td><td data-testid="set-mismatch" className={s.amountMismatch ? 'warn' : ''}>{s.amountMismatch}</td></tr>
-              <tr><td>We have no such order</td><td data-testid="set-unknown" className={s.unknownOrder ? 'warn' : ''}>{s.unknownOrder}</td></tr>
-              <tr><td>Paid but not delivered by us</td><td data-testid="set-undelivered" className={s.notDelivered ? 'warn' : ''}>{s.notDelivered}</td></tr>
-              <tr><td>Delivered but not in the statement</td><td data-testid="set-missing" className={s.missing ? 'warn' : ''}>{s.missing} ({rs(s.missingPaise)})</td></tr>
-              <tr><td>Gross / payout / commission</td><td>{rs(s.grossPaise)} / {rs(s.payoutPaise)} / {rs(s.commissionPaise)}</td></tr>
-            </tbody>
-          </table>
+        <section data-testid="set-report" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18 }}>{report.filename}</h2>
+            <div className="muted">{report.channel} · {report.periodFrom} to {report.periodTo} · uploaded by {report.uploadedBy}</div>
+          </div>
+          <div className="m-kpis">
+            {stat('Lines in the statement', s.lines)}
+            {stat('Match our orders', s.matched, 'set-matched')}
+            {stat('Amount differs', s.amountMismatch, 'set-mismatch', s.amountMismatch > 0)}
+            {stat('We have no such order', s.unknownOrder, 'set-unknown', s.unknownOrder > 0)}
+            {stat('Paid, not delivered by us', s.notDelivered, 'set-undelivered', s.notDelivered > 0)}
+            <div className="m-kpi"><small>Delivered, not in the statement</small><div className={`v${s.missing ? ' warn' : ''}`} data-testid="set-missing">{s.missing} ({rs(s.missingPaise)})</div></div>
+            <div className="m-kpi" style={{ gridColumn: 'span 2' }}><small>Gross / payout / commission</small><div className="v" style={{ fontSize: 20 }}>{rs(s.grossPaise)} / {rs(s.payoutPaise)} / {rs(s.commissionPaise)}</div></div>
+          </div>
 
           {report.lines.some((l) => l.result !== 'matched' || (l.orderStatus && l.orderStatus !== 'handed_over')) && (
-            <>
-              <h3>Lines to look at</h3>
-              <div className="scroll">
-                <table data-testid="set-problems">
-                  <thead><tr><th>Order</th><th>Platform says</th><th>We have</th><th>Problem</th></tr></thead>
+            <section className="m-card">
+              <header><h2>Lines to look at</h2></header>
+              <div className="m-scroll">
+                <table className="m-table" data-testid="set-problems">
+                  <thead><tr><th>Order</th><th className="num">Platform says</th><th className="num">We have</th><th>Problem</th></tr></thead>
                   <tbody>
                     {report.lines.filter((l) => l.result !== 'matched' || (l.orderStatus && l.orderStatus !== 'handed_over')).map((l) => (
                       <tr key={l.externalOrderId}>
-                        <td>{l.externalOrderId}</td><td>{rs(l.grossPaise)}</td><td>{l.ourPaise === null ? '—' : rs(l.ourPaise)}</td>
+                        <td>{l.externalOrderId}</td><td className="num">{rs(l.grossPaise)}</td><td className="num">{l.ourPaise === null ? '—' : rs(l.ourPaise)}</td>
                         <td className="warn">{l.result !== 'matched' ? RESULT_TEXT[l.result] : `Matches, but we ${l.orderStatus!.replace('_', ' ')} it`}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </>
+            </section>
           )}
           {report.missing.length > 0 && (
-            <>
-              <h3>Delivered by us, not in the statement</h3>
-              <div className="scroll">
-                <table data-testid="set-missing-list">
-                  <thead><tr><th>Order</th><th>Day</th><th>Amount</th></tr></thead>
-                  <tbody>{report.missing.map((m) => <tr key={m.externalOrderId}><td>{m.externalOrderId}</td><td>{m.businessDate}</td><td>{rs(m.ourPaise)}</td></tr>)}</tbody>
+            <section className="m-card">
+              <header><h2>Delivered by us, not in the statement</h2></header>
+              <div className="m-scroll">
+                <table className="m-table" data-testid="set-missing-list">
+                  <thead><tr><th>Order</th><th>Day</th><th className="num">Amount</th></tr></thead>
+                  <tbody>{report.missing.map((m) => <tr key={m.externalOrderId}><td>{m.externalOrderId}</td><td>{m.businessDate}</td><td className="num">{rs(m.ourPaise)}</td></tr>)}</tbody>
                 </table>
               </div>
-            </>
+            </section>
           )}
         </section>
       )}
 
       {past.length > 0 && (
-        <section data-testid="set-past">
-          <h3>Earlier imports</h3>
-          <div className="scroll">
-            <table>
+        <section className="m-card" data-testid="set-past">
+          <header><h2>Earlier imports</h2></header>
+          <div className="m-scroll">
+            <table className="m-table">
+              <thead><tr><th>File</th><th>Platform</th><th>Period</th><th>Result</th><th /></tr></thead>
               <tbody>
                 {past.map((p) => (
                   <tr key={p.id}>
-                    <td>{p.filename}</td><td>{p.channel}</td><td>{p.periodFrom} to {p.periodTo}</td>
-                    <td className={p.problems ? 'warn' : ''}>{p.problems ? `${p.problems} to check` : 'all match'}</td>
-                    <td><button data-testid={`set-open-${p.filename}`} onClick={() => open(p.id)}>Open</button></td>
+                    <td>{p.filename}</td><td style={{ textTransform: 'capitalize' }}>{p.channel}</td><td>{p.periodFrom} to {p.periodTo}</td>
+                    <td><span className={`m-pill ${p.problems ? 'warn' : 'ok'}`}>{p.problems ? `${p.problems} to check` : 'All match'}</span></td>
+                    <td className="num"><button className="sm" data-testid={`set-open-${p.filename}`} onClick={() => open(p.id)}>Open</button></td>
                   </tr>
                 ))}
               </tbody>

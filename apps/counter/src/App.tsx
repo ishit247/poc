@@ -10,7 +10,7 @@ import { OnlineQueue } from './OnlineQueue.tsx';
 import { Orders } from './Orders.tsx';
 import { Shift } from './Shift.tsx';
 import { useLogoUrl } from './logo.ts';
-import { Branding } from './Branding.tsx';
+import { EnrolShell } from './EnrolShell.tsx';
 import { EnrolCodeMaker, InviteScreen, ManagerLogin, ManagerTools } from './manager/index.ts';
 import { RefusedBanner } from './RefusedBanner.tsx';
 import { isRefusedPayment } from './refused.ts';
@@ -68,37 +68,63 @@ export function App() {
 function EnrolScreen({ onDone, invitedEmail, notice }: { onDone: (d: DeviceInfo) => void; invitedEmail: string; notice: string }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  // Which part of the set-up is running: the code is checked and the tablet registered, then the menu and staff are loaded.
+  const [phase, setPhase] = useState<'idle' | 'enrol' | 'pull'>('idle');
   // 'code' = type a code; 'login' / 'maker' = a manager makes one on this tablet. The token is memory only.
   const [stage, setStage] = useState<'code' | 'login' | 'maker'>(invitedEmail ? 'login' : 'code');
   const [mgr, setMgr] = useState('');
   const go = async (use = code) => {
-    setBusy(true);
+    setPhase('enrol');
     setError('');
     try {
       const d = await enrol(use);
+      setPhase('pull');
       await pull(d);
       onDone(d);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not enrol.');
       setStage('code');
-    } finally {
-      setBusy(false);
+      setPhase('idle');
     }
   };
-  if (stage === 'login') return <ManagerLogin initialEmail={invitedEmail} onToken={(t) => { setMgr(t); setStage('maker'); }} onCancel={() => setStage('code')} />;
-  if (stage === 'maker') return <EnrolCodeMaker token={mgr} onBack={() => { setMgr(''); setStage('code'); }} onUseCode={(c) => { setCode(c); setMgr(''); void go(c); }} />;
+  if (phase !== 'idle') {
+    const rows = [['enrol', 'Checking the code and registering this tablet'], ['pull', 'Downloading the menu and staff list']] as const;
+    return (
+      <EnrolShell step={2}>
+        <h1>Setting up…</h1>
+        <p className="lead">Keep this tablet online. It only takes a moment.</p>
+        <div className="en-prog" data-testid="enrol-progress" role="status">
+          {rows.map(([p, label], i) => {
+            const state = p === phase ? 'run' : i < rows.findIndex(([x]) => x === phase) ? 'done' : 'wait';
+            return <div key={p} className={`en-prow ${state}`}><span className="st">{state === 'done' ? '✓' : i + 1}</span><b>{label}</b></div>;
+          })}
+        </div>
+      </EnrolShell>
+    );
+  }
+  if (stage === 'login') return <EnrolShell step={1}><ManagerLogin initialEmail={invitedEmail} onToken={(t) => { setMgr(t); setStage('maker'); }} onCancel={() => setStage('code')} /></EnrolShell>;
+  if (stage === 'maker') return <EnrolShell step={1}><EnrolCodeMaker token={mgr} onBack={() => { setMgr(''); setStage('code'); }} onUseCode={(c) => { setCode(c); setMgr(''); void go(c); }} /></EnrolShell>;
+  const paste = async () => { try { setCode((await navigator.clipboard.readText()).trim()); setError(''); } catch { /* no clipboard access: the manager types it */ } };
   return (
-    <main className="center">
-      <Branding />
+    <EnrolShell step={1}>
       <h1>Set up this counter</h1>
-      {notice && <p data-testid="enrol-notice" className="error" role="alert">{notice}</p>}
-      <p>Ask your manager for an enrolment code and type it here. This tablet must be online for this step.</p>
-      <input data-testid="enrol-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Enrolment code" autoCapitalize="off" autoComplete="off" />
-      <button data-testid="enrol-go" className="primary" disabled={busy || !code.trim()} onClick={() => go()}>{busy ? 'Setting up…' : 'Set up'}</button>
-      {error && <p className="error" role="alert">{error}</p>}
-      <p><button data-testid="enrol-manager" onClick={() => setStage('login')}>I am the manager — sign in to create a code</button></p>
-    </main>
+      <p className="lead">Type the enrolment code your manager gave you. Each code works once.</p>
+      {notice && <div data-testid="enrol-notice" className="m-alert bad" role="alert"><span>⚠</span><div className="grow">{notice}</div></div>}
+      <form onSubmit={(e) => { e.preventDefault(); if (code.trim()) void go(); }} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <label className="m-field">Enrolment code
+          <span className="en-input">
+            <input data-testid="enrol-code" className={`en-code${error ? ' err' : ''}`} value={code} onChange={(e) => { setCode(e.target.value); setError(''); }} placeholder="Paste or type the code" autoCapitalize="off" autoComplete="off" spellCheck={false} autoFocus aria-invalid={!!error} />
+            <button type="button" onClick={paste}>Paste</button>
+          </span>
+        </label>
+        {error && <div className="en-err" role="alert"><span>⚠</span><span>{error}</span></div>}
+        <button type="submit" data-testid="enrol-go" className="primary block" disabled={!code.trim()}>Set up this counter</button>
+      </form>
+      <div className="en-or">or</div>
+      <div className="muted" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>Are you the manager?
+        <button type="button" className="ghost sm" data-testid="enrol-manager" onClick={() => setStage('login')}>Sign in to create a code</button>
+      </div>
+    </EnrolShell>
   );
 }
 
@@ -110,6 +136,7 @@ function Counter({ device }: { device: DeviceInfo }) {
   const [onlineWaiting, setOnlineWaiting] = useState(0);
   // null = not in manager tools; '' = signing in; otherwise the session token. Memory only, never stored.
   const [mgr, setMgr] = useState<string | null>(null);
+  const [mgrName, setMgrName] = useState(''); // for the More menu's profile row
   const shift = useLive(() => currentShift().then((s) => s ?? null), undefined as LocalShift | null | undefined);
   const [online, setOnline] = useState(navigator.onLine);
   const [syncError, setSyncError] = useState('');
@@ -188,12 +215,15 @@ function Counter({ device }: { device: DeviceInfo }) {
           </div>
         )}
         <span className="spacer" />
-        {mgr === null && <MoreMenu actor={actor ?? undefined} onShift={actor?.role === 'cashier' ? () => setTab('shift') : undefined} onSignOut={actor ? () => setActor(null) : undefined} onManager={!actor ? () => setMgr('') : undefined} />}
+        <MoreMenu actor={actor ?? undefined} manager={mgr !== null && !actor ? { name: mgrName, signedIn: !!mgr } : undefined}
+          onShift={actor?.role === 'cashier' ? () => setTab('shift') : undefined}
+          onSignOut={actor ? () => setActor(null) : mgr ? () => { setMgr(null); setMgrName(''); } : undefined}
+          onManager={!actor && mgr === null ? () => setMgr('') : undefined} />
       </header>
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
       {mgr !== null && !actor ? (
-        mgr ? <ManagerTools token={mgr} outletId={device.outletId} onDone={() => setMgr(null)} /> : <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />
+        mgr ? <ManagerTools token={mgr} outletId={device.outletId} onProfile={setMgrName} /> : <main className="center"><ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} /></main>
       ) : !actor ? (
         <>
           <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
@@ -217,8 +247,8 @@ function Counter({ device }: { device: DeviceInfo }) {
   );
 }
 
-/** The ⋮ menu: who is signed in, the drawer (Shift) and Sign out. Closes on any tap outside it. */
-function MoreMenu({ actor, onShift, onSignOut, onManager }: { actor?: Actor; onShift?: () => void; onSignOut?: () => void; onManager?: () => void }) {
+/** The ⋮ menu: who is signed in (cashier or manager), text size, theme, the drawer (Shift) and, set apart in red, Sign out. Closes on any tap outside it. */
+function MoreMenu({ actor, manager, onShift, onSignOut, onManager }: { actor?: Actor; manager?: { name: string; signedIn: boolean }; onShift?: () => void; onSignOut?: () => void; onManager?: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const [font, setFontState] = useState<FontSize>(getFont);
@@ -229,12 +259,14 @@ function MoreMenu({ actor, onShift, onSignOut, onManager }: { actor?: Actor; onS
     document.addEventListener('pointerdown', away);
     return () => document.removeEventListener('pointerdown', away);
   }, [open]);
+  const who = actor ? { name: actor.name, role: actor.role } : manager?.signedIn ? { name: manager.name || 'Manager', role: 'manager' } : null;
   return (
     <div className="more" ref={ref}>
       <button data-testid="more-menu" className="iconbtn" aria-label="More" aria-expanded={open} onClick={() => setOpen(!open)}>⋮</button>
       {open && (
         <div className="popmenu" role="menu">
-          {actor && <div className="profile" data-testid="who"><b>{actor.name}</b><small>{actor.role}</small></div>}
+          {who && <div className="profile" data-testid="who"><span className="avatar">{who.name.charAt(0).toUpperCase()}</span><span style={{ display: 'flex', flexDirection: 'column' }}><b>{who.name}</b><small>{who.role}</small></span></div>}
+          {who && <hr className="sep" />}
           <div className="prefrow"><span>Text</span>
             <div className="seg">
               {(['s', 'm', 'l'] as const).map((f) => <button key={f} data-testid={`font-${f}`} className={font === f ? 'active' : ''} aria-pressed={font === f} onClick={() => { setFont(f); setFontState(f); }}>{f.toUpperCase()}</button>)}
@@ -245,9 +277,11 @@ function MoreMenu({ actor, onShift, onSignOut, onManager }: { actor?: Actor; onS
               {([['dark', 'D'], ['light', 'L']] as const).map(([t, label]) => <button key={t} data-testid={`theme-${t}`} className={theme === t ? 'active' : ''} aria-pressed={theme === t} aria-label={`${t} theme`} onClick={() => { setTheme(t); setThemeState(t); }}>{label}</button>)}
             </div>
           </div>
+          {(onShift || onManager) && <hr className="sep" />}
           {onShift && <button role="menuitem" data-testid="tab-shift" onClick={() => { setOpen(false); onShift(); }}>Shift</button>}
           {onManager && <button role="menuitem" data-testid="mgr-open" onClick={() => { setOpen(false); onManager(); }}>Manager tools</button>}
-          {onSignOut && <button role="menuitem" data-testid="sign-out" onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>}
+          {onSignOut && <hr className="sep" />}
+          {onSignOut && <button role="menuitem" className="danger" data-testid={manager ? 'mgr-exit' : 'sign-out'} onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>}
         </div>
       )}
     </div>

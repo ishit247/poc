@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-font="m">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manager tools prototype</title>
+<style>
+:root{
+  --bg:#f4f5f3; --surface:#fff; --fg:#1b1f1d; --muted:#667069; --line:#e4e7e1; --border:#d3d7cf;
+  --s1:#fbfcfb; --s2:#f1f4f1; --s3:#fafbfa; --s4:#f6f8f6;
+  --primary:#1f4e3d; --primary-600:#2a6650; --primary-50:#e6f0eb;
+  --warn:#b25e00; --warn-bg:#fff4e0; --warn-line:#f0dcb3;
+  --danger:#b3261e; --danger-bg:#fdecea; --danger-line:#f4c7c3;
+  --ok:#1a7f37; --ok-bg:#e8f5ec; --ok-line:#bfe3c8;
+  --info-bg:#eef4f1; --info-line:#cfe1d8;
+  --c1:#1f4e3d; --c2:#7fb59d; --on-soft:#1f4e3d;
+  --shadow:0 1px 2px rgba(20,30,25,.06),0 1px 3px rgba(20,30,25,.05);
+  --zoom:1; color-scheme:light;
+}
+:root[data-theme=dark]{
+  --bg:#16191a; --surface:#22282a; --fg:#e8ebe9; --muted:#9aa5a2; --line:#2f3739; --border:#3f484b;
+  --s1:#262d2f; --s2:#2b3335; --s3:#242b2d; --s4:#2b3335;
+  --primary:#3b8c6d; --primary-600:#4aa07f; --primary-50:#24433a;
+  --warn:#f0a24a; --warn-bg:#3d3417; --warn-line:#5b4d20;
+  --danger:#ff8a8a; --danger-bg:#442626; --danger-line:#6b3a3a;
+  --ok:#5fd68a; --ok-bg:#1e3a2a; --ok-line:#2f5a41;
+  --info-bg:#22332d; --info-line:#35514a;
+  --c1:#4aa07f; --c2:#a7d5c0; --on-soft:#c4ead9;
+  --shadow:none; color-scheme:dark;
+}
+:root[data-font=s]{--zoom:.9} :root[data-font=l]{--zoom:1.12}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
+.num{font-variant-numeric:tabular-nums;text-align:right}
+.muted{color:var(--muted)}
+.hidden{display:none!important}
+.sp{flex:1}
+
+/* ---------- buttons: one scale, four variants ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--fg);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--s4)}
+.btn:focus-visible,select:focus-visible,input:focus-visible,.tab:focus-visible,.seg button:focus-visible{outline:3px solid #6fae96;outline-offset:1px}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn.primary:hover{background:var(--primary-600)}
+.btn.danger{background:var(--surface);border-color:var(--danger-line);color:var(--danger)}
+.btn.danger:hover{background:var(--danger-bg)}
+.btn.danger.solid{background:var(--danger);border-color:var(--danger);color:#fff}
+:root[data-theme=dark] .btn.danger.solid{color:#2a0d0d}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--on-soft)}
+.btn.ghost:hover{background:var(--primary-50)}
+.btn.sm{min-height:36px;padding:0 12px;border-radius:8px;font-size:15px}
+.btn.icon{min-width:44px;padding:0;font-size:20px;line-height:1}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+/* ---------- inputs ---------- */
+select,input[type=text],input[type=email],input[type=password],input[type=date],input[type=number]{min-height:44px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--fg);font:inherit}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600;color:var(--muted)}
+label.f select,label.f input{font-weight:400;color:var(--fg);font-size:16px}
+
+/* ---------- shell: tablet frame, text size via --zoom ---------- */
+.frame{max-width:1024px;margin:0 auto;min-height:100vh;zoom:var(--zoom);display:flex;flex-direction:column}
+.appbar{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--line);position:relative}
+.logo{width:32px;height:32px;border-radius:8px;background:var(--primary)}
+.appbar .where b{display:block;line-height:1.1}
+.appbar .where small{color:var(--muted)}
+.sync{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--ok);display:inline-block}
+.dot.bad{background:var(--danger)}
+
+/* more menu (existing pattern in the counter header; now also carries profile, text size, theme, sign out) */
+.more{position:relative}
+.popmenu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:260px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.22);padding:6px;display:flex;flex-direction:column;gap:2px}
+.popmenu .profile{display:flex;gap:10px;align-items:center;padding:8px 10px}
+.avatar{width:36px;height:36px;border-radius:50%;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:700}
+.popmenu .profile small{display:block;color:var(--muted)}
+.popmenu hr{border:0;border-top:1px solid var(--line);margin:4px 0;width:100%}
+.prefrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;font-weight:600;font-size:15px}
+.seg{display:inline-flex}
+.seg button{min-height:36px;min-width:44px;padding:0 10px;border:1px solid var(--border);background:var(--surface);color:var(--fg);font:inherit;font-size:14px;font-weight:600;cursor:pointer;margin-left:-1px}
+.seg button:first-child{border-radius:8px 0 0 8px;margin-left:0}.seg button:last-child{border-radius:0 8px 8px 0}
+.seg button[aria-pressed=true]{background:var(--primary-50);border-color:var(--primary);color:var(--on-soft);position:relative;z-index:1}
+.menuitem{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 10px;border:0;background:none;color:var(--fg);font:inherit;font-weight:600;border-radius:8px;cursor:pointer;text-align:left;width:100%}
+.menuitem:hover{background:var(--s2)} .menuitem.danger{color:var(--danger);margin-top:2px} .menuitem.danger:hover{background:var(--danger-bg)}
+
+.tabs{display:flex;gap:4px;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--line)}
+.tab{position:relative;background:none;border:0;padding:12px 14px;font:inherit;font-weight:600;color:var(--muted);cursor:pointer;display:flex;gap:8px;align-items:center}
+.tab[aria-selected=true]{color:var(--on-soft)}
+.tab[aria-selected=true]::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:3px;border-radius:3px 3px 0 0;background:var(--primary)}
+.badge{min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:var(--warn);color:#fff;font-size:12px;display:inline-flex;align-items:center;justify-content:center}
+:root[data-theme=dark] .badge{color:#2a1a00}
+
+main.pg{padding:12px 16px 24px;display:flex;flex-direction:column;gap:12px}
+.pagehead{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pagehead h1{font-size:22px;margin:0}
+
+/* ---------- close-the-day: sticky command bar + one section at a time ---------- */
+.command{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+.command .status{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.command .ic{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;flex:none;font-weight:700}
+.command.blocked .ic{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
+.command.ready .ic{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
+.command .t{font-weight:700} .command .s{font-size:14px;color:var(--muted)}
+.dateStep{display:flex;align-items:center;gap:2px;border:1px solid var(--border);border-radius:10px;padding:2px}
+.dateStep .btn{min-height:38px;padding:0 10px;border:0}
+.dateStep strong{padding:0 8px;min-width:130px;text-align:center;font-size:15px}
+
+.subnav{display:flex;gap:6px;overflow-x:auto;padding:2px 0}
+.subtab{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--fg);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+.subtab[aria-selected=true]{background:var(--primary);border-color:var(--primary);color:#fff}
+.subtab .cnt{min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--warn);color:#fff;font-size:12px;display:inline-grid;place-items:center}
+:root[data-theme=dark] .subtab .cnt{color:#2a1a00}
+.subtab .cnt.okc{background:var(--ok);}
+.subtab[aria-selected=true] .cnt{background:#fff;color:var(--primary)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.card>header{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--s1)}
+.card>header h2{font-size:16px;margin:0}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:700;border:1px solid}
+.pill.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
+.pill.ok{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
+.pill.bad{background:var(--danger-bg);border-color:var(--danger-line);color:var(--danger)}
+.pill.neutral{background:var(--s2);border-color:var(--line);color:var(--muted)}
+
+.rowi{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.card>header+.rowi{border-top:0}
+.rowi .main{min-width:0}
+.rowi .main b{display:block}
+.rowi .main span{font-size:14px;color:var(--muted)}
+.check{display:grid;grid-template-columns:36px 1fr auto auto;gap:12px;align-items:center;padding:12px 14px;border-top:1px solid var(--line)}
+.check:first-of-type{border-top:0}
+.check .ic{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:700;border:1px solid}
+.check .ic.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+.check .ic.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+.check b{display:block}.check span{font-size:14px;color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:820px){.cols{grid-template-columns:1fr}}
+
+.alert{display:flex;gap:10px;padding:10px 14px;border-radius:12px;border:1px solid;font-size:15px;align-items:flex-start}
+.alert.warn{background:var(--warn-bg);border-color:var(--warn-line)}
+.alert.info{background:var(--info-bg);border-color:var(--info-line)}
+.alert .grow{flex:1}
+
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media (max-width:820px){.kpis{grid-template-columns:repeat(2,1fr)}}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;box-shadow:var(--shadow)}
+.kpi small{color:var(--muted);font-weight:600}
+.kpi .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+.kpi .d{font-size:13px;color:var(--muted)}
+.kpi.main{background:var(--primary);border-color:var(--primary);color:#fff}
+.kpi.main small,.kpi.main .d{color:#d4e8de}
+
+/* ---------- tables ---------- */
+.tblwrap{overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:15px}
+th,td{padding:10px 14px;border-top:1px solid var(--line);text-align:left;white-space:nowrap}
+thead th{position:sticky;top:0;background:var(--s2);border-top:0;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+tbody tr:nth-child(even){background:var(--s3)}
+tbody tr:hover{background:var(--primary-50)}
+td.num,th.num{text-align:right}
+tfoot td{font-weight:700;background:var(--s2);border-top:2px solid var(--border)}
+
+.filters{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;padding:12px 14px}
+.chips{display:flex;gap:6px}
+.chip{border:1px solid var(--border);background:var(--surface);border-radius:999px;padding:8px 14px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;color:var(--fg)}
+.chip[aria-pressed=true]{background:var(--primary-50);border-color:var(--primary);color:var(--on-soft)}
+
+/* reports: table + optional chart on the right */
+.repgrid{display:grid;grid-template-columns:1fr;gap:12px;align-items:start}
+.repgrid.withchart{grid-template-columns:minmax(0,1fr) 340px}
+@media (max-width:860px){.repgrid.withchart{grid-template-columns:1fr}}
+.withchart .c-tax,.withchart .c-online{display:none}
+.pager{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line);background:var(--s1);flex-wrap:wrap}
+.pager .pg-btns{display:flex;gap:4px}
+.pager .pgb{min-width:36px;min-height:36px;padding:0 8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--fg);font:inherit;font-weight:600;cursor:pointer}
+.pager .pgb[aria-current=page]{background:var(--primary);border-color:var(--primary);color:#fff}
+.pager .pgb:disabled{opacity:.4;cursor:not-allowed}
+.pager select{min-height:36px;border-radius:8px;font-size:14px}
+.switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-weight:600;user-select:none;min-height:44px}
+.switch input{position:absolute;opacity:0}
+.switch .trk{width:44px;height:26px;border-radius:999px;background:var(--border);position:relative;transition:background .15s}
+.switch .trk::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s}
+.switch input:checked+.trk{background:var(--primary)}
+.switch input:checked+.trk::after{transform:translateX(18px)}
+.switch input:focus-visible+.trk{outline:3px solid #6fae96;outline-offset:2px}
+.chartbody{padding:12px 14px 14px;display:flex;flex-direction:column;gap:10px}
+.chartbody svg{width:100%;height:auto;display:block}
+.legend{display:flex;gap:14px;font-size:13px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.readout{min-height:40px;font-size:14px;padding:8px 10px;border-radius:10px;background:var(--s2)}
+.bar{cursor:pointer}
+
+.drop{border:2px dashed var(--border);border-radius:14px;padding:22px;text-align:center;background:var(--s1)}
+.drop strong{display:block;margin-bottom:2px}
+.steps{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--muted)}
+.steps b{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;font-size:13px}
+.steps i{width:24px;height:2px;background:var(--border)}
+
+.login{max-width:400px;margin:36px auto;padding:22px;display:flex;flex-direction:column;gap:14px}
+.login h1{margin:0;font-size:22px}
+.login .acts{display:grid;grid-template-columns:1fr 2fr;gap:10px}
+
+dialog{border:0;border-radius:16px;padding:0;box-shadow:0 20px 50px rgba(0,0,0,.35);max-width:440px;width:calc(100% - 32px);background:var(--surface);color:var(--fg)}
+dialog::backdrop{background:rgba(15,25,20,.55)}
+dialog .in{padding:20px;display:flex;flex-direction:column;gap:14px}
+dialog h3{margin:0;font-size:19px}
+dialog .acts{display:flex;justify-content:flex-end;gap:10px}
+.sum{display:flex;justify-content:space-between;padding:10px 12px;border-radius:10px;background:var(--s2)}
+.sum.bad{background:var(--danger-bg);color:var(--danger)}
+.sum.ok{background:var(--ok-bg);color:var(--ok)}
+
+.proto{background:#16211c;color:#cfe3d9;font-size:13px;padding:6px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.proto button{background:#2a3a33;border:1px solid #3d5247;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit}
+</style>
+</head>
+<body>
+
+<div class="proto">
+  <b>Prototype</b> clickable, sample data from the dev seed. Not wired to the API.
+  <span class="sp"></span>
+  <button id="whoToggle">Menu as: Manager</button>
+  <button id="reset">Reset demo</button>
+  <button id="goLogin">Show sign-in screen</button>
+</div>
+
+<div class="frame">
+  <!-- counter header: the existing "More" menu now holds profile, text size, theme and sign out -->
+  <div class="appbar">
+    <div class="logo"></div>
+    <div class="where"><b>School 1 Canteen</b><small>Counter C1</small></div>
+    <span class="sp"></span>
+    <span class="sync"><span class="dot"></span> Online · 0 waiting</span>
+    <div class="more" id="moreWrap">
+      <button class="btn icon" id="moreBtn" aria-haspopup="menu" aria-expanded="false" aria-label="More">⋯</button>
+      <div class="popmenu hidden" id="moreMenu" role="menu">
+        <div class="profile"><div class="avatar" id="avatar">S</div><div><b id="whoName">School 1 Canteen manager</b><small id="whoRole">Manager · a1@example.test</small></div></div>
+        <hr>
+        <div class="prefrow">Text size
+          <div class="seg" id="segFont"><button data-v="s" aria-pressed="false">S</button><button data-v="m" aria-pressed="true">M</button><button data-v="l" aria-pressed="false">L</button></div></div>
+        <div class="prefrow">Theme
+          <div class="seg" id="segTheme"><button data-v="light" aria-pressed="true">Light</button><button data-v="dark" aria-pressed="false">Dark</button></div></div>
+        <hr id="hrShift" class="hidden">
+        <button class="menuitem hidden" role="menuitem" id="shiftItem">◷ Shift <span class="muted" style="font-weight:400;margin-left:auto">Drawer open</span></button>
+        <hr>
+        <button class="menuitem danger" role="menuitem" id="signOut">⎋ Sign out</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SIGN IN ============ -->
+  <section id="loginView" class="hidden">
+    <div class="card login">
+      <div>
+        <h1>Manager sign-in</h1>
+        <div class="muted">Needs a connection. Your cashiers can keep selling.</div>
+      </div>
+      <label class="f">Email<input type="email" value="a1@example.test" autocomplete="username"></label>
+      <label class="f">Password<input type="password" value="dev-password-123"></label>
+      <div class="acts">
+        <button class="btn" id="loginBack">Back</button>
+        <button class="btn primary" id="loginGo">Sign in</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MANAGER ============ -->
+  <section id="mgrView">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-tab="close">Close the day <span class="badge" id="blockBadge">3</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="reports">Reports</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="settle">Settlements</button>
+    </div>
+
+    <!-- ---------- CLOSE THE DAY ---------- -->
+    <main class="pg" id="tab-close">
+      <div class="command blocked" id="command">
+        <div class="status">
+          <div class="ic" id="cmdIc">!</div>
+          <div style="min-width:0">
+            <div class="t" id="cmdT"></div>
+            <div class="s" id="cmdS"></div>
+          </div>
+        </div>
+        <div class="dateStep" aria-label="Business date">
+          <button class="btn sm ghost" aria-label="Previous day">‹</button>
+          <strong>Sat, 7 Nov 2026</strong>
+          <button class="btn sm ghost" aria-label="Next day" disabled>›</button>
+        </div>
+        <button class="btn primary" id="closeBtn" disabled>Close this day</button>
+      </div>
+
+      <div class="subnav" role="tablist" id="subnav">
+        <button class="subtab" role="tab" aria-selected="true" data-sub="overview">Overview</button>
+        <button class="subtab" role="tab" aria-selected="false" data-sub="drawers">Drawers <span class="cnt" id="cDrawers">7</span></button>
+        <button class="subtab" role="tab" aria-selected="false" data-sub="orders">Orders <span class="cnt" id="cOrders">5</span></button>
+        <button class="subtab" role="tab" aria-selected="false" data-sub="tablets">Tablets <span class="cnt" id="cTablets">1</span></button>
+        <button class="subtab" role="tab" aria-selected="false" data-sub="totals">Totals</button>
+      </div>
+
+      <!-- Overview: the whole day on one screen, details one tap away -->
+      <div id="sub-overview" style="display:flex;flex-direction:column;gap:12px">
+        <div class="kpis">
+          <div class="kpi main"><small>Gross sales</small><div class="v">₹296.10</div><div class="d">11 paid sales · tax ₹14.10</div></div>
+          <div class="kpi"><small>Cash</small><div class="v">₹258.30</div><div class="d">87% of sales</div></div>
+          <div class="kpi"><small>UPI</small><div class="v">₹37.80</div><div class="d">13% of sales</div></div>
+          <div class="kpi"><small>Online</small><div class="v">₹0.00</div><div class="d">0 orders</div></div>
+        </div>
+        <section class="card" id="checklist">
+          <header><h2>Before you can close</h2><span class="sp"></span><span class="muted" style="font-size:14px" id="provisional">The day is still running, so figures can change.</span></header>
+          <div id="checkRows"></div>
+        </section>
+      </div>
+
+      <section class="card hidden" id="sub-drawers">
+        <header><h2>Open drawers</h2><span class="pill warn" id="drawerCount"></span><span class="sp"></span><span class="muted" style="font-size:14px">Count the cash, then close each drawer.</span></header>
+        <div id="drawerList"></div>
+      </section>
+
+      <section class="card hidden" id="sub-orders">
+        <header><h2>Open orders</h2><span class="pill warn" id="orderCount"></span></header>
+        <div id="orderList"></div>
+      </section>
+
+      <section class="card hidden" id="sub-tablets">
+        <header><h2>Tablets</h2><span class="pill neutral" id="deviceCount"></span></header>
+        <div id="deviceList"></div>
+      </section>
+
+      <div class="hidden" id="sub-totals" style="display:flex;flex-direction:column;gap:12px">
+        <div class="cols">
+          <section class="card">
+            <header><h2>Payment mix</h2></header>
+            <table>
+              <tbody>
+                <tr><td>Cash</td><td class="num">₹258.30</td></tr>
+                <tr><td>UPI</td><td class="num">₹37.80</td></tr>
+                <tr><td>Online</td><td class="num">₹0.00</td></tr>
+                <tr><td>Tax included</td><td class="num">₹14.10</td></tr>
+              </tbody>
+              <tfoot><tr><td>Gross</td><td class="num">₹296.10</td></tr></tfoot>
+            </table>
+          </section>
+          <section class="card">
+            <header><h2>Exceptions</h2></header>
+            <table>
+              <tbody>
+                <tr><td>Voids</td><td class="num">11 · ₹0.00</td></tr>
+                <tr><td>Refunds</td><td class="num">0 · ₹0.00</td></tr>
+                <tr><td>Drawer variance</td><td class="num">₹0.00</td></tr>
+              </tbody>
+            </table>
+          </section>
+        </div>
+        <div class="alert warn"><span>⚠</span><div class="grow"><b>Counter C1:</b> receipts 1–12 never reached the server.</div></div>
+      </div>
+    </main>
+
+    <!-- ---------- REPORTS ---------- -->
+    <main class="pg hidden" id="tab-reports">
+      <div class="pagehead"><h1>Reports</h1><span class="sp"></span>
+        <label class="switch"><input type="checkbox" id="chartToggle" checked><span class="trk"></span>Chart</label>
+        <button class="btn" id="csv">⬇ Download CSV</button></div>
+      <section class="card">
+        <div class="filters">
+          <label class="f">Report
+            <select id="repKind"><option>Sales</option><option>Items</option><option>Busy hours</option><option>Voids and refunds</option><option>Cash variance</option><option>Sold while unavailable</option><option>Online orders</option><option>Settlement mismatches</option><option>Tablet sync health</option></select></label>
+          <label class="f">From<input type="date" id="from"></label>
+          <label class="f">To<input type="date" id="to" value="2026-11-07"></label>
+          <div class="chips" role="group" aria-label="Quick range">
+            <button class="chip" data-days="1" aria-pressed="false">Today</button>
+            <button class="chip" data-days="7" aria-pressed="false">7 days</button>
+            <button class="chip" data-days="30" aria-pressed="true">30 days</button>
+          </div>
+        </div>
+        <div class="alert warn" style="margin:0 14px 12px"><span>⚠</span><div class="grow">Includes today, so these figures are provisional until the day is closed.</div></div>
+      </section>
+
+      <div class="repgrid withchart" id="repgrid">
+        <section class="card">
+          <div class="tblwrap">
+            <table>
+              <thead><tr><th>Day</th><th class="num">Sales</th><th class="num">Gross</th><th class="num c-tax">Tax</th><th class="num">Cash</th><th class="num">UPI</th><th class="num c-online">Online</th></tr></thead>
+              <tbody id="repBody"></tbody>
+              <tfoot id="repFoot"></tfoot>
+            </table>
+          </div>
+          <div class="pager">
+            <span class="muted" id="pgInfo"></span>
+            <span class="sp"></span>
+            <label class="muted" style="display:flex;align-items:center;gap:6px;font-size:14px">Rows
+              <select id="pgSize"><option>5</option><option selected>10</option><option>25</option></select></label>
+            <div class="pg-btns" id="pgBtns"></div>
+          </div>
+        </section>
+
+        <section class="card" id="chartCard">
+          <header><h2 id="chartTitle">Gross by day</h2><span class="sp"></span>
+            <select id="metric" style="min-height:36px;border-radius:8px;font-size:14px"><option value="gross">Gross</option><option value="sales">Sales</option></select></header>
+          <div class="chartbody">
+            <svg id="chart" viewBox="0 0 340 210" role="img" aria-label="Daily sales chart"></svg>
+            <div class="legend" id="legend"></div>
+            <div class="readout" id="readout">Hover or tap a bar. Bars for the rows on this page are highlighted.</div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- ---------- SETTLEMENTS ---------- -->
+    <main class="pg hidden" id="tab-settle">
+      <div class="pagehead"><h1>Platform settlements</h1></div>
+      <section class="card">
+        <header><h2>Import a payout statement</h2><span class="sp"></span>
+          <div class="steps"><b>1</b>Choose platform<i></i><b>2</b>Upload<i></i><b>3</b>Review</div></header>
+        <div style="padding:14px;display:flex;flex-direction:column;gap:12px">
+          <div class="muted">It is compared with our orders and reported. Nothing we recorded is changed.</div>
+          <div class="filters" style="padding:0">
+            <label class="f">Platform<select><option>Zomato</option><option>Swiggy</option></select></label>
+            <label class="f">From<input type="date" value="2026-11-01"></label>
+            <label class="f">To<input type="date" value="2026-11-07"></label>
+          </div>
+          <div class="drop">
+            <strong>Drop the CSV here</strong>
+            <span class="muted">or</span>
+            <div style="margin-top:8px"><button class="btn" id="pick">Choose file…</button></div>
+            <div class="muted" id="fileName" style="margin-top:8px">No file chosen</div>
+          </div>
+          <div style="display:flex;justify-content:flex-end"><button class="btn primary" id="importBtn" disabled>Import and compare</button></div>
+        </div>
+      </section>
+      <section class="card">
+        <header><h2>Earlier imports</h2></header>
+        <table>
+          <thead><tr><th>File</th><th>Platform</th><th>Period</th><th>Result</th><th></th></tr></thead>
+          <tbody><tr><td>zomato-jan-week1.csv</td><td>Zomato</td><td>1–7 Jan 2026</td><td><span class="pill ok">All match</span></td><td class="num"><button class="btn sm">Open</button></td></tr></tbody>
+        </table>
+      </section>
+    </main>
+  </section>
+</div>
+
+<dialog id="dlgDrawer">
+  <form method="dialog" class="in" id="fDrawer">
+    <h3>Close drawer</h3>
+    <div class="muted" id="drawerWho"></div>
+    <label class="f">Cash counted (₹)<input type="text" inputmode="decimal" id="cash" placeholder="e.g. 500 or 500.50" autocomplete="off"></label>
+    <div class="sum ok" id="varBox"><span>Expected</span><b>₹500.00</b></div>
+    <div class="acts"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="drawerGo" disabled>Close drawer</button></div>
+  </form>
+</dialog>
+<dialog id="dlgVoid">
+  <form method="dialog" class="in" id="fVoid">
+    <h3>Void this order?</h3>
+    <div class="muted" id="voidWho"></div>
+    <label class="f">Reason (required)<input type="text" id="reason" maxlength="200" placeholder="e.g. customer left, table forgotten" autocomplete="off"></label>
+    <div class="muted" style="font-size:14px">This can’t be undone and is recorded against your name.</div>
+    <div class="acts"><button type="button" class="btn" data-close>Keep order</button><button type="submit" class="btn danger solid" id="voidGo" disabled>Void order</button></div>
+  </form>
+</dialog>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const NS='http://www.w3.org/2000/svg';
+
+/* ================= more menu: profile, text size, theme, sign out ================= */
+const moreBtn=$('#moreBtn'), moreMenu=$('#moreMenu');
+const toggleMenu=open=>{moreMenu.classList.toggle('hidden',!open);moreBtn.setAttribute('aria-expanded',open);};
+moreBtn.addEventListener('click',e=>{e.stopPropagation();toggleMenu(moreMenu.classList.contains('hidden'));});
+document.addEventListener('click',e=>{if(!moreMenu.contains(e.target))toggleMenu(false);});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')toggleMenu(false);});
+const seg=(id,attr)=>$$('#'+id+' button').forEach(b=>b.addEventListener('click',()=>{
+  document.documentElement.dataset[attr]=b.dataset.v;
+  $$('#'+id+' button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  if(attr==='theme')drawChart();
+}));
+seg('segFont','font'); seg('segTheme','theme');
+
+const WHO={manager:['S','School 1 Canteen manager','Manager · a1@example.test'],cashier:['C','School 1 Canteen cashier','Cashier · Counter C1']};
+let who='manager';
+$('#whoToggle').addEventListener('click',ev=>{ev.stopPropagation();
+  who=who==='manager'?'cashier':'manager'; const w=WHO[who];
+  $('#avatar').textContent=w[0];$('#whoName').textContent=w[1];$('#whoRole').textContent=w[2];
+  $('#shiftItem').classList.toggle('hidden',who!=='cashier');$('#hrShift').classList.toggle('hidden',who!=='cashier');
+  $('#whoToggle').textContent='Menu as: '+(who==='manager'?'Manager':'Cashier'); toggleMenu(true);
+});
+/* ================= close the day ================= */
+const seed=()=>({
+  drawers:[['1:30 pm',500],['8:48 pm',500],['8:48 pm',500],['8:49 pm',500],['8:55 pm',500],['8:56 pm',500],['8:57 pm',500]]
+    .map((d,i)=>({id:i,cashier:'School 1 Canteen cashier',since:d[0],expected:d[1]})),
+  orders:[
+    {id:1,when:'2 Jan 2026',table:'',amt:'₹10.50',by:'waiter',lines:'1 × Tea',old:true},
+    {id:2,when:'Today',table:'T2',amt:'₹25.20',by:'cashier',lines:'2 × Samosa'},
+    {id:3,when:'Today',table:'T366',amt:'₹12.60',by:'cashier',lines:'1 × Samosa'},
+    {id:4,when:'Today',table:'T1',amt:'₹67.20',by:'waiter',lines:'2 × Samosa, 1 × Veg Sandwich'},
+    {id:5,when:'Today',table:'T1',amt:'₹317.10',by:'waiter',lines:'1 × Samosa, 1 × Tea, 7 × Veg Sandwich'}],
+  devices:[{id:0,name:'C1',state:'bad',txt:'Never reported · last heard never'}]
+    .concat(['9:14 pm','8:48 pm','8:48 pm','8:56 pm','8:57 pm','8:57 pm','9:18 pm'].map((t,i)=>({id:i+1,name:'C1',state:'ok',txt:'0 unsent · last heard '+t})))
+});
+let S=seed(), cur=null, sub='overview', closed=false, devOpen=false;
+
+function setSub(k){
+  sub=k;
+  $$('.subtab').forEach(b=>b.setAttribute('aria-selected',b.dataset.sub===k));
+  ['overview','drawers','orders','tablets','totals'].forEach(x=>$('#sub-'+x).classList.toggle('hidden',x!==k));
+}
+$$('.subtab').forEach(b=>b.addEventListener('click',()=>setSub(b.dataset.sub)));
+
+function render(){
+  const bad=S.devices.filter(d=>d.state==='bad'&&!d.settled), good=S.devices.filter(d=>d.state==='ok'||d.settled);
+  const nD=S.drawers.length, nO=S.orders.length, nT=bad.length;
+
+  $('#drawerCount').textContent=nD?nD+' open':'All closed'; $('#drawerCount').className='pill '+(nD?'warn':'ok');
+  $('#drawerList').innerHTML=nD?S.drawers.map(d=>`
+    <div class="rowi"><div class="main"><b>${d.cashier}</b><span>Open since ${d.since} · expected ₹${d.expected.toFixed(2)}</span></div>
+    <button class="btn sm" data-drawer="${d.id}">Count &amp; close</button></div>`).join(''):`<div class="rowi"><div class="main"><b style="color:var(--ok)">✓ Every drawer is closed</b></div></div>`;
+
+  $('#orderCount').textContent=nO?nO+' not paid or voided':'None open'; $('#orderCount').className='pill '+(nO?'warn':'ok');
+  $('#orderList').innerHTML=nO?S.orders.map(o=>`
+    <div class="rowi"><div class="main"><b>${o.table?'Table '+o.table+' · ':''}${o.amt} ${o.old?'<span class="pill bad" style="margin-left:6px">From '+o.when+'</span>':''}</b>
+    <span>${o.lines} · opened by ${o.by}</span></div>
+    <button class="btn sm danger" data-void="${o.id}">Void…</button></div>`).join(''):`<div class="rowi"><div class="main"><b style="color:var(--ok)">✓ No open orders</b></div></div>`;
+
+  $('#deviceCount').textContent=nT?`${good.length} synced, ${nT} need a decision`:`All ${S.devices.length} tablets accounted for`;
+  $('#deviceCount').className='pill '+(nT?'warn':'ok');
+  $('#deviceList').innerHTML=bad.map(d=>`
+    <div class="rowi"><div class="main"><b><span class="dot bad"></span> Counter ${d.name}</b><span>${d.txt}. Anything still on it will count as late.</span></div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" data-ack="${d.id}" style="width:20px;height:20px"> Close without it</label></div>`).join('')
+    +`<div class="rowi"><div class="main"><b><span class="dot"></span> ${good.length} tablets synced</b><span>Nothing waiting to be sent.</span></div><button class="btn sm ghost" id="showDev">${devOpen?'Hide':'Show'}</button></div>`
+    +(devOpen?good.map(d=>`<div class="rowi"><div class="main"><b><span class="dot"></span> Counter ${d.name}</b><span>${d.txt}</span></div></div>`).join(''):'');
+  $('#showDev').addEventListener('click',()=>{devOpen=!devOpen;render();});
+
+  // overview checklist
+  const row=(n,label,okTxt,badTxt,k)=>`<div class="check"><div class="ic ${n?'warn':'ok'}">${n?'!':'✓'}</div>
+    <div><b>${label}</b><span>${n?badTxt:okTxt}</span></div>
+    <span class="pill ${n?'warn':'ok'}">${n?n+' to do':'Done'}</span>
+    <button class="btn sm ${n?'':'ghost'}" data-go="${k}">${n?'Review':'View'}</button></div>`;
+  $('#checkRows').innerHTML=
+    row(nD,'Drawers','All drawers are closed.',`${nD} drawer${nD>1?'s':''} still open. Count the cash and close.`,'drawers')+
+    row(nO,'Open orders','Every order is paid or voided.',`${nO} order${nO>1?'s':''} not paid or voided.`,'orders')+
+    row(nT,'Tablets','Every tablet has sent its records.','1 tablet never reported. Close without it, or wait for it.','tablets');
+
+  // counts on sub-tabs
+  const cnt=(id,n)=>{const e=$(id);e.textContent=n?n:'✓';e.classList.toggle('okc',!n);};
+  cnt('#cDrawers',nD);cnt('#cOrders',nO);cnt('#cTablets',nT);
+
+  // command bar
+  const n=(nD?1:0)+(nO?1:0)+(nT?1:0), ready=n===0;
+  if(!closed){
+    $('#command').className='command '+(ready?'ready':'blocked');
+    $('#cmdIc').textContent=ready?'✓':'!';
+    $('#cmdT').textContent=ready?'Ready to close Sat, 7 Nov':`${n} thing${n>1?'s':''} to sort out before you can close`;
+    $('#cmdS').textContent=ready?'Nothing is holding this day open. Figures will be final.':[nD&&`${nD} drawer${nD>1?'s':''}`,nO&&`${nO} order${nO>1?'s':''}`,nT&&`${nT} tablet`].filter(Boolean).join(' · ');
+    $('#closeBtn').disabled=!ready;
+  }
+  $('#blockBadge').textContent=n; $('#blockBadge').classList.toggle('hidden',ready);
+}
+render();
+
+document.addEventListener('click',e=>{
+  const g=e.target.closest('[data-go]'); if(g) return setSub(g.dataset.go);
+  const t=e.target.closest('[data-drawer],[data-void],[data-close]'); if(!t)return;
+  if(t.dataset.close!==undefined) return t.closest('dialog').close();
+  if(t.dataset.drawer!==undefined){const d=S.drawers.find(x=>x.id==t.dataset.drawer); cur=d;
+    $('#drawerWho').textContent=`${d.cashier} · open since ${d.since}`; $('#cash').value=''; updVar(); $('#dlgDrawer').showModal(); $('#cash').focus();}
+  if(t.dataset.void!==undefined){const o=S.orders.find(x=>x.id==t.dataset.void); cur=o;
+    $('#voidWho').textContent=`${o.table?'Table '+o.table+' · ':''}${o.amt} · ${o.lines}`; $('#reason').value=''; $('#voidGo').disabled=true; $('#dlgVoid').showModal(); $('#reason').focus();}
+});
+document.addEventListener('change',e=>{
+  if(e.target.dataset.ack!==undefined){const d=S.devices.find(x=>x.id==e.target.dataset.ack); d.settled=e.target.checked; render();
+    const box=$('[data-ack="'+d.id+'"]'); if(box)box.checked=true;}
+});
+function updVar(){
+  const v=parseFloat($('#cash').value), box=$('#varBox'), exp=cur?cur.expected:0;
+  $('#drawerGo').disabled=!(v>=0);
+  if(!(v>=0)){box.className='sum ok';box.innerHTML=`<span>Expected</span><b>₹${exp.toFixed(2)}</b>`;return;}
+  const diff=v-exp, ok=Math.abs(diff)<0.005; box.className='sum '+(ok?'ok':'bad');
+  box.innerHTML=`<span>${ok?'Matches expected':(diff>0?'Over by':'Short by')}</span><b>₹${(ok?exp:Math.abs(diff)).toFixed(2)}</b>`;
+}
+$('#cash').addEventListener('input',updVar);
+$('#reason').addEventListener('input',e=>$('#voidGo').disabled=!e.target.value.trim());
+$('#fDrawer').addEventListener('submit',()=>{S.drawers=S.drawers.filter(x=>x!==cur);render();});
+$('#fVoid').addEventListener('submit',()=>{S.orders=S.orders.filter(x=>x!==cur);render();});
+$('#closeBtn').addEventListener('click',()=>{
+  closed=true;
+  $('#command').className='command ready'; $('#cmdIc').textContent='🔒'; $('#cmdT').textContent='Sat, 7 Nov is closed'; $('#cmdS').textContent='These figures are final.';
+  $('#closeBtn').disabled=true; $('#closeBtn').textContent='Closed'; $('#checklist').classList.add('hidden'); setSub('overview');
+  ['drawers','orders','tablets'].forEach(k=>$('[data-sub="'+k+'"]').classList.add('hidden'));
+});
+
+/* ================= tabs ================= */
+$$('.tab').forEach(b=>b.addEventListener('click',()=>{
+  $$('.tab').forEach(x=>x.setAttribute('aria-selected',x===b));
+  ['close','reports','settle'].forEach(k=>$('#tab-'+k).classList.toggle('hidden',k!==b.dataset.tab));
+  if(b.dataset.tab==='reports')drawChart();
+}));
+$('#pick').addEventListener('click',()=>{$('#fileName').textContent='zomato-nov-week1.csv · 48 lines';$('#importBtn').disabled=false;});
+
+/* ================= reports: data, paging, optional chart ================= */
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'], DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const money=p=>'₹'+(p/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtDay=iso=>{const d=new Date(iso+'T00:00:00');return `${DOW[d.getDay()]}, ${d.getDate()} ${MON[d.getMonth()]}`;};
+const isoOf=(i)=>{const d=new Date(Date.UTC(2026,10,7-i));return d.toISOString().slice(0,10);};
+const DATA=[];
+for(let i=0;i<45;i++){
+  if(i===0){DATA.push({iso:isoOf(0),sales:11,gross:29610,tax:1410,cash:25830,upi:3780,online:0});continue;}
+  const dow=new Date(isoOf(i)+'T00:00:00').getDay(), weekend=dow===0||dow===6;
+  const sales=Math.round((weekend?14:36)+Math.sin(i*1.7)*6+((i*7)%9));
+  const gross=Math.round(sales*(2780+((i*53)%420)));
+  const upi=Math.round(gross*(0.22+((i*13)%10)/100));
+  DATA.push({iso:isoOf(i),sales,gross,tax:Math.round(gross*0.0476),cash:gross-upi,upi,online:0});
+}
+let page=1, size=10, rows=[];
+const fromEl=$('#from'), toEl=$('#to');
+const setRange=days=>{toEl.value='2026-11-07'; fromEl.value=isoOf(days-1);};
+setRange(30);
+
+function repRender(){
+  rows=DATA.filter(d=>d.iso>=fromEl.value&&d.iso<=toEl.value);
+  const pages=Math.max(1,Math.ceil(rows.length/size)); if(page>pages)page=pages;
+  const slice=rows.slice((page-1)*size,page*size);
+  $('#repBody').innerHTML=slice.length?slice.map(d=>`<tr><td>${fmtDay(d.iso)}</td><td class="num">${d.sales}</td><td class="num">${money(d.gross)}</td><td class="num c-tax">${money(d.tax)}</td><td class="num">${money(d.cash)}</td><td class="num">${money(d.upi)}</td><td class="num c-online">${money(d.online)}</td></tr>`).join('')
+    :`<tr><td colspan="7" class="muted" style="padding:28px;text-align:center">Nothing in these dates.</td></tr>`;
+  const sum=k=>rows.reduce((a,d)=>a+d[k],0);
+  $('#repFoot').innerHTML=rows.length?`<tr><td>Total · ${rows.length} day${rows.length>1?'s':''}</td><td class="num">${sum('sales')}</td><td class="num">${money(sum('gross'))}</td><td class="num c-tax">${money(sum('tax'))}</td><td class="num">${money(sum('cash'))}</td><td class="num">${money(sum('upi'))}</td><td class="num c-online">${money(sum('online'))}</td></tr>`:'';
+  const a=rows.length?(page-1)*size+1:0, b=Math.min(page*size,rows.length);
+  $('#pgInfo').textContent=`${a}–${b} of ${rows.length}`;
+  const btn=(label,p,dis,cur)=>`<button class="pgb" data-pg="${p}" ${dis?'disabled':''} ${cur?'aria-current="page"':''} aria-label="${typeof label==='number'?'Page '+label:label}">${label}</button>`;
+  let nums=''; for(let p=1;p<=pages;p++)nums+=btn(p,p,false,p===page);
+  $('#pgBtns').innerHTML=btn('‹',page-1,page===1)+nums+btn('›',page+1,page===pages);
+  drawChart();
+}
+$('#pgBtns').addEventListener('click',e=>{const b=e.target.closest('[data-pg]');if(b&&!b.disabled){page=+b.dataset.pg;repRender();}});
+$('#pgSize').addEventListener('change',e=>{size=+e.target.value;page=1;repRender();});
+[fromEl,toEl].forEach(el=>el.addEventListener('change',()=>{$$('.chip').forEach(c=>c.setAttribute('aria-pressed','false'));page=1;repRender();}));
+$$('.chip').forEach(c=>c.addEventListener('click',()=>{$$('.chip').forEach(x=>x.setAttribute('aria-pressed',x===c));setRange(+c.dataset.days);page=1;repRender();}));
+$('#metric').addEventListener('change',drawChart);
+$('#chartToggle').addEventListener('change',e=>{
+  $('#repgrid').classList.toggle('withchart',e.target.checked);
+  $('#chartCard').classList.toggle('hidden',!e.target.checked); if(e.target.checked)drawChart();
+});
+$('#csv').addEventListener('click',e=>{const b=e.currentTarget;b.textContent='✓ Downloaded';setTimeout(()=>b.textContent='⬇ Download CSV',1400);});
+
+function drawChart(){
+  const svg=$('#chart'); if(!svg||$('#chartCard').classList.contains('hidden')||$('#tab-reports').classList.contains('hidden'))return;
+  const metric=$('#metric').value, series=[...rows].reverse(); // oldest to newest, left to right
+  $('#chartTitle').textContent=(metric==='gross'?'Gross':'Sales')+' by day';
+  const W=340,H=210,L=44,R=8,T=10,B=24, iw=W-L-R, ih=H-T-B;
+  const val=d=>metric==='gross'?d.gross:d.sales;
+  const max=Math.max(1,...series.map(val)), step=niceStep(max/3), top=Math.ceil(max/step)*step||step;
+  const fmtAx=v=>metric==='gross'?'₹'+(v/100>=1000?(v/100000).toFixed(v%100000?1:0)+'k':Math.round(v/100)):String(v);
+  const pageIso=new Set(rows.slice((page-1)*size,page*size).map(d=>d.iso));
+  let h='';
+  for(let g=0;g<=top;g+=step){const y=T+ih-(g/top)*ih; h+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${L-6}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--muted)">${fmtAx(g)}</text>`;}
+  const n=series.length||1, slot=iw/n, bw=Math.max(2,slot*0.7);
+  series.forEach((d,i)=>{
+    const x=L+i*slot+(slot-bw)/2, op=pageIso.has(d.iso)?1:.35;
+    if(metric==='gross'){
+      const hc=(d.cash/top)*ih, hu=(d.upi/top)*ih;
+      h+=`<g class="bar" data-i="${i}" opacity="${op}"><rect x="${x}" y="${T+ih-hc}" width="${bw}" height="${hc}" fill="var(--c1)"/><rect x="${x}" y="${T+ih-hc-hu}" width="${bw}" height="${hu}" fill="var(--c2)"/><rect x="${x-1}" y="${T}" width="${bw+2}" height="${ih}" fill="transparent"/></g>`;
+    } else {
+      const hh=(d.sales/top)*ih;
+      h+=`<g class="bar" data-i="${i}" opacity="${op}"><rect x="${x}" y="${T+ih-hh}" width="${bw}" height="${hh}" fill="var(--c1)"/><rect x="${x-1}" y="${T}" width="${bw+2}" height="${ih}" fill="transparent"/></g>`;
+    }
+  });
+  // x labels: first, middle, last
+  [[0,'start'],[Math.floor((n-1)/2),'middle'],[n-1,'end']].forEach(([i,a])=>{ if(!series[i])return; const d=new Date(series[i].iso+'T00:00:00'); const x=L+i*slot+slot/2;
+    h+=`<text x="${a==='start'?L:a==='end'?W-R:x}" y="${H-6}" text-anchor="${a}" font-size="10" fill="var(--muted)">${d.getDate()} ${MON[d.getMonth()]}</text>`;});
+  svg.innerHTML=h;
+  $('#legend').innerHTML=metric==='gross'?`<span><i style="background:var(--c1)"></i>Cash</span><span><i style="background:var(--c2)"></i>UPI</span>`:`<span><i style="background:var(--c1)"></i>Paid sales</span>`;
+  $$('.bar',svg).forEach(g=>{
+    const show=()=>{const d=series[+g.dataset.i];$('#readout').innerHTML=`<b>${fmtDay(d.iso)}</b> · ${d.sales} sales · ${money(d.gross)}<br><span class="muted">Cash ${money(d.cash)} · UPI ${money(d.upi)}</span>`;};
+    g.addEventListener('mouseenter',show); g.addEventListener('click',show);
+  });
+}
+function niceStep(x){const p=Math.pow(10,Math.floor(Math.log10(x||1))), f=x/p; return (f<=1?1:f<=2?2:f<=5?5:10)*p;}
+repRender();
+
+/* ================= sign in / out ================= */
+const show=v=>{$('#loginView').classList.toggle('hidden',v!=='login');$('#mgrView').classList.toggle('hidden',v!=='mgr');$('#moreWrap').classList.toggle('hidden',v!=='mgr');toggleMenu(false);};
+$('#signOut').addEventListener('click',()=>show('login'));
+$('#goLogin').addEventListener('click',()=>show('login'));
+$('#loginGo').addEventListener('click',()=>show('mgr'));
+$('#loginBack').addEventListener('click',()=>show('mgr'));
+$('#reset').addEventListener('click',()=>{S=seed();closed=false;devOpen=false;$('#closeBtn').textContent='Close this day';$('#checklist').classList.remove('hidden');$$('.subtab').forEach(b=>b.classList.remove('hidden'));setSub('overview');render();show('mgr');});
+</script>
+</body>
+</html>

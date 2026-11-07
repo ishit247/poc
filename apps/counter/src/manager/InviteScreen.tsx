@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { EnrolShell } from '../EnrolShell.tsx';
 
 const MIN_PASSWORD = 12; // same floor as the API (security/password.ts)
 
@@ -7,9 +8,12 @@ const MIN_PASSWORD = 12; // same floor as the API (security/password.ts)
 export function InviteScreen({ token, onDone }: { token: string; onDone: (email: string) => void }) {
   const [password, setPassword] = useState('');
   const [again, setAgain] = useState('');
+  const [show, setShow] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const mismatch = again !== '' && again !== password;
+  const longEnough = password.length >= MIN_PASSWORD;
+  const matches = again !== '' && again === password;
+  const level = password.length >= 16 ? 3 : longEnough ? 2 : password.length > 0 ? 1 : 0;
   const go = async () => {
     setBusy(true);
     setError('');
@@ -26,15 +30,27 @@ export function InviteScreen({ token, onDone }: { token: string; onDone: (email:
       setBusy(false);
     }
   };
+  const type = show ? 'text' : 'password';
   return (
-    <main className="center">
-      <h1>Welcome — choose your password</h1>
-      <p>You will use it with your email to sign in as manager.</p>
-      <input data-testid="invite-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={`New password (${MIN_PASSWORD}+ characters)`} autoComplete="new-password" />
-      <input data-testid="invite-again" type="password" value={again} onChange={(e) => setAgain(e.target.value)} placeholder="Type it again" autoComplete="new-password" />
-      {mismatch && <p className="error">The two passwords differ.</p>}
-      <button data-testid="invite-go" className="primary" disabled={busy || password.length < MIN_PASSWORD || password !== again} onClick={go}>{busy ? 'Saving…' : 'Save password'}</button>
-      {error && <p className="error" role="alert">{error}</p>}
-    </main>
+    <EnrolShell step={1} note="Choose your password, then sign in to set up the counters.">
+      <h1>Welcome. Choose your password</h1>
+      <p className="lead">You will use it with your email to sign in as manager. Nobody else sees it.</p>
+      <label className="m-field">New password
+        <span className="m-pw">
+          <input data-testid="invite-password" type={type} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={`${MIN_PASSWORD} or more characters`} autoComplete="new-password" />
+          <button type="button" className="ghost sm" onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
+        </span>
+      </label>
+      <div className="en-meter" aria-hidden="true">{[1, 2, 3].map((n) => <i key={n} className={level >= n ? `l${level}` : ''} />)}</div>
+      <label className="m-field">Type it again
+        <input data-testid="invite-again" type={type} value={again} onChange={(e) => setAgain(e.target.value)} placeholder="Same password" autoComplete="new-password" />
+      </label>
+      <ul className="en-reqs">
+        <li className={longEnough ? 'ok' : ''}><span className="tick">✓</span>At least {MIN_PASSWORD} characters</li>
+        <li className={matches ? 'ok' : ''}><span className="tick">✓</span>Both passwords match</li>
+      </ul>
+      <button data-testid="invite-go" className="primary block" disabled={busy || !longEnough || !matches} onClick={go}>{busy ? 'Saving…' : 'Save password'}</button>
+      {error && <p className="error" role="alert" style={{ margin: 0 }}>{error}</p>}
+    </EnrolShell>
   );
 }

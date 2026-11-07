@@ -259,11 +259,13 @@ try {
   await T('mgr-date').waitFor();
   if (await T('mgr-outlet').count()) await T('mgr-outlet').selectOption(outletId); // shown only for several outlets
   await T('mgr-totals').waitFor({ timeout: 10000 });
+  await T('mgr-sub-drawers').click(); // Close the day shows one section at a time
   if (await T('mgr-force-open').count()) {
     await T('mgr-force-open').first().click();
     await T('mgr-force-cash').fill('500'); await T('mgr-force-go').click();
     check('manager force-closes the forgotten drawer', !!(await until(async () => (await T('mgr-force-open').count()) === 0, 8000)));
   }
+  await T('mgr-sub-orders').click();
   const listed = await page.locator('[data-testid="mgr-open-order"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-order-id')));
   check('day close lists the stale open order with its lines', stale.length > 0 && stale.every(([id]) => listed.includes(id))
     && /\d+ × \S/.test(await page.locator('[data-testid="mgr-open-order"]').first().innerText()), `${listed.length} listed, ${stale.length} stale`);
@@ -285,6 +287,7 @@ try {
   const shownGross = rupeesToPaise(await text('mgr-gross'));
   check('gross on screen equals the server\'s paid sales', String(shownGross) === gross, `${shownGross} vs ${gross}`);
   await shot('5-day-close');
+  await T('mgr-sub-tablets').click();
   for (const box of await page.locator('[data-testid="mgr-blockers"] input[type=checkbox]').all()) await box.check(); // other seeded tablets, if any
   const closable = await until(() => T('mgr-close').isEnabled(), 5000);
   check('nothing holds the day open', !!closable, closable ? '' : (await T('mgr-blockers').innerText()).replace(/\s+/g, ' ').slice(0, 200));
