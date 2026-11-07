@@ -17,14 +17,14 @@ input { min-height: 48px; padding: 6px 10px; background: var(--surface); color: 
 .error { color: var(--error); }
 .ok { color: var(--okc); }
 .warn { color: var(--warnc); font-weight: 600; }
-.center { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px; text-align: center; }
+.center { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 8px 24px 16px; text-align: center; }
 .shell { display: flex; flex-direction: column; height: calc(100vh / var(--zoom)); }
 header { display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: var(--surface); border-bottom: 1px solid var(--hline); }
 header button { min-height: 40px; }
 .iconbtn { min-width: 40px; padding: 0 8px; font-size: 20px; line-height: 1; }
 .seg { display: inline-flex; gap: 0; } .seg button { border-radius: 0; min-width: 72px; margin-left: -1px; }
 .seg button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; } .seg button:last-child { border-radius: 0 8px 8px 0; }
-.seg.sub { padding: 8px 14px 0; } .seg.sub button { min-height: 40px; }
+.seg.sub { padding: 4px 14px 0; } .seg.sub button { min-height: 40px; }
 .more { position: relative; }
 .popmenu { position: absolute; right: 0; top: 46px; z-index: 20; min-width: 220px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.18); padding: 6px; display: flex; flex-direction: column; gap: 4px; }
 .popmenu button { border: 0; text-align: left; }
@@ -34,7 +34,7 @@ header button { min-height: 40px; }
 .tiles { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .tile { width: 200px; min-height: 90px; display: flex; flex-direction: column; justify-content: center; }
 .tile small { color: var(--muted); }
-.dots { font-size: 32px; letter-spacing: 6px; min-height: 44px; }
+.dots { font-size: 24px; letter-spacing: 6px; min-height: 28px; line-height: 28px; }
 .pad { display: grid; grid-template-columns: repeat(3, 84px); gap: 10px; }
 .pad button { min-height: 64px; font-size: 24px; }
 
@@ -74,7 +74,7 @@ header button { min-height: 40px; }
 .map { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
 .map .tbl { min-height: 84px; font-size: 18px; }
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 10; }
-.dialog { background: var(--surface); border-radius: 12px; padding: 20px; width: 460px; max-width: 94vw; display: flex; flex-direction: column; gap: 12px; }
+.dialog { background: var(--surface); border-radius: 12px; padding: 16px; width: 460px; max-width: 94vw; display: flex; flex-direction: column; gap: 12px; }
 .dialog h2 { margin: 0; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; }
 .modes { display: flex; gap: 8px; }
@@ -114,7 +114,7 @@ header button { min-height: 40px; }
 .brand { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .brand img { height: 72px; max-width: 240px; object-fit: contain; }
 
-.mgr { padding: 16px 24px; max-width: 900px; display: flex; flex-direction: column; gap: 10px; }
+.mgr { padding: 8px 24px 16px; max-width: 900px; display: flex; flex-direction: column; gap: 10px; }
 .mgr .row { display: flex; align-items: center; gap: 12px; }
 .mgr table { border-collapse: collapse; background: var(--surface); }
 .mgr td, .mgr th { padding: 6px 12px; border-bottom: 1px solid var(--line); text-align: left; }
@@ -159,14 +159,21 @@ button.primary[data-testid='add-code'] { font-size: 28px; line-height: 1; paddin
 .sell { padding-right: 0; padding-bottom: 0; gap: 8px; }
 .cart { background: var(--surface); border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 12px; }
 .qty button { border: 0; border-radius: 50%; background: var(--active-bg); }
-.actions { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; gap: 8px; }
-.actions [data-testid='clear'] { justify-self: start; grid-column: 1; }
-.actions [data-testid='save-order'] { justify-self: center; grid-column: 2; }
-.actions [data-testid='print-bill'] { justify-self: end; grid-column: 3; }
-.actions [data-testid='void-order'] { grid-column: 1 / -1; }
+.cart .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; gap: 8px; }
+.cart .actions [data-testid='clear'] { justify-self: start; grid-column: 1; }
+.cart .actions [data-testid='save-order'] { justify-self: center; grid-column: 2; }
+.cart .actions [data-testid='print-bill'] { justify-self: end; grid-column: 3; }
+.cart .actions [data-testid='void-order'] { grid-column: 1 / -1; }
 
 .item .nm, .item .pr { font-weight: 400; }
 .item small .code { color: var(--muted); opacity: 0.55; }
 .item:not(:has(img)) { padding-left: 10px; }
 .qty button { min-height: 32px; min-width: 32px; width: 32px; height: 32px; font-size: 16px; }
 .actions button { white-space: nowrap; }
+
+/* Rule: no wasted space at the top of a screen. Actions go first, headings have no top margin. */
+.center h2, .mgr h2, .orders h2, .online h2, .mgr h3 { margin-top: 0; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog .actions button { white-space: nowrap; }
+.center h1 { margin: 4px 0 0; font-size: 28px; }

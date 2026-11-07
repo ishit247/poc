@@ -188,7 +188,7 @@ function Counter({ device }: { device: DeviceInfo }) {
           </div>
         )}
         <span className="spacer" />
-        {actor && <MoreMenu actor={actor} onShift={actor.role === 'cashier' ? () => setTab('shift') : undefined} onSignOut={() => setActor(null)} />}
+        {mgr === null && <MoreMenu actor={actor ?? undefined} onShift={actor?.role === 'cashier' ? () => setTab('shift') : undefined} onSignOut={actor ? () => setActor(null) : undefined} onManager={!actor ? () => setMgr('') : undefined} />}
       </header>
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
@@ -197,7 +197,6 @@ function Counter({ device }: { device: DeviceInfo }) {
       ) : !actor ? (
         <>
           <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
-          <p className="center"><button data-testid="mgr-open" onClick={() => setMgr('')}>Manager tools</button></p>
         </>
       ) : needShift ? (
         <><RefusedBanner /><Shift device={device} actor={actor} shift={undefined} onSync={sync} /></>
@@ -219,7 +218,7 @@ function Counter({ device }: { device: DeviceInfo }) {
 }
 
 /** The ⋮ menu: who is signed in, the drawer (Shift) and Sign out. Closes on any tap outside it. */
-function MoreMenu({ actor, onShift, onSignOut }: { actor: Actor; onShift?: () => void; onSignOut: () => void }) {
+function MoreMenu({ actor, onShift, onSignOut, onManager }: { actor?: Actor; onShift?: () => void; onSignOut?: () => void; onManager?: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const [font, setFontState] = useState<FontSize>(getFont);
@@ -235,7 +234,7 @@ function MoreMenu({ actor, onShift, onSignOut }: { actor: Actor; onShift?: () =>
       <button data-testid="more-menu" className="iconbtn" aria-label="More" aria-expanded={open} onClick={() => setOpen(!open)}>⋮</button>
       {open && (
         <div className="popmenu" role="menu">
-          <div className="profile" data-testid="who"><b>{actor.name}</b><small>{actor.role}</small></div>
+          {actor && <div className="profile" data-testid="who"><b>{actor.name}</b><small>{actor.role}</small></div>}
           <div className="prefrow"><span>Text</span>
             <div className="seg">
               {(['s', 'm', 'l'] as const).map((f) => <button key={f} data-testid={`font-${f}`} className={font === f ? 'active' : ''} aria-pressed={font === f} onClick={() => { setFont(f); setFontState(f); }}>{f.toUpperCase()}</button>)}
@@ -247,7 +246,8 @@ function MoreMenu({ actor, onShift, onSignOut }: { actor: Actor; onShift?: () =>
             </div>
           </div>
           {onShift && <button role="menuitem" data-testid="tab-shift" onClick={() => { setOpen(false); onShift(); }}>Shift</button>}
-          <button role="menuitem" data-testid="sign-out" onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>
+          {onManager && <button role="menuitem" data-testid="mgr-open" onClick={() => { setOpen(false); onManager(); }}>Manager tools</button>}
+          {onSignOut && <button role="menuitem" data-testid="sign-out" onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>}
         </div>
       )}
     </div>

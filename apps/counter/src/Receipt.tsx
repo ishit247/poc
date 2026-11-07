@@ -37,6 +37,7 @@ export function Receipt({ sale, device, reprint = false, onReprint, onClose }: {
   if (!sale.receiptNo) {
     return (
       <main className="center">
+        <button data-testid="new-sale" className="primary" onClick={onClose}>New sale</button>
         <div className="receipt" data-testid="receipt">
           <h2>{device.outletName}</h2>
           <p><b data-testid="saved">Order saved</b>. A cashier will take payment.</p>
@@ -44,21 +45,20 @@ export function Receipt({ sale, device, reprint = false, onReprint, onClose }: {
           <ul>{sale.lines.map((l) => <li key={l.itemId}><span>{l.qty} × {l.name}</span><span>₹{rs(l.netPaise)}</span></li>)}</ul>
           <p><b>₹{rs(sale.totalPaise)}</b></p>
         </div>
-        <button data-testid="new-sale" className="primary" onClick={onClose}>New sale</button>
       </main>
     );
   }
   return (
     <main className="center">
-      <p className="no-print">Receipt <b data-testid="receipt-no">{sale.receiptNo}</b>{reprint ? ' (reprint)' : ''}</p>
+      <div className="no-print toolbar">
+        <button data-testid="print" onClick={print}>{reprint ? 'Print copy' : 'Print'}</button>
+        <button data-testid="new-sale" className="primary" onClick={onClose}>{reprint ? 'Close' : 'New sale'}</button>
+        <span className="muted">Receipt <b data-testid="receipt-no">{sale.receiptNo}</b>{reprint ? ' (reprint)' : ''}</span>
+      </div>
+      {problem && <p role="alert" className="no-print">{problem}</p>}
       <div className="receipt print-area" data-testid="receipt">
         {logoUrl && <img data-testid="receipt-logo" className="receipt-logo" src={logoUrl} alt="" />}
         <pre data-testid="receipt-text">{text ? text.join('\n') : ''}</pre>
-      </div>
-      {problem && <p role="alert" className="no-print">{problem}</p>}
-      <div className="no-print">
-        <button data-testid="print" onClick={print}>{reprint ? 'Print copy' : 'Print'}</button>{' '}
-        <button data-testid="new-sale" className="primary" onClick={onClose}>{reprint ? 'Close' : 'New sale'}</button>
       </div>
     </main>
   );
