@@ -39,8 +39,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const [category, setCategory] = useState<string>('all');
   const [diet, setDiet] = useState<string>('');        // '' | 'veg' | 'egg' | 'non_veg'
   const [tag, setTag] = useState<string>('');          // '' | a tag id
-  const [catsOpen, setCatsOpen] = useState(true);      // sidebar sections: Category starts open, Tags closed
-  const [tagsOpen, setTagsOpen] = useState(false);
+  const [openSec, setOpenSec] = useState<'types' | 'cats' | 'tags'>('cats'); // sidebar: one group open at a time, Category by default
   const [q, setQ] = useState('');
   const [message, setMessage] = useState('');
   const [paying, setPaying] = useState<'cash' | 'upi' | null>(null);
@@ -162,22 +161,42 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     document.querySelector('[data-testid="table-strip"] .tbl.cur')?.scrollIntoView?.({ inline: 'center', block: 'nearest' });
   }, [tableId, states.length]);
 
-  // Quick codes (D16): digits only match the code prefix across the whole menu; anything else matches names.
+  // Search: "0102" (full code prefix) | "tea" (item name) | "<category name part or code> <item name or code>".
   const byCode = /^\d+$/.test(q);
+  const matches = (e: MenuEntry): boolean => {
+    const x = menu.extras[e.itemId];
+    const ql = q.toLowerCase();
+    if (byCode) return (x?.code ?? '').startsWith(q);
+    const sp = ql.indexOf(' ');
+    if (sp > 0) {
+      const cq = ql.slice(0, sp), iq = ql.slice(sp + 1).trim();
+      const cat = menu.categories.find((c) => c.id === e.categoryId);
+      if (!cat || !(cat.name.toLowerCase().includes(cq) || cat.code.toLowerCase().startsWith(cq))) return false;
+      const own = (x?.code ?? '').slice(cat.code.length);
+      return !iq || e.name.toLowerCase().includes(iq) || own.startsWith(iq);
+    }
+    return e.name.toLowerCase().includes(ql);
+  };
   const visible = useMemo(() => menu.entries.filter((e) => {
     const x = menu.extras[e.itemId];
-    if (byCode) return (x?.code ?? '').startsWith(q);
-    if (q) return e.name.toLowerCase().includes(q.toLowerCase());
-    if (category !== 'all' && e.categoryId !== category) return false;
+    if (q) return matches(e);
     if (diet && x?.diet !== diet) return false;
     return !tag || (x?.tagIds ?? []).includes(tag);
-  }), [menu, q, byCode, category, diet, tag]);
+  }), [menu, q, byCode, diet, tag]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Category groups in menu order; empty groups are left out.
+  const groups = menu.categories.map((c) => ({ cat: c, items: visible.filter((e) => e.categoryId === c.id) })).filter((g) => g.items.length > 0);
+  const known = new Set(menu.categories.map((c) => c.id));
+  const loose = visible.filter((e) => !known.has(e.categoryId));
+  const gotoCategory = (id: string) => {
+    setCategory(id);
+    document.getElementById(`cat-${id}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  };
   const exact = byCode ? menu.entries.filter((e) => menu.extras[e.itemId]?.code === q) : [];
   const exactEntry = exact.length === 1 && exact[0]!.available ? exact[0]! : null;
   const quickAdd = () => { if (!exactEntry) return; void add(exactEntry); setQ(''); searchRef.current?.focus(); };
 
   const dietMarks = (['veg', 'egg', 'non_veg'] as const).filter((d) => Object.values(menu.extras).some((x) => x.diet === d));
-  const showPopular = !q && category === 'all' && !diet && !tag;
+  const showPopular = !q && !diet && !tag;
   const popularEntries = popular.map((id) => menu.entries.find((e) => e.itemId === id)).filter((e): e is MenuEntry => !!e && e.available);
 
   const tile = (e: MenuEntry, prefix = '') => {
@@ -187,7 +206,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
         <ItemPicture sha={x?.imageSha256} />
         <span className="txt">
           <span className="nm">{e.name}</span>
-          <small>{e.available ? <>₹{rs(e.pricePaise)}{x?.code && <> · <span className="code" data-testid={`code-${e.name}`}>{x.code}</span></>}</> : 'Sold out'}</small>
+          <small>{e.available ? <><b className="pr">₹{rs(e.pricePaise)}</b>{x?.code && <> <span className="code" data-testid={`code-${e.name}`}>{x.code}</span></>}</> : 'Sold out'}</small>
         </span>
       </button>
     );
@@ -220,37 +239,37 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
         )}
         <div className="srow" data-testid="held-strip">
           {mode !== 'map' && (
-            <>
-              <button data-testid="held-btn" className={`chipbtn ${heldOrders.length ? 'busy' : ''}`} aria-label={`${heldOrders.length} held orders`} onClick={() => setHeldOpen(true)}>H{heldOrders.length}</button>
-              <span className="chipbtn static" data-testid="order-table" title="Table">{defaultTable?.code ?? '…'}</span>
-            </>
+            <button data-testid="held-btn" className={`chipbtn ${heldOrders.length ? 'busy' : ''}`} aria-label={`${heldOrders.length} held orders`} title={heldOrders.length ? `${heldOrders.length} held orders` : 'Held orders'} onClick={() => setHeldOpen(true)}>{defaultTable?.code ?? '…'}</button>
           )}
-          <input ref={searchRef} className="search" data-testid="search" value={q} onChange={(e) => setQ(e.target.value.trim())} onKeyDown={(e) => { if (e.key === 'Enter') quickAdd(); }}
-            placeholder="Search item, or type a code (e.g. 0102)" aria-label="Search item or code" inputMode="search" autoComplete="off" />
-          <button className="primary" data-testid="add-code" disabled={!exactEntry} onClick={quickAdd}>Add</button>
+          <input ref={searchRef} className="search" data-testid="search" value={q} onChange={(e) => setQ(e.target.value.replace(/^\s+/, ''))} onKeyDown={(e) => { if (e.key === 'Enter') quickAdd(); }}
+            placeholder="Item, code, or category item (e.g. tea, 0102, bev chai)" aria-label="Search item or code" inputMode="search" autoComplete="off" />
+          <button className="primary" data-testid="add-code" disabled={!exactEntry} onClick={quickAdd} aria-label="Add" title="Add">+</button>
         </div>
         {hint && <div className="muted hint" data-testid="code-hint">{hint}</div>}
-        {showPopular && popularEntries.length > 0 && (
-          <div data-testid="popular"><h3>Popular</h3><div className="grid pop">{popularEntries.map((e) => tile(e, 'pop-'))}</div></div>
-        )}
         <div className="browse">
           <nav className="side" data-testid="filter-row" aria-label="Menu filters">
-            {dietMarks.length > 0 && ( // only when the manager has marked items veg / egg / non-veg
-              <div className="diets">
-                {dietMarks.map((d) => <button key={d} data-testid={`filter-${d}`} className={diet === d ? 'active' : ''} aria-pressed={diet === d} onClick={() => setDiet(diet === d ? '' : d)}>{d === 'non_veg' ? 'Non-veg' : d[0]!.toUpperCase() + d.slice(1)}</button>)}
-              </div>
+            {dietMarks.length > 0 && (
+              <>
+                <button className={`sechead ${openSec === 'types' ? 'open' : ''}`} data-testid="types-toggle" aria-expanded={openSec === 'types'} onClick={() => setOpenSec('types')}>Type <span>{openSec === 'types' ? '▾' : '▸'}</span></button>
+                {openSec === 'types' && (
+                  <div className="seclist">
+                    {dietMarks.map((d) => <button key={d} data-testid={`filter-${d}`} className={diet === d ? 'active' : ''} aria-pressed={diet === d} onClick={() => setDiet(diet === d ? '' : d)}>{d === 'non_veg' ? 'Non-veg' : d[0]!.toUpperCase() + d.slice(1)}</button>)}
+                  </div>
+                )}
+              </>
             )}
-            <button className="sechead" data-testid="cats-toggle" aria-expanded={catsOpen} onClick={() => setCatsOpen(!catsOpen)}>Category <span>{catsOpen ? '▾' : '▸'}</span></button>
-            {catsOpen && (
-              <div className="seclist">
-                <button className={category === 'all' ? 'active' : ''} onClick={() => setCategory('all')}>All</button>
-                {menu.categories.map((c) => <button key={c.id} className={category === c.id ? 'active' : ''} onClick={() => setCategory(c.id)}>{c.name}</button>)}
-              </div>
-            )}
+            <>
+                <button className={`sechead ${openSec === 'cats' ? 'open' : ''}`} data-testid="cats-toggle" aria-expanded={openSec === 'cats'} onClick={() => setOpenSec('cats')}>Category <span>{openSec === 'cats' ? '▾' : '▸'}</span></button>
+                {openSec === 'cats' && (
+                  <div className="seclist">
+                    {menu.categories.map((c) => <button key={c.id} className={category === c.id ? 'active' : ''} onClick={() => gotoCategory(c.id)}>{c.name}</button>)}
+                  </div>
+                )}
+            </>
             {menu.tags.length > 0 && (
               <>
-                <button className="sechead" data-testid="tags-toggle" aria-expanded={tagsOpen} onClick={() => setTagsOpen(!tagsOpen)}>Tags <span>{tagsOpen ? '▾' : '▸'}</span></button>
-                {tagsOpen && (
+                <button className={`sechead ${openSec === 'tags' ? 'open' : ''}`} data-testid="tags-toggle" aria-expanded={openSec === 'tags'} onClick={() => setOpenSec('tags')}>Tags <span>{openSec === 'tags' ? '▾' : '▸'}</span></button>
+                {openSec === 'tags' && (
                   <div className="seclist">
                     {menu.tags.map((t) => <button key={t.id} data-testid={`filter-${t.name}`} className={tag === t.id ? 'active' : ''} aria-pressed={tag === t.id} onClick={() => setTag(tag === t.id ? '' : t.id)}>{t.name}</button>)}
                   </div>
@@ -258,14 +277,26 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
               </>
             )}
           </nav>
-          <div className="grid">
+          <div className="items">
+            {showPopular && popularEntries.length > 0 && (
+              <div data-testid="popular">
+                <div className="divider"><span>Popular</span></div>
+                <div className="grid pop">{popularEntries.map((e) => tile(e, 'pop-'))}</div>
+              </div>
+            )}
             {visible.length === 0 && <p className="muted">{q ? 'No match.' : 'Nothing to sell here yet.'}</p>}
-            {visible.map((e) => tile(e))}
+            {groups.map(({ cat, items }) => (
+              <div key={cat.id} id={`cat-${cat.id}`} className="catgroup" data-testid={`group-${cat.name}`}>
+                <div className="divider"><span>{cat.name}{cat.code && ` (${cat.code})`}</span></div>
+                <div className="grid">{items.map((e) => tile(e))}</div>
+              </div>
+            ))}
+            {loose.length > 0 && <div className="catgroup"><div className="divider"><span>Other ({loose.length})</span></div><div className="grid">{loose.map((e) => tile(e))}</div></div>}
           </div>
         </div>
       </section>
       <aside className="cart">
-        <h2>{inOrder ? `Order · ${states.find((s) => s.table.id === activeOrder.tableId)?.table.code ?? ''}` : mode === 'map' && tableId ? `Table ${states.find((s) => s.table.id === tableId)?.table.code ?? ''}` : 'Order'}</h2>
+        {(inOrder || (mode === 'map' && tableId)) && <h2>{inOrder ? `Order · ${states.find((s) => s.table.id === activeOrder.tableId)?.table.code ?? ''}` : mode === 'map' && tableId ? `Table ${states.find((s) => s.table.id === tableId)?.table.code ?? ''}` : ''}</h2>}
         <ul data-testid="cart-lines">
           {lines.length === 0 && <li className="muted">{mode === 'map' && !tableId ? 'Choose a table' : 'Tap an item to start'}</li>}
           {lines.map((l) => (
@@ -295,11 +326,11 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           </div>
         )}
         <div className="actions">
-          <button data-testid="print-bill" disabled={lines.length === 0} onClick={showBill}>Print bill</button>
           <button data-testid="clear" disabled={lines.length === 0} onClick={() => void clear()}>Clear</button>
           {!inOrder && mode === 'default' && (
             <button data-testid="save-order" disabled={cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage('Order saved.'); })}>Save order</button>
           )}
+          <button data-testid="print-bill" disabled={lines.length === 0} onClick={showBill}>Print bill</button>
           {mayVoid && voiding === null && <button data-testid="void-order" onClick={() => setVoiding('')}>Void order</button>}
         </div>
         {mayVoid && voiding !== null && (
