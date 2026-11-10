@@ -57,7 +57,7 @@ async function tablet(name, role, viewport) {
   const code = (await api('POST', '/enrolment-codes', { outletId, counterId }, mgr)).json.code;
   await page.goto(BASE);
   await page.getByTestId('enrol-code').fill(code); await page.getByTestId('enrol-go').click();
-  await page.locator('[data-testid^="staff-"]').filter({ hasText: new RegExp(role, 'i') }).first().click();
+  await page.locator('[data-testid^="staff-"]').filter({ hasText: new RegExp(`School 1 Canteen ${role}(?! 2)`, 'i') }).first().click(); // seeded staff: API tests add others with other PINs
   for (const d of PIN) await page.getByTestId(`key-${d}`).click();
   await page.getByTestId('pin-go').click();
   const opening = page.getByTestId('opening-cash');
@@ -223,7 +223,7 @@ try {
   await a.T('receipt-no').waitFor();
   await a.T('new-sale').click();
   // A's closing must reach the server first (A sends about 0.8 s after a change): that is the race C loses.
-  const sent = () => a.until(async () => (await a.T('pending').innerText()).startsWith('0 waiting'), 15000);
+  const sent = () => a.until(async () => (await a.T('pending').innerText()).match(/^0\b/) !== null, 15000); // the header shows "0" or "0 · 10:35"
   check('A: its payment reached the server', (await sent()) >= 0);
   check('C offline: no banner while its payment is unsent', !(await c.T('refused-banner').isVisible()));
   await c.ctx.setOffline(false);
@@ -267,7 +267,7 @@ try {
 
   // A manager signs in on C and acknowledges both; the banner is gone when the cashier signs back in.
   await c.T('more-menu').click(); await c.T('sign-out').click();
-  await c.T('mgr-open').click();
+  await c.T('more-menu').click(); await c.T('mgr-open').click();
   await c.T('mgr-email').fill('a1@example.test'); await c.T('mgr-password').fill('dev-password-123'); await c.T('mgr-login').click();
   check('Manager on C: both refused payments listed', (await c.until(async () => (await c.T('mgr-refused-ack').count()) === 2)) >= 0);
   check('Manager on C: day close lists them as refused, not as missing receipts',
@@ -283,7 +283,7 @@ try {
   const acks = execFileSync('docker', ['exec', 'app-postgres-1', 'psql', '-U', 'pos_owner', '-d', 'pos', '-tA', '-c', aq]).toString().split('\n').find((l) => l.startsWith('N|'));
   check('server: two acknowledgements in the audit', acks === 'N|2', acks);
   await c.page.reload();
-  await c.page.locator('[data-testid^="staff-"]').filter({ hasText: /cashier/i }).first().click();
+  await c.page.locator('[data-testid^="staff-"]').filter({ hasText: /School 1 Canteen cashier(?! 2)/i }).first().click();
   for (const d of PIN) await c.T(`key-${d}`).click();
   await c.T('pin-go').click();
   await c.T('opening-cash').waitFor({ timeout: 10000 });

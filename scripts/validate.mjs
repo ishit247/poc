@@ -78,6 +78,7 @@ function runStage(name) {
     const started = Date.now();
     const log = createWriteStream(`.validation/${name}.log`);
     const counts = { ok: 0, fail: 0 };
+    const summary = {};
     let last = '', tail = [], buf = '';
     const child = spawn(st.run, { shell: true, env: { ...process.env, FORCE_COLOR: '0' } });
     const take = (d) => {
@@ -88,8 +89,12 @@ function runStage(name) {
       for (const raw of lines) {
         const l = raw.replace(ANSI, '');
         if (!l.trim()) continue;
-        if (/^\s*ok \d+/.test(l)) counts.ok++;
-        else if (/^\s*not ok \d+/.test(l)) counts.fail++;
+        // TAP ("ok 1", "not ok 2") or node:test's spec reporter ("✔ name", "✖ name"), counted live; the spec
+        // summary ("ℹ pass 46", "ℹ fail 0") then sets the exact figures, since spec repeats failures at the end.
+        let m;
+        if ((m = /^ℹ (pass|fail) (\d+)$/.exec(l.trim()))) { summary[m[1] === 'pass' ? 'ok' : 'fail'] = Number(m[2]); }
+        else if (/^\s*ok( \d+| -)/.test(l) || /^✔ /.test(l)) counts.ok++;
+        else if (/^\s*not ok( \d+| -)/.test(l) || /^✖ /.test(l)) counts.fail++;
         last = l.trim().slice(0, 70);
         tail.push(l); if (tail.length > 40) tail.shift();
       }
@@ -105,6 +110,7 @@ function runStage(name) {
     }, 200);
     child.on('close', (code) => {
       clearInterval(tick); log.end();
+      Object.assign(counts, summary);
       const ms = Date.now() - started;
       const pass = code === 0;
       if (tty) process.stdout.write('\r\x1b[2K');

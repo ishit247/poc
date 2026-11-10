@@ -31,33 +31,36 @@ doc. "Not verified" is stated, never implied.
 | 12 | Tables, running orders, quick codes (D13 to D16) | **steps 1 to 8, 2b, 7b, 7c and 7d done (schema, manager API and pull, diet and tags, v2 events and the order fold, server ingest of running orders, tablet running orders in IndexedDB, the new Sell screen, other devices' open orders by pull and SSE nudge, paying another device's order on the payer's own receipt and drawer; step 6 browser-checked 27/27 with `scripts/browser-sell.mjs`, steps 7 and 7b 29/29 with two browsers in `scripts/browser-tables.mjs`)**; design decided 2026-11-06, layout agreed on the prototype | DB 46/46, API 234/234 (incl. a server-equals-fold property over random delivery orders), tablet 51/51 (incl. real-API running-order and two-device contracts), shared 55/55, 52/52 step 1 to 3 mutants, 51/51 step 4, 14/14 step 5, 20/20 step 7, 19/19 step 7b (see the phase 12 doc) | step 8 done: `scripts/browser-flow.mjs` 41/41 (offline reload and PIN sign-in, reconnect, tab killed mid-push, receipt-gap detection, reprint, online queue, shift close, force-close, day close, reports, diet/tag filter). Day-close void screen built 2026-11-06 (a past-day open order no longer blocks with no way out): API 235/235, 4/4 mutants, `browser-flow.mjs` 44/44. **Step 7c done 2026-11-07:** a cashier voids any open table order of the outlet from any device, a waiter only their own, with a reason (`order.voided` v2, audited with device and user); API 239/239, tablet 54/54, shared 55/55, 13/13 mutants, `browser-tables.mjs` 39/39, `browser-sell.mjs` 27/27, `browser-flow.mjs` 44/44 (one earlier flow run timed out at the online "accepted" step, unexplained, passed on re-run). **Step 7d done 2026-11-07:** when two cashiers pay one table while one is offline, or one pays offline an order another device voided, the losing payment is still refused (what wins is unchanged). The losing tablet now marks the row `refused`, counts its cash in the drawer's expected figure and on its own slip line, and shows a banner on Sell and Shift until a manager acknowledges it (new manager route, audited). The server counts that cash at shift close and force-close (`shift.refused_cash_paise`), and day close lists the number as refused, not missing. Results: API 244/244, tablet 59/59, shared 55/55, DB 46/46, 22/22 mutants, `browser-tables.mjs` 56/56, `browser-sell.mjs` 27/27, `browser-flow.mjs` 46/46 twice (it found a header race: a sync in flight when the network dropped set the header back to "Online"; fixed in `App.tsx`, and the script now forces the race every run and fails against the old code; see the 7d notes). A refusal that reaches the server after a manager force-closed its drawer leaves that shift's figures as closed and is flagged at day close ("count it separately") | [phase12-plan.md](docs/phase12-plan.md), [prototype](docs/prototypes/sell-prototype.html) |
 | 11 | Platform admin, billing, hardening | steps 1 to 5 | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding | step 6 not started (mutants per gate, secret encryption, rate limits, runbook, backup and restore drill); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md) |
 
-### 0.2 Latest full verification pass (2026-11-06)
+### 0.2 Latest full verification pass (2026-11-10)
 
-Run on this machine after a cold start, one stage at a time: `pnpm install`,
-Docker Desktop started, then `node scripts/validate.mjs` stages.
+Run on this machine from a cold start (Docker Desktop stopped):
+`node scripts/validate.mjs env typecheck fresh db unit-api unit-counter build --yes`, log in
+`.validation/pass-2026-11-10.out`. All stages passed.
 
 | Check | Result |
 |-------|--------|
+| `env` (now starts Postgres and Garage itself when they are down) | 4/4 |
 | typecheck (shared, admin, api, counter) | clean |
-| `up:fresh` (volumes dropped, 0001 to 0011, reseed) | passed, 1m25s |
-| DB tests (`db/test`: rls, trading, online, platform) | 29/29 |
-| API tests (real Postgres, after `up:fresh`) | 197/197 |
-| Tablet tests (`apps/counter`) | 25/25 |
-| Shared tests (`packages/shared`) | 41/41 |
+| `up:fresh` (volumes dropped, all migrations, reseed) | passed, 18s |
+| DB tests | 46/46 |
+| API tests (real Postgres, after `up:fresh`) | 245/245 (one test fixed first, see below) |
+| Tablet tests (`apps/counter`) | 62/62 |
+| Shared tests (`packages/shared`) | 55/55 |
 | Tablet production build | built |
-| Stack up in Docker (api healthy, counter :8080, admin :8081) | yes; `/api/health` ok |
-| Browser smoke, Edge at 1024x768 | counter shows "Set up this counter", admin shows "Platform console", no sideways scroll, no page errors except a 404 for one resource (probably the manifest icons, known gap) and CSP console notes (see below) |
-| **Not run in this pass** | mutation checks (about 30 min, destructive, rewrites source), the full counter flow in a real browser (sell, offline, sync, shift close, day close), UPI and reprint paths, printing on hardware, `EXPLAIN` on large data |
+| Security headers (curl on :8080 and :8081) | CSP with `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy` sent as headers; `/icon.svg` 200 |
+| Browser scripts, each on its own `fresh` seed, Edge, through the nginx headers above | `browser-flow` 46/46, `browser-sell` 30/30, `browser-tables` 56/56. First run failed in all three because the scripts were stale after the UI commits that followed 7d, not because of an app error ("no page errors" passed in each). Fixed in the scripts: the sync status is read from the dot's aria-label; the veg filter is reached through the Type section; Manager tools opens from the ⋮ menu; the pending count is "0" or "0 · time"; staff are picked by the seeded name, since API tests add cashiers with other PINs (so run `fresh` before each script) |
+| **Not run in this pass** | mutation checks, printing on hardware, `EXPLAIN` on large data |
 
-Findings from the pass, not yet fixed:
-- `scripts/validate.mjs` reports "0 ok" for the `db` stage though 29 tests passed (it does not parse the node:test
-  spec output used there). The log is right; the runner's counter is wrong.
-- The `env` stage fails on a cold machine because it requires the containers to be up already; `fresh` brings them up.
-  Run `fresh` first, or change `env` to start them.
-- The counter and admin pages ship a CSP `<meta>` with `frame-ancestors`, which browsers ignore in a meta tag; it
-  needs to be an HTTP header (nginx) to have any effect.
-- The git repo is `app/` itself (there is no `.git` in the parent `pos/` folder). At the start of this pass the working
-  tree was clean, so the "uncommitted" labels in the phase 4 to 6 and 11 notes are out of date.
+Fixed in this pass (the 2026-11-06 findings):
+- `scripts/validate.mjs` counted only TAP lines, so node:test's spec output showed "0 ok"; it now reads spec lines and
+  the `ℹ pass`/`ℹ fail` summary.
+- `env` failed on a cold machine; it now starts Postgres and Garage (no data change) and runs `garage-init`.
+- CSP moved from a `<meta>` (where browsers ignore `frame-ancestors`) to `deploy/nginx.conf` headers, with `nosniff`
+  and `Referrer-Policy`. The Vite dev servers no longer send a CSP; only the Docker stack does.
+- The 404 was a missing icon: `icon.svg` added to counter and admin, linked as the favicon and in the manifest.
+- `apps/api/test/permissions.test.ts` ("only managers can use web login") failed since the seed got a second School 1
+  cashier (d258bd5): it set one email on every `School 1%` user of a role and hit the unique email index. It now
+  targets one user by exact name. Login itself was not at fault.
 
 ### 0.3 Next steps, in order
 
@@ -67,9 +70,11 @@ Findings from the pass, not yet fixed:
    listed in one helper file, assertions on behaviour not pixels).
 2. ~~Real-browser run of the whole counter flow at tablet size~~ done 2026-11-06 (phase 12 step 8, 41/41). Follow-up
    done the same day: the day-close screen lists open orders and voids them (44/44).
-3. Resolve Q4 (hosting), Q6 (Hindi receipts), Q7 (hardware); print on the real H58BT.
-4. Phase 11 step 6, then decide the cut-over to additive-only migrations (section 18) before the first real tenant.
-5. Phase 9 UI (integrations, item mapping) once partner access is known.
+3. ~~Bring the three browser scripts up to the current UI~~ done 2026-11-10 (0.2).
+4. Resolve Q4 (hosting), Q6 (Hindi receipts), Q7 (hardware); print on the real H58BT.
+5. Phase 11 step 6 (2026-11-10: the CSP header, icon and runner fixes are done; still owed: secret encryption, rate
+   limits beyond the global 300/min and the two user routes, runbook, backup and restore drill, mutants per gate), then decide the cut-over to additive-only migrations (section 18) before the first real tenant.
+6. Phase 9 UI (integrations, item mapping) once partner access is known.
 
 Open questions raised by D13 (add to section 17 when reached): Q12 which segment is the first paying customer
 (counter-service or dine-in); Q13 does a restaurant need kitchen tickets in the first pilot (if yes, KOT moves into

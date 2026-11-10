@@ -49,7 +49,7 @@ const lineCount = () => settled(() => page.locator('[data-testid="cart-lines"] l
 try {
   await page.goto(BASE);
   await T('enrol-code').fill(code); await T('enrol-go').click();
-  await page.locator('[data-testid^="staff-"]').filter({ hasText: /cashier/i }).first().click();
+  await page.locator('[data-testid^="staff-"]').filter({ hasText: /School 1 Canteen cashier(?! 2)/i }).first().click(); // the seeded one: API tests add cashiers with other PINs
   for (const d of PIN) await T(`key-${d}`).click();
   await T('pin-go').click();
   await T('opening-cash').fill('500'); await T('open-shift').click();

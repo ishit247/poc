@@ -37,10 +37,11 @@ test('only managers can use web login: a waiter or cashier with credentials set 
   const hash = (await withTenant(A, (c) => c.query("SELECT password_hash FROM app_user WHERE lower(email) = 'a1@example.test'"))).rows[0].password_hash;
   for (const role of ['waiter', 'cashier']) {
     const email = `${role}-web@example.test`;
+    const name = `School 1 Canteen ${role}`; // exactly one user: School 1 also has a "cashier 2", and email is unique
     await withTenant(A, (c) =>
-      c.query("UPDATE app_user SET email = $1, password_hash = $2 WHERE role = $3 AND name LIKE 'School 1%'", [email, hash, role]));
+      c.query('UPDATE app_user SET email = $1, password_hash = $2 WHERE role = $3 AND name = $4', [email, hash, role, name]));
     const r = await app.inject({ method: 'POST', url: '/login', headers: { host: hostFor(A) }, payload: { email, password: 'dev-password-123' } });
     assert.equal(r.statusCode, 401, `${role} must not get a web session`);
-    await withTenant(A, (c) => c.query("UPDATE app_user SET email = NULL, password_hash = NULL WHERE role = $1 AND name LIKE 'School 1%'", [role]));
+    await withTenant(A, (c) => c.query('UPDATE app_user SET email = NULL, password_hash = NULL WHERE role = $1 AND name = $2', [role, name]));
   }
 });

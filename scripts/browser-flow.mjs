@@ -53,6 +53,7 @@ const errors = [];
 let page;
 const T = (id) => page.getByTestId(id);
 const text = async (id) => (await T(id).innerText()).trim();
+const status = async () => (await T('sync-status').getAttribute('aria-label')) ?? ''; // the header shows a dot; its label says Online/Offline
 const shot = (n) => page.screenshot({ path: `${out}/screens/flow-${n}.png` });
 const pending = async () => Number((await text('pending')).match(/^(\d+)/)?.[1] ?? NaN);
 const lineCount = () => page.locator('[data-testid="cart-lines"] li .name').count();
@@ -63,7 +64,7 @@ async function openPage() {
   await page.goto(BASE);
 }
 async function signIn() {
-  await page.locator('[data-testid^="staff-"]').filter({ hasText: /cashier/i }).first().click();
+  await page.locator('[data-testid^="staff-"]').filter({ hasText: /School 1 Canteen cashier(?! 2)/i }).first().click(); // the seeded one: API tests add cashiers with other PINs
   for (const d of PIN) await T(`key-${d}`).click();
   await T('pin-go').click();
 }
@@ -99,7 +100,7 @@ try {
   await T('tab-sell').click();
   await T('search').waitFor();
   const [[deviceId]] = sql(`d.id) FROM device d WHERE d.counter_id='${counterId}' ORDER BY d.enrolled_at DESC LIMIT 1`);
-  check('enrolled, signed in, shift open', (await text('sync-status')).includes('Online'));
+  check('enrolled, signed in, shift open', (await status()).includes('Online'));
 
   // 2. Diet and tag filter row (not exercised in step 6)
   await T('tags-toggle').click(); // the Tags section starts collapsed
@@ -108,6 +109,7 @@ try {
   const hot = await until(async () => { const n = await page.locator('button.item:not([data-testid^="pop-"])').allInnerTexts(); return n.length ? n : null; }, 3000);
   const hotNames = (hot ?? []).map((s) => s.split('\n')[0].trim());
   check('a tag filter shows only items with that tag', hotNames.length > 0 && hotNames.every((n) => ['Samosa', 'Tea'].includes(n)), hotNames.join(', '));
+  await T('types-toggle').click(); // diet marks are in the Type section; opening it folds Tags
   await T('filter-veg').click();
   const veg = (await page.locator('button.item:not([data-testid^="pop-"])').allInnerTexts()).map((s) => s.split('\n')[0].trim());
   check('a diet filter shows only items with that mark', veg.length > 0 && veg.every((n) => ['Samosa', 'Veg Sandwich', 'Cold Coffee'].includes(n)), veg.join(', '));
@@ -146,7 +148,7 @@ try {
   // 5. Offline: two sales, a reload, offline sign-in, then reconnect
   await until(async () => (await pending()) === 0, 15000);
   await ctx.setOffline(true);
-  check('header says Offline', await until(async () => (await text('sync-status')).includes('Offline'), 3000));
+  check('header says Offline', await until(async () => (await status()).includes('Offline'), 3000));
   receipts.push(await cashSale('Samosa'));
   receipts.push(await cashSale('Tea'));
   check('offline sales wait in the outbox', (await until(async () => (await pending()) >= 2, 3000)) === true, `${await pending()} waiting`);
@@ -179,9 +181,9 @@ try {
   await ctx.setOffline(true);
   await page.waitForTimeout(2500); // the held pull is delivered meanwhile
   await page.unroute(lastOfSync);
-  check('header stays Offline after a sync that was in flight', (await text('sync-status')).includes('Offline'), await text('sync-status'));
+  check('header stays Offline after a sync that was in flight', (await status()).includes('Offline'), await status());
   await ctx.setOffline(false);
-  check('and says Online again on reconnect', await until(async () => (await text('sync-status')).includes('Online'), 10000));
+  check('and says Online again on reconnect', await until(async () => (await status()).includes('Online'), 10000));
 
   // 6. Tab killed mid-push: the server applies the batch, the tablet never hears back, the tab closes
   let hit = false;
@@ -199,7 +201,7 @@ try {
 
   // 7. A receipt that never reaches the server (gap detection)
   await ctx.setOffline(true);
-  await until(async () => (await text('sync-status')).includes('Offline'), 3000);
+  await until(async () => (await status()).includes('Offline'), 3000);
   const lostNo = await cashSale('Tea');
   receipts.push(lostNo);
   lost = await loseSale(lostNo);
@@ -253,7 +255,7 @@ try {
   // (The seed's unaccepted Swiggy order is expired and voided by the server's expiry job; online orders are not voided here.)
   const stale = sql(`id) FROM sale WHERE outlet_id='${outletId}' AND status='open' AND channel='counter' AND business_date < current_date`);
   await T('more-menu').click(); await T('sign-out').click();
-  await T('mgr-open').click();
+  await T('more-menu').click(); await T('mgr-open').click();
   await T('mgr-email').fill('a1@example.test'); await T('mgr-password').fill('dev-password-123'); await T('mgr-login').click();
   await T('mgr-tab-close').click();
   await T('mgr-date').waitFor();
