@@ -21,8 +21,11 @@ function checkAuth(r: Response): void { if (r.status === 401) deviceRejected(); 
 interface Change { type: string; id: string; version: number; deleted: boolean; data: Record<string, any> }
 
 /** Events still waiting to be sent (parked rejections are not coming back, so they are not "waiting"). Day close shows it. */
+export async function unsentCount(): Promise<number> {
+  return db.outbox.filter((r) => !r.rejected).count();
+}
 async function waiting(): Promise<string> {
-  return String((await db.outbox.toArray()).filter((r) => !r.rejected).length);
+  return String(await unsentCount());
 }
 
 export async function pull(device: DeviceInfo): Promise<number> {

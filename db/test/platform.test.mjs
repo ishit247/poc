@@ -11,7 +11,27 @@ const appPool = new pg.Pool({ connectionString: process.env.APP_DATABASE_URL ?? 
 const platPool = new pg.Pool({ connectionString: process.env.PLATFORM_DATABASE_URL ?? 'postgres://app_platform:app_platform@localhost:55432/pos' });
 test.after(() => Promise.all([appPool.end(), platPool.end()]));
 
-const PLATFORM_TABLES = ['platform_admin', 'platform_session', 'platform_audit', 'catalog_template', 'catalog_category', 'catalog_item'];
+// Shape of a sealed secret (apps/api/src/security/crypto.ts); the database checks the shape only, it cannot decrypt.
+const SEALED = 'v1:' + 'A'.repeat(60);
+
+test('secrets the server reads back are stored sealed: a plain secret is refused in both columns', async () => {
+  await rolledBack(platPool, async (c) => {
+    await assert.rejects(c.query(
+      'INSERT INTO platform_admin (email, name, role, password_hash, totp_secret_sealed) VALUES ($$p@example.test$$, $$P$$, $$owner$$, $$x$$, $$JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP$$)'),
+      /check constraint/);
+  });
+  await rolledBack(appPool, async (c) => {
+    await c.query("SELECT set_config('app.tenant_id', $1, true)", [A]);
+    const n = await c.query('SELECT count(*)::int AS n FROM outlet_integration');
+    assert.ok(n.rows[0].n > 0, 'the seed has an integration for tenant A');
+    await assert.rejects(c.query("UPDATE outlet_integration SET webhook_secret_sealed = 'dev-webhook-secret-a1-plain'"), /check constraint/);
+  });
+  // And the seed's own values have the sealed shape.
+  const sealedRows = await rolledBack(platPool, (c) => c.query("SELECT count(*)::int AS n FROM platform_admin WHERE totp_secret_sealed LIKE 'v1:%'"));
+  assert.ok(sealedRows.rows[0].n >= 2);
+});
+
+const PLATFORM_TABLES =['platform_admin', 'platform_session', 'platform_audit', 'catalog_template', 'catalog_category', 'catalog_item'];
 
 async function rolledBack(pool, fn) {
   const c = await pool.connect();
@@ -104,7 +124,7 @@ test('a console can suspend a tenant; the audit trail cannot be edited or delete
     const up = await c.query('UPDATE tenant SET suspended_at = now() WHERE id = $1', [A]);
     assert.equal(up.rowCount, 1);
     const adm = await c.query(
-      "INSERT INTO platform_admin (email, name, role, password_hash, totp_secret) VALUES ('t@example.test', 'T', 'owner', 'x', 'JBSWY3DPEHPK3PXP') RETURNING id");
+      'INSERT INTO platform_admin (email, name, role, password_hash, totp_secret_sealed) VALUES ($$t@example.test$$, $$T$$, $$owner$$, $$x$$, $1) RETURNING id', [SEALED]);
     await c.query("INSERT INTO platform_audit (admin_id, action, tenant_id, entity) VALUES ($1, 'tenant.suspend', $2, 'tenant')", [adm.rows[0].id, A]);
     for (const stmt of ['UPDATE platform_audit SET action = $$x$$', 'DELETE FROM platform_audit', 'TRUNCATE platform_audit']) {
       await c.query('SAVEPOINT s');
@@ -117,7 +137,7 @@ test('a console can suspend a tenant; the audit trail cannot be edited or delete
 test('support and owner are the only console roles; email is unique ignoring case', async () => {
   await rolledBack(platPool, async (c) => {
     const ins = (email, role) => c.query(
-      'INSERT INTO platform_admin (email, name, role, password_hash, totp_secret) VALUES ($1, $$n$$, $2, $$x$$, $$s$$)', [email, role]);
+      'INSERT INTO platform_admin (email, name, role, password_hash, totp_secret_sealed) VALUES ($1, $$n$$, $2, $$x$$, $3)', [email, role, SEALED]);
     await ins('Dup@example.test', 'owner');
     await c.query('SAVEPOINT s1');
     await assert.rejects(ins('dup@EXAMPLE.test', 'owner'), /duplicate key/);

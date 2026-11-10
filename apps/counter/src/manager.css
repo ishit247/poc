@@ -56,6 +56,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .m-row .main { min-width: 0; }
 .m-row .main b { display: block; }
 .m-row .main span { font-size: 14px; color: var(--muted); }
+.m-row-actions { display: flex; gap: 8px; } /* a row's own buttons: the plain one first, the destructive one last */
 .m-alert { display: flex; gap: 10px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--m-warn-line); background: var(--m-warn-bg); font-size: 15px; align-items: flex-start; }
 .m-alert.bad { border-color: var(--m-bad-line); background: var(--m-bad-bg); color: var(--error); }
 .m-alert.info { border-color: var(--line); background: var(--m-s1); }

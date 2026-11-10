@@ -156,8 +156,16 @@ test('enrolment: manager creates code, device redeems once, credential works, re
   assert.equal((await post(app, `/devices/${deviceId}/revoke`, {}, bearer(t2))).statusCode, 404);
   assert.equal((await app.inject({ method: 'GET', url: '/device/whoami', headers: { authorization: `Device ${credential}` } })).statusCode, 200);
 
-  assert.equal((await post(app, `/devices/${deviceId}/revoke`, {}, bearer(t))).statusCode, 200);
+  // The reason is checked before anything changes, then kept in the audit row.
+  assert.equal((await post(app, `/devices/${deviceId}/revoke`, { reason: 'x'.repeat(201) }, bearer(t))).statusCode, 400);
+  assert.equal((await post(app, `/devices/${deviceId}/revoke`, { reason: 'Lost', extra: 1 }, bearer(t))).statusCode, 400);
+  assert.equal((await app.inject({ method: 'GET', url: '/device/whoami', headers: { authorization: `Device ${credential}` } })).statusCode, 200);
+  assert.equal((await post(app, `/devices/${deviceId}/revoke`, { reason: 'Stolen from the counter' }, bearer(t))).statusCode, 200);
   assert.equal((await app.inject({ method: 'GET', url: '/device/whoami', headers: { authorization: `Device ${credential}` } })).statusCode, 401);
+  const a = await withTenant(A, (c) => c.query("SELECT detail FROM audit WHERE action = 'device.revoke' AND entity_id = $1", [deviceId]));
+  assert.deepEqual(a.rows.map((r) => r.detail), [{ reason: 'Stolen from the counter' }]);
+  // A second revoke finds nothing to change (already revoked) and writes no second audit row.
+  assert.equal((await post(app, `/devices/${deviceId}/revoke`, {}, bearer(t))).statusCode, 404);
 });
 
 test('enrolment code: expired code refused; scope: cannot mint codes for another outlet or tenant', async () => {

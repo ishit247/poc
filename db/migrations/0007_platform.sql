@@ -14,8 +14,9 @@ CREATE TABLE platform_admin (
   -- owner: everything. support: health and usage only; cannot suspend, create or impersonate.
   role          text NOT NULL CHECK (role IN ('owner', 'support')),
   password_hash text NOT NULL,
-  -- Base32 TOTP secret. Required: a console login is always two-factor.
-  totp_secret   text NOT NULL,
+  -- Base32 TOTP secret, encrypted (the server must compute codes from it, so not a hash): see sealSecret in
+  -- apps/api/src/security/crypto.ts, sealed with this row's id. Required: a console login is always two-factor.
+  totp_secret_sealed text NOT NULL CHECK (totp_secret_sealed ~ '^v1:[A-Za-z0-9_-]{40,}$'),
   active        boolean NOT NULL DEFAULT true,
   -- Highest TOTP time step already accepted. A code at or below it is refused, so a captured code cannot be replayed.
   totp_last_step bigint NOT NULL DEFAULT 0,

@@ -287,6 +287,19 @@ const MUTANTS = [
     ['webhook-sender-pretends-success', 'apps/api/src/jobs/outbox.ts', "async () => { throw new Error(`${provider}: partner API not configured`); }", 'async () => {}'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('webhooks.test.ts'))),
   M('webhook-event-editable', 'db/migrations/0006_integrations.sql', 'REVOKE UPDATE, DELETE, TRUNCATE ON inbound_event FROM pos_app;', '', API_TESTS('webhooks.test.ts')),
+  // --- phase 11 step 6: the revoke reason is validated before anything changes
+  M('revoke-reason-unchecked', 'apps/api/src/routes/auth.ts', 'if (!params.success || !body.success) return bad(reply);', 'if (!params.success) return bad(reply);', API_TESTS('auth.test.ts')),
+  // --- phase 11 step 6: sealed secrets (security/crypto.ts and the two sealed columns)
+  ...[
+    ['secret-row-binding-off', 'export const webhookSecretContext = (integrationId: string) => `outlet_integration.webhook_secret:${integrationId}`;', "export const webhookSecretContext = (_integrationId: string) => 'outlet_integration.webhook_secret';"],
+    ['secret-prod-key-optional', "if (process.env.NODE_ENV === 'production') throw new Error('SECRETS_KEY is not set (base64 of 32 random bytes)');", ''],
+    ['secret-key-length-unchecked', "if (k.length !== 32) throw new Error('SECRETS_KEY must be base64 of exactly 32 bytes');", ''],
+    ['secret-webhook-short-allowed', '  if (secret.length < WEBHOOK_SECRET_MIN) throw', '  if (false) throw'],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/security/crypto.ts', from, to, { cwd: 'apps/api', cmd: ['node', '--import', 'tsx', '--test', 'test/secrets.test.ts'], noDb: true })),
+  ...[
+    ['secret-plain-webhook-allowed', 'db/migrations/0006_integrations.sql', "webhook_secret_sealed text NOT NULL CHECK (webhook_secret_sealed ~ '^v1:[A-Za-z0-9_-]{40,}$'),", 'webhook_secret_sealed text NOT NULL,'],
+    ['secret-plain-totp-allowed', 'db/migrations/0007_platform.sql', "totp_secret_sealed text NOT NULL CHECK (totp_secret_sealed ~ '^v1:[A-Za-z0-9_-]{40,}$'),", 'totp_secret_sealed text NOT NULL,'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, { cwd: '.', cmd: ['node', '--test', 'db/test/platform.test.mjs'] })),
   // --- phase 8: reports
   ...[
     ['rep-named-outlet-unchecked', 'apps/api/src/routes/reports.ts', 'if (outletId && !p.outletIds.includes(outletId)) return', 'if (false) return'],

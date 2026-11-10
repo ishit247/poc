@@ -8,7 +8,7 @@ import { audit } from '../audit.js';
 import { healthWarnings } from '../platformHealth.js';
 import { platformAudit } from '../platformAudit.js';
 import { insertInvite, newInvite } from '../invite.js';
-import { newSecret, sha256 } from '../security/crypto.js';
+import { newSecret, openSecret, sha256, totpSecretContext } from '../security/crypto.js';
 import { DUMMY_HASH, MIN_PASSWORD_LENGTH, hashPassword, verifyPassword } from '../security/password.js';
 import { matchTotp } from '../security/totp.js';
 import { ITEM_DESCRIPTION_MAX, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_MAX_PER_TENANT, ITEM_IMAGE_TYPES, SHA256_HEX } from '@pos/shared';
@@ -95,13 +95,13 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await withPlatform(async (c) => {
       const a = (await c.query(
-        `SELECT id, password_hash, totp_secret, totp_last_step, failed_logins, (locked_until IS NOT NULL AND locked_until > now()) AS locked
+        `SELECT id, password_hash, totp_secret_sealed, totp_last_step, failed_logins, (locked_until IS NOT NULL AND locked_until > now()) AS locked
            FROM platform_admin WHERE lower(email) = lower($1) AND active FOR UPDATE`, [email])).rows[0];
       // Always burn one hash verification so timing does not reveal whether the account exists or is locked.
       const passwordOk = await verifyPassword(password, a?.password_hash ?? DUMMY_HASH);
       if (!a || a.locked) return null;
 
-      const step = matchTotp(a.totp_secret, code);
+      const step = matchTotp(openSecret(a.totp_secret_sealed, totpSecretContext(a.id)), code);
       // A step at or below the last accepted one is a replay of a code already used.
       const codeOk = step !== null && step > Number(a.totp_last_step);
       if (!passwordOk || !codeOk) {

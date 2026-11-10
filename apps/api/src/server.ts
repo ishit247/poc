@@ -1,4 +1,7 @@
 import { buildApp } from './app.js';
+import { checkSecretsKey } from './security/crypto.js';
+
+checkSecretsKey();
 import { startExpiryJob } from './jobs/expireOnline.js';
 import { startOutboxJob } from './jobs/outbox.js';
 

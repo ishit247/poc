@@ -21,6 +21,8 @@ const codeBody = z.object({ outletId: uuid, counterId: uuid, label: deviceLabel.
 const pinSignin = z.object({ userId: uuid, pin: z.string().regex(/^\d{6,8}$/) }).strict();
 const enrolBody = z.object({ code: z.string().max(200) }).strict();
 const idParams = z.object({ id: uuid });
+// Why a tablet was revoked (lost, stolen, replaced), for the audit trail. Optional for API callers; the screen asks.
+const revokeBody = z.object({ reason: z.string().trim().min(1).max(200).optional() }).strict();
 const inviteBody = z.object({ token: z.string().max(200), password: z.string().min(MIN_PASSWORD_LENGTH).max(256) }).strict();
 
 const bad = (reply: FastifyReply) => reply.code(400).send({ error: 'invalid request' });
@@ -267,7 +269,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/devices/:id/revoke', { config: { scope: 'outlet', permission: 'manager', ...strict(30) } }, async (req, reply) => {
     const params = idParams.safeParse(req.params);
-    if (!params.success) return bad(reply);
+    const body = revokeBody.safeParse(req.body ?? {});
+    if (!params.success || !body.success) return bad(reply);
     const p = req.principal!;
     if (p.kind !== 'user') return reply.code(403).send({ error: 'forbidden' });
     const done = await withTenant(p.tenantId, async (c) => {
@@ -276,7 +279,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         'UPDATE device SET revoked_at = now() WHERE id = $1 AND outlet_id = ANY($2::uuid[]) AND revoked_at IS NULL RETURNING id',
         [params.data.id, p.outletIds]);
       if (r.rowCount === 0) return false;
-      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'device.revoke', entity: 'device', entityId: params.data.id });
+      await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'device.revoke', entity: 'device', entityId: params.data.id,
+        ...(body.data.reason ? { detail: { reason: body.data.reason } } : {}) });
       return true;
     });
     return done ? { ok: true } : notFound(reply);

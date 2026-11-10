@@ -10,8 +10,10 @@ CREATE TABLE outlet_integration (
   outlet_id         uuid NOT NULL,
   channel           text NOT NULL CHECK (channel IN ('zomato', 'swiggy')),
   external_store_id text NOT NULL CHECK (length(external_store_id) BETWEEN 1 AND 64),
-  -- Shared secret for the webhook signature. Stored as given (HMAC needs the key); encrypt at rest in phase 11.
-  webhook_secret    text NOT NULL CHECK (length(webhook_secret) >= 16),
+  -- Shared secret for the webhook signature, encrypted (HMAC needs the key back, so not a hash): see sealSecret in
+  -- apps/api/src/security/crypto.ts. The check refuses anything that is not a sealed value, e.g. a plain secret.
+  -- The plain secret's minimum length (16) is enforced where it is sealed (sealWebhookSecret, same file).
+  webhook_secret_sealed text NOT NULL CHECK (webhook_secret_sealed ~ '^v1:[A-Za-z0-9_-]{40,}$'),
   -- Who the sale is booked to and which counter receives the order: a sale needs both (sale.created_by / device_id).
   service_user_id   uuid NOT NULL,
   device_id         uuid NOT NULL,

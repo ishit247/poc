@@ -223,7 +223,7 @@ function Counter({ device }: { device: DeviceInfo }) {
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
       {mgr !== null && !actor ? (
-        mgr ? <ManagerTools token={mgr} outletId={device.outletId} onProfile={setMgrName} /> : <main className="center"><ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} /></main>
+        mgr ? <ManagerTools token={mgr} outletId={device.outletId} deviceId={device.deviceId} onProfile={setMgrName} /> : <main className="center"><ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} /></main>
       ) : !actor ? (
         <>
           <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />

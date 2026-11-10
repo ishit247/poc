@@ -4,6 +4,7 @@ import { pool, withTenant } from '../db.js';
 import { providers, type Channel, type NormalisedOrder } from '../providers/index.js';
 import { createOrder } from './online.js';
 import { publish } from '../hub.js';
+import { openSecret, webhookSecretContext } from '../security/crypto.js';
 
 // Inbound platform orders (PLAN 11). Public routes: a platform has no session, so the caller is proven by an HMAC
 // signature made with the secret of the outlet it names. The tenant comes from that outlet's integration row,
@@ -21,10 +22,13 @@ export async function findIntegration(channel: Channel, storeId: string): Promis
     await c.query('BEGIN');
     await c.query("SELECT set_config('app.job', 'webhook', true)");
     const r = await c.query(
-      `SELECT id, tenant_id AS "tenantId", outlet_id AS "outletId", webhook_secret AS secret, service_user_id AS "serviceUserId", device_id AS "deviceId"
+      `SELECT id, tenant_id AS "tenantId", outlet_id AS "outletId", webhook_secret_sealed AS sealed, service_user_id AS "serviceUserId", device_id AS "deviceId"
          FROM outlet_integration WHERE channel = $1 AND external_store_id = $2`, [channel, storeId]);
     await c.query('COMMIT');
-    return r.rows[0] ?? null;
+    const row = r.rows[0];
+    if (!row) return null;
+    const { sealed, ...rest } = row;
+    return { ...rest, secret: openSecret(sealed, webhookSecretContext(row.id)) };
   } catch (e) {
     await c.query('ROLLBACK');
     throw e;

@@ -1,12 +1,12 @@
 // Dev seed: two tenants (A, B) so isolation tests are meaningful. DEV ONLY:
 // the shared password below must never reach a real environment.
 // Runs as pos_owner; RLS is FORCEd, so each tenant is stamped like the app does.
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { solidPng } from './png.ts';
 import { closeObjects, putObject, tenantKey } from '../apps/api/src/objects.ts';
 import { hashPassword } from '../apps/api/src/security/password.ts';
-import { newSecret, sha256 } from '../apps/api/src/security/crypto.ts';
+import { newSecret, sealSecret, sealWebhookSecret, sha256, totpSecretContext } from '../apps/api/src/security/crypto.ts';
 
 export const DEV_PASSWORD = 'dev-password-123';
 export const DEV_PIN = '482913'; // dev only
@@ -163,10 +163,12 @@ for (const t of Object.values(SEED)) {
   }
   // Aggregator integration (phase 9) at each tenant's first outlet: dev store id and secret, Samosa mapped, Tea not.
   // Zomato only; the dev secret is public on purpose (tests sign with it).
+  // The id is made here because the sealed secret is bound to it.
+  const integrationId = randomUUID();
   await client.query(
-    `INSERT INTO outlet_integration (tenant_id, outlet_id, channel, external_store_id, webhook_secret, service_user_id, device_id)
-     VALUES ($1, $2, 'zomato', $3, $4, $5, $6)`,
-    [t.id, outletIds[0], `dev-store-${t.key}1`, `dev-webhook-secret-${t.key}1`, managerIds[0], deviceIds[0]]);
+    `INSERT INTO outlet_integration (id, tenant_id, outlet_id, channel, external_store_id, webhook_secret_sealed, service_user_id, device_id)
+     VALUES ($1, $2, $3, 'zomato', $4, $5, $6, $7)`,
+    [integrationId, t.id, outletIds[0], `dev-store-${t.key}1`, sealWebhookSecret(integrationId, `dev-webhook-secret-${t.key}1`), managerIds[0], deviceIds[0]]);
   await client.query(
     `INSERT INTO item_channel_map (tenant_id, outlet_id, channel, external_item_id, item_id) VALUES ($1, $2, 'zomato', $3, $4)`,
     [t.id, outletIds[0], `ZS-${t.key}-samosa`, itemIds['Samosa']]);
@@ -279,9 +281,10 @@ for (const t of Object.values(SEED)) {
 
 // Platform console operators (DEV ONLY: fixed password and authenticator secret, which tests use to compute codes).
 for (const [email, name, role] of [['owner@platform.test', 'Platform Owner', 'owner'], ['support@platform.test', 'Platform Support', 'support']]) {
+  const adminId = randomUUID();
   await client.query(
-    'INSERT INTO platform_admin (email, name, role, password_hash, totp_secret) VALUES ($1, $2, $3, $4, $5)',
-    [email, name, role, passwordHash, DEV_TOTP_SECRET]);
+    'INSERT INTO platform_admin (id, email, name, role, password_hash, totp_secret_sealed) VALUES ($1, $2, $3, $4, $5, $6)',
+    [adminId, email, name, role, passwordHash, sealSecret(DEV_TOTP_SECRET, totpSecretContext(adminId))]);
 }
 
 // Operator catalog template (docs/catalog-templates.md): HSN/SAC and GST per item, prices tax-exclusive paise.

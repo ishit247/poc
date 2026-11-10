@@ -16,6 +16,11 @@ x-s3-env: &s3-env
   S3_BUCKET: pos-images
   S3_ACCESS_KEY_ID: "GK000000000000000000000001"
   S3_SECRET_ACCESS_KEY: "0000000000000000000000000000000000000000000000000000000000000001" # quoted: bare digits are a number to YAML
+# Key that seals stored secrets (webhook keys, authenticator seeds); see apps/api/src/security/crypto.ts. This is the
+# public DEV key. A real server sets its own (`openssl rand -base64 32`), kept outside the database and its backups,
+# and the API refuses to start without one. Sealed values from the dev seed open only under this dev key.
+x-secrets-env: &secrets-env
+  SECRETS_KEY: ${SECRETS_KEY:-ZGV2LW9ubHkta2V5LWRvLW5vdC11c2UtaW4tcHJvZCE=}
 
 services:
   postgres:
@@ -63,7 +68,7 @@ services:
     build: { context: ., target: api }
     image: pos-api
     environment:
-      <<: *s3-env
+      <<: [*s3-env, *secrets-env]
       APP_DATABASE_URL: postgres://pos_app:pos_app@postgres:5432/pos
       PLATFORM_DATABASE_URL: postgres://app_platform:app_platform@postgres:5432/pos
       BASE_DOMAIN: ${BASE_DOMAIN:-localhost}
@@ -106,7 +111,7 @@ services:
     profiles: ["seed"]
     command: ["node", "--import", "tsx", "scripts/seed.ts"]
     environment:
-      <<: [*db-env, *s3-env]
+      <<: [*db-env, *s3-env, *secrets-env]
     depends_on:
       migrate: { condition: service_completed_successfully }
       garage: { condition: service_healthy }

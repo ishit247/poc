@@ -35,7 +35,7 @@ PLAN.md refs: sections 5 (roles), 14 (reports), 15 (audit), 18 (operations), 19 
 | 3 | Health and usage views (device last-seen, unsynced, sync rejects, outbox backlog, webhook quiet, app-version skew; counts per month) | done, uncommitted |
 | 4 | Impersonation (reason, 30-minute expiry, read-only only, tenant-visible audit) | done, uncommitted |
 | 5 | `apps/admin` UI, checked in a real browser at tablet size | done (see notes); impersonation, audit viewer and usage screens not yet in the UI |
-| 6 | Mutation checks per gate; fold phase 9 gaps (integration/mapping admin, encrypt webhook secrets); runbook, backups/restore drill, rate limits | not started |
+| 6 | Mutation checks per gate; fold phase 9 gaps (integration/mapping admin, encrypt webhook secrets); runbook, backups/restore drill, rate limits | **partly done 2026-11-10**, see "Step 6 notes". Done: sealed secrets, backup and restore drill, runbook, rate limits reviewed, CSP header, device revoke screen. Owed: integration/mapping admin (needs partner access, Q1), off-site copies and PITR (Q4), a full mutation run |
 
 ## Notes per step
 
@@ -147,6 +147,48 @@ one after another and `up:fresh` before the API suite.
 Not done: the console has no screens for impersonation, usage or the platform audit yet (API exists); a manager's outlets
 cannot be changed after creation from the console; nothing is emailed or texted (the operator copies the link); the
 invite lifetime (3 days) and the 7-day DB ceiling are fixed in code.
+
+### Step 6 (partly done, 2026-11-10)
+
+- **Sealed secrets.** `outlet_integration.webhook_secret` and `platform_admin.totp_secret` held plain text the server
+  must read back (HMAC key, authenticator seed), so they cannot be hashed. Now `webhook_secret_sealed` and
+  `totp_secret_sealed` (originals edited in 0006 and 0007): AES-256-GCM under `SECRETS_KEY`, stored as `v1:` +
+  base64url(iv, tag, ciphertext), with the table, column and row id as authenticated data, so a value copied onto
+  another row or tenant does not open. A database CHECK refuses anything not in the sealed shape. One place:
+  `apps/api/src/security/crypto.ts` (`sealSecret`, `openSecret`, the two context functions, `sealWebhookSecret`, which
+  keeps the 16-character minimum that was a DB check before). The API image (`NODE_ENV=production`) refuses to start
+  without the key; tests and `pnpm dev` fall back to a public dev key, and docker-compose passes the same dev key. The
+  seed makes the row ids itself so it can seal against them.
+  Verified: DB 47/47 (1 new: plain text refused in both columns), API 250/250 (5 new in `test/secrets.test.ts`; the
+  webhook and console sign-in suites now open seed values sealed inside Docker), tablet 62/62, typecheck clean.
+  6 mutants `secret-*`, 6/6 caught (two re-run after their patterns were fixed; they did not match at first).
+- **Backups.** `scripts/backup.mjs` (pg_dump, owners kept) and `scripts/restore-drill.ts` (restore beside `pos`,
+  compare row counts, RLS flags and policies, owners, grants, tenant isolation as `pos_app`, and open every sealed
+  secret). Passed on the dev stack in 3.9 s; fails with a wrong key (0/4), as it should. A dump as `pos_owner` is
+  refused by Postgres because of FORCEd RLS, so backups need the superuser or a BYPASSRLS read-only role.
+- **Rate limits** were already wider than the plan said: global 300/min per IP; 10/min on manager, console and invite
+  sign-in and enrolment; 30/min per device on PIN sign-in. Left as they are; the runbook says when to raise the global
+  one (a school's tablets share one IP).
+- **Runbook:** `docs/runbook.md` (dev values to replace, backups, restore, incidents).
+- **Device revoke screen (built the same day).** Manager tools gets a fourth tab, Tablets (`manager/Tablets.tsx`):
+  the tablets of the manager's outlets from `GET /devices` (label, counter, outlet when there are several, last seen,
+  enrolled, app version, "This tablet"), Revoke… with a required reason (quick picks Lost, Stolen, Replaced, Not used
+  any more) and a Revoked section. `POST /devices/:id/revoke` takes an optional `reason` (1 to 200 characters, strict
+  body) into the audit row; the screen always sends one. The tablet in your hand cannot revoke itself while
+  `unsentCount()` (sync.ts) is above 0: on revocation it drops its credential (App.tsx `onDeviceRejected`), so unsent
+  records could never be sent; once revoked it goes to the set-up screen at once. Another tablet, revoked while it holds
+  offline sales, still delivers them: it pushes before it pulls, and push accepts a revoked tablet's events made before
+  the revocation.
+  Verified: API 250/250 (the revoke test now covers the reason: 400 on too long or an unknown field before anything
+  changes, the reason in the audit row, no second audit row on a repeat), 1 mutant `revoke-reason-unchecked` caught.
+  Browser: `node scripts/browser-tablets.mjs` 17/17 (two tablets, Edge, fresh seed): list and "This tablet", reason
+  required, B revoked and listed under Revoked, audit reason, B's offline sale from before the revocation delivered and
+  B reset, self-revoke refused with unsent records (push blocked) and allowed once sent, A reset. `browser-flow` 46/46
+  and `browser-sell` 30/30 re-run. Not a mutant: the self-revoke guard is UI only (a browser check covers it).
+  **Rename** (added after): each working tablet's row has Rename beside Revoke…, through the existing
+  `PATCH /devices/:id` (scope-checked, audited `device.label`, 1 to 60 characters trimmed); Save is disabled while the
+  name is empty or unchanged. No API change. `browser-tablets.mjs` 22/22: rename opens with the current name, the list
+  and the server follow, saved trimmed and audited once, both buttons on one row, no sideways scroll at 768x1024.
 
 ## Open items carried
 
