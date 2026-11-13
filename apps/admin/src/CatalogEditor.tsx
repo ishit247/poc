@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { api, catalogImageUrl, parseGstBp, parsePaise, shrinkImage, uploadCatalogImage, type TemplateFull } from './api.ts';
+import { ITEM_DESCRIPTION_MAX, parseGstBp, parsePaise } from '@pos/shared';
+import { shrinkImage } from '@pos/shared/browser';
+import { api, catalogImageUrl, uploadCatalogImage, type TemplateFull } from './api.ts';
 import {
-  CSV_TEMPLATE, DESC_MAX, IMPORT_FLAG, baseName, blankDraft, fromFileList, groupRows, isBlank, isImageFile, issues, pickCsv, readDropped,
+  CSV_TEMPLATE, IMPORT_FLAG, baseName, blankDraft, fromFileList, groupRows, isBlank, isImageFile, issues, pickCsv, readDropped,
   resolvePictures, rowHasIssues, rowsFromCsv, toCsv, uid, type BundleFile, type Draft, type DraftCat, type ParsedRow,
 } from './catalogIO.ts';
 import { Confirm, Modal } from './Modal.tsx';
@@ -334,7 +336,7 @@ export function CatalogEditor({ id, isOwner, onDirty, go }: { id: string; isOwne
               const e = isBlank(i) ? {} : issues(i);
               const cell = (f: Field, ph: string, mode?: 'numeric' | 'decimal') => (
                 <input className={`c${e[f] ? ' bad' : ''}`} data-rid={i.id} data-f={f} data-testid={`${f}-${i.id}`} value={i[f]} placeholder={ph} inputMode={mode} disabled={ro}
-                  title={e[f]} aria-invalid={e[f] ? true : undefined} maxLength={f === 'desc' ? DESC_MAX + 20 : 120}
+                  title={e[f]} aria-invalid={e[f] ? true : undefined} maxLength={f === 'desc' ? ITEM_DESCRIPTION_MAX + 20 : 120}
                   onFocus={onFocus} onBlur={onBlur} onChange={(ev) => typing((d) => mapItem(d, i.id, (r) => ({ ...r, [f]: ev.target.value })))} onKeyDown={(ev) => cellKey(ev, i.id, f)} />
               );
               return (

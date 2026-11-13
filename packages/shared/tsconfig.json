@@ -7,8 +7,17 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"],
-    "allowImportingTsExtensions": true
+    "types": [
+      "node"
+    ],
+    "allowImportingTsExtensions": true,
+    "lib": [
+      "ES2023",
+      "DOM"
+    ]
   },
-  "include": ["src", "test"]
+  "include": [
+    "src",
+    "test"
+  ]
 }

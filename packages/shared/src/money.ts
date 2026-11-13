@@ -66,6 +66,21 @@ export function formatRupees(p: Paise): string {
   return neg ? `-${s}` : s;
 }
 
+/** A menu price as typed, "45" or "45.50", to paise (at most 10,00,000 rupees, the API's ceiling), or null.
+ *  Parsed from the text so no float rounding is involved. Mirrors the price check in api `routes/menu.ts`. */
+export const parsePaise = (s: string): number | null => {
+  const m = /^(\d{1,7})(?:\.(\d{1,2}))?$/.exec(s.trim());
+  const p = m ? Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0')) : NaN;
+  return p >= 0 && p <= 100_000_000 ? p : null;
+};
+
+/** A GST rate as typed, "5" or "2.5" percent, to basis points (0 to 4000), or null. */
+export const parseGstBp = (s: string): number | null => {
+  const m = /^(\d{1,2})(?:\.(\d{1,2}))?$/.exec(s.trim());
+  const bp = m ? Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0')) : NaN;
+  return bp >= 0 && bp <= 4000 ? bp : null;
+};
+
 /** Parses user-typed rupees ("125", "125.5", "125.50") exactly, without floats. */
 export function parseRupees(input: string): Paise {
   const m = /^(\d{1,9})(?:\.(\d{1,2}))?$/.exec(input.trim());

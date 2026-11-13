@@ -24,7 +24,8 @@ const TABLES_DB = { cwd: '.', cmd: ['node', '--test', 'db/test/tables.test.mjs']
 const M = (id, file, from, to, tests, all = false) => ({ id, file, from, to, tests, all });
 const ORDER = 'packages/shared/src/order.ts';
 // `noDb`: the tests touch no database, so the fresh start before and after is skipped.
-const SHARED_ORDER = { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/order.test.ts'], noDb: true };
+const SHARED_CSV = { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/csv.test.ts'], noDb: true };
+const SHARED_ORDER ={ cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/order.test.ts'], noDb: true };
 const TABLET_ORDER = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/order.test.ts'], noDb: true };
 const TABLET_VISITS = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/visits.test.ts'], noDb: true };
 const TABLET_REFUSED = { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/refused.test.ts'], noDb: true };
@@ -205,9 +206,13 @@ const MUTANTS = [
     ['settle-parse-header-optional', 'if (missing.length) return', 'if (false) return'],
     ['settle-parse-negative-gross', 'if (gross < 0) return void', 'if (false) return void'],
     ['settle-parse-float-money', 'const p = parseRupees(body) as number;', 'const p = Math.round(parseFloat(body) * 100);'],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/settlement.ts', from, to, API_TESTS('settlement.test.ts'))),
+  // The CSV reader every import uses (settlements, admin catalog, manager menu). Pure code: no database.
+  ...[
     ['settle-parse-bom', "text.replace(/^\\u{FEFF}/u, '')", 'text'],
     ['settle-parse-quote-escape', "if (src[i + 1] === '\"') { field += '\"'; i++; } else quoted = false;", 'quoted = false;'],
-  ].map(([id, from, to]) => M(id, 'apps/api/src/settlement.ts', from, to, API_TESTS('settlement.test.ts'))),
+    ['csv-formula-not-undone', "s.startsWith(\"'\") && FORMULA.test(s.slice(1)) ? s.slice(1) : s", 's'],
+  ].map(([id, from, to]) => M(id, 'packages/shared/src/csv.ts', from, to, SHARED_CSV)),
   ...[
     ['void-paid-sale', "if (sale.status !== 'open') throw new Reject(sale.status === 'void' ? 'already_void' : 'not_open');", ''],
     ['void-twice-silent', "throw new Reject(sale.status === 'void' ? 'already_void' : 'not_open')", "throw new Reject('not_open')"],
@@ -330,7 +335,7 @@ const MUTANTS = [
     ['rep-sync-any-outlet', 'apps/api/src/reports.ts', 'WHERE d.outlet_id = ANY($1::uuid[])', 'WHERE $1::uuid[] IS NOT NULL'],
     ['rep-sync-rejected-undated', 'apps/api/src/reports.ts', "AND (e.received_at AT TIME ZONE o.timezone)::date BETWEEN $2::date AND $3::date)::int AS rejected", ")::int AS rejected"],
     ['rep-sync-late-undated', 'apps/api/src/reports.ts', "AND s.business_date BETWEEN $2::date AND $3::date)::int AS late", ")::int AS late"],
-    ['rep-csv-formula-live', 'apps/api/src/reports.ts', "/^[=+\\-@\\t\\r]/.test(s) ? `'${s}` : s", 's'],
+    ['rep-csv-formula-live', 'packages/shared/src/csv.ts', "FORMULA.test(s) ? `'${s}` : s", 's'],
     ['rep-csv-float-money', 'apps/api/src/reports.ts', 'return `${n < 0 ?', 'return String(n / 100) || `${n < 0 ?'],
     ['rep-csv-no-total', 'apps/api/src/reports.ts', 'if (r.totals) {', 'if (false) {'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('zz-reports.test.ts'))),
@@ -452,11 +457,21 @@ const MUTANTS = [
   ...[
     ['tagapi-delete-leaves-links', 'apps/api/src/routes/menu.ts', "await c.query('UPDATE item_tag SET deleted_at = now() WHERE tag_id = $1 AND deleted_at IS NULL', [ids.data.id]);", ''],
     ['tagapi-put-accepts-any-tag', 'apps/api/src/routes/menu.ts', "if (live.rowCount !== want.length) return 'bad-tag' as const;", ''],
-    ['tagapi-put-keeps-old-links', 'apps/api/src/routes/menu.ts', "await c.query('UPDATE item_tag SET deleted_at = now() WHERE item_id = $1 AND deleted_at IS NULL AND NOT (tag_id = ANY($2::uuid[]))', [ids.data.id, want]);", ''],
+    ['tagapi-put-keeps-old-links', 'apps/api/src/routes/menu.ts', "await c.query('UPDATE item_tag SET deleted_at = now() WHERE item_id = $1 AND deleted_at IS NULL AND NOT (tag_id = ANY($2::uuid[]))', [id, want]);", ''],
     ['tagapi-name-conflict-is-500', 'apps/api/src/routes/menu.ts', "=== 'tag_name_live_uq'", "=== 'nope'"],
     ['tagapi-pull-no-diet', SYNC, "'diet', diet, ", ''],
     ['tagapi-pull-no-links', SYNC, 'FROM item_tag WHERE version > $1', 'FROM item_tag WHERE version > $1 AND false'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('tags.test.ts'))),
+  // --- manager menu editor Save: POST /menu/apply (docs/manager-menu-editor-plan.md step 3; apps/api/test/menu-apply.test.ts)
+  ...[
+    ['apply-permission-till', "app.post('/menu/apply', { config: mgr,", "app.post('/menu/apply', { config: { scope: 'tenant', permission: 'till' },"],
+    ['apply-failure-commits-earlier-ops', 'if (e instanceof ApplyFailure) throw e;', 'if (e instanceof ApplyFailure) break;'],
+    ['apply-update-ignores-missing', "if (out === 'missing') fail(409, 'not found', 'items.update', i);", ''],
+    ['apply-price-skips-live-item', "if (!(await liveExists(c, 'item', itemId))) return null;", ''],
+    ['apply-price-delete-skips-live-item', "if (!(await liveExists(c, 'item', itemId))) fail(409, 'not found', 'prices.delete', i);", ''],
+    ['apply-category-in-use-deleted', "if (used.rowCount) return 'in-use' as const;", ''],
+    ['apply-no-op-cap', 'if (n > APPLY_MAX_OPS)', 'if (false)'],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/menu.ts', from, to, API_TESTS('menu-apply.test.ts'))),
   // --- running-order fold and v2 events (phase 12 step 3; packages/shared/test/order.test.ts). Pure code: no database.
   ...[
     ['order-arrival-order', ORDER, 'const sorted = [...unique.values()].sort(compareOrderEvents);', 'const sorted = [...unique.values()];'],

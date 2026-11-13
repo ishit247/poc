@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { buildApp } from '../src/app.js';
 import { pool, withTenant } from '../src/db.js';
 import { hostFor } from './hosts.js';
-import { amountToPaise, parseCsv, parseSettlement } from '../src/settlement.js';
+import { amountToPaise, parseSettlement } from '../src/settlement.js';
 
 const A = '00000000-0000-4000-8000-00000000000a';
 const B = '00000000-0000-4000-8000-00000000000b';
@@ -27,11 +27,6 @@ test('amounts become exact paise: commas, currency marks, brackets and minus', (
   assert.throws(() => amountToPaise('abc'));
   assert.throws(() => amountToPaise('1.234'));
   assert.throws(() => amountToPaise(''));
-});
-
-test('CSV: quotes, doubled quotes, commas and newlines inside quotes, CRLF, BOM, blank lines', () => {
-  const rows = parseCsv('﻿a,b\r\n"x,1","he said ""hi"""\r\n\r\n"two\nlines",z\n');
-  assert.deepEqual(rows, [['a', 'b'], ['x,1', 'he said "hi"'], ['two\nlines', 'z']]);
 });
 
 test('a statement is read by header name, in any column order', () => {

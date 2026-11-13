@@ -2,6 +2,7 @@
 // columns so the same rows serve the screen and the CSV. Money stays integer paise until the CSV, where it is
 // written as rupees by integer arithmetic (never a float).
 import type pg from 'pg';
+import { csvCell } from '@pos/shared';
 
 export type ColKind = 'text' | 'int' | 'paise';
 export interface Col { key: string; label: string; kind: ColKind; sum?: boolean }
@@ -194,11 +195,8 @@ const rupees = (n: number) => {
   return `${n < 0 ? '-' : ''}${Math.trunc(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
 };
 
-/** A cell a spreadsheet would read as a formula is prefixed so it is shown, not run (void reasons are typed by people). */
-const textCell = (s: string) => {
-  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
-};
+// Text cells go through csvCell, which defuses formulas (void reasons are typed by people).
+const textCell = csvCell;
 
 export function toCsv(r: ReportResult): string {
   const head = r.columns.map((col) => textCell(col.label)).join(',');

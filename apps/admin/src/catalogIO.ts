@@ -1,6 +1,6 @@
 // The catalog editor's data handling, kept free of React so it can be tested: CSV in and out, reading a dropped folder,
 // working out which picture belongs to which row, and the per-row checks that mirror the API's.
-import { parseGstBp, parsePaise } from './api.ts';
+import { ITEM_DESCRIPTION_MAX, csvFile, csvText, parseCsv, parseGstBp, parsePaise } from '@pos/shared';
 
 export interface Draft {
   id: string; name: string; hsn: string; gst: string; price: string; desc: string;
@@ -15,7 +15,6 @@ export interface BundleFile { file: File; path: string }
 export const uid = () => Math.random().toString(36).slice(2, 9);
 export const blankDraft = (): Draft => ({ id: uid(), name: '', hsn: '', gst: '5', price: '', desc: '', sha: null, blob: null, preview: null });
 export const isBlank = (i: Draft) => !i.name.trim() && !i.hsn.trim() && !i.price.trim() && !i.desc.trim() && !i.sha && !i.blob;
-export const DESC_MAX = 300;
 /** Set by the list's Import button so the editor opens with the import dialog already showing. */
 export const IMPORT_FLAG = 'console-catalog-import';
 
@@ -27,29 +26,12 @@ export function issues(i: Draft): Partial<Record<'name' | 'hsn' | 'gst' | 'price
   if (i.hsn.trim() && !/^[0-9]{4,8}$/.test(i.hsn.trim())) e.hsn = 'HSN/SAC must be 4 to 8 digits';
   if (parseGstBp(i.gst) === null) e.gst = 'GST must be 0 to 40, up to 2 decimals';
   if (parsePaise(i.price) === null) e.price = 'Price in rupees, up to 2 decimals (e.g. 45 or 45.50)';
-  if (i.desc.trim().length > DESC_MAX) e.desc = `Description is at most ${DESC_MAX} characters`;
+  if (i.desc.trim().length > ITEM_DESCRIPTION_MAX) e.desc = `Description is at most ${ITEM_DESCRIPTION_MAX} characters`;
   return e;
 }
 export const rowHasIssues = (i: Draft) => !isBlank(i) && Object.keys(issues(i)).length > 0;
 
 // ---------- CSV ----------
-export function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [], cur = '', quoted = false;
-  const src = text.replace(/^﻿/, '');
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i]!;
-    if (quoted) {
-      if (c === '"') { if (src[i + 1] === '"') { cur += '"'; i++; } else quoted = false; } else cur += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ',') { row.push(cur); cur = ''; }
-    else if (c === '\n' || c === '\r') { if (c === '\r' && src[i + 1] === '\n') i++; row.push(cur); rows.push(row); row = []; cur = ''; }
-    else cur += c;
-  }
-  if (cur || row.length) { row.push(cur); rows.push(row); }
-  return rows.filter((r) => r.some((x) => x.trim()));
-}
-
 /** Rows from a CSV with a header (category, item, hsn, gst, price, description, image) or, without one, in that column order. */
 export function rowsFromCsv(text: string): ParsedRow[] {
   const rows = parseCsv(text);
@@ -61,17 +43,16 @@ export function rowsFromCsv(text: string): ParsedRow[] {
     ? { category: find('category'), name: find('item', 'name'), hsn: find('hsn', 'hsn/sac', 'hsn_code', 'sac'), gst: find('gst', 'gst %', 'gst%', 'gst_percent'), price: find('price', 'price ₹', 'price (excl. gst)', 'price_excl_gst'), desc: find('description', 'desc'), image: find('image', 'picture', 'photo', 'image_file') }
     : { category: 0, name: 1, hsn: 2, gst: 3, price: 4, desc: 5, image: 6 };
   return rows.slice(hasHead ? 1 : 0).map((r) => {
-    const g = (k: keyof typeof col) => (col[k] >= 0 ? (r[col[k]] ?? '') : '').trim();
+    const g = (k: keyof typeof col) => csvText((col[k] >= 0 ? (r[col[k]] ?? '') : '').trim());
     return { category: g('category') || 'Imported', name: g('name'), hsn: g('hsn'), gst: g('gst') || '5', price: g('price'), desc: g('desc'), image: g('image') };
   });
 }
 
-const q = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
 /** The grid as CSV. `imageName` gives the file name to write in the image column for a row that has a picture. */
 export function toCsv(cats: DraftCat[], imageName: (i: Draft, c: DraftCat) => string = () => ''): string {
-  const lines = ['category,item,hsn,gst,price,description,image'];
-  for (const c of cats) for (const i of c.items) if (!isBlank(i)) lines.push([c.name, i.name, i.hsn, i.gst, i.price, i.desc, imageName(i, c)].map(q).join(','));
-  return lines.join('\n');
+  const lines = [['category', 'item', 'hsn', 'gst', 'price', 'description', 'image']];
+  for (const c of cats) for (const i of c.items) if (!isBlank(i)) lines.push([c.name, i.name, i.hsn, i.gst, i.price, i.desc, imageName(i, c)]);
+  return csvFile(lines);
 }
 export const CSV_TEMPLATE = 'category,item,hsn,gst,price,description,image\nSnacks,Samosa,21069099,5,12,Crisp pastry,samosa.jpg\nBeverages,Tea,09024090,5,10,,tea.jpg\n';
 

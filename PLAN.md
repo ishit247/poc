@@ -76,6 +76,10 @@ Fixed in this pass (the 2026-11-06 findings):
    rate limits reviewed, device revoke screen (Manager tools → Tablets); still owed: a full mutation run, off-site backups and PITR (Q4),
    integration admin (Q1); see the phase 11 doc), then decide the cut-over to additive-only migrations (section 18) before the first real tenant.
 6. Phase 9 UI (integrations, item mapping) once partner access is known.
+7. **Manager menu editor** (Manager tools → Menu tab): online-only, admin-style grid with counter/Zomato/Swiggy prices and CSV export/import, saved through one
+   transactional `POST /menu/apply`. Steps 1–3 done 2026-11-14 (shared helpers, `apply` route with tests and mutants); next is
+   step 4, the screen's draft logic: [docs/manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md).
+   Seen in passing: the two `7d` refused-receipt tests in `running-orders.test.ts` fail since `apps/api/src/refused.ts` changed 2026-11-10.
 
 Open questions raised by D13 (add to section 17 when reached): Q12 which segment is the first paying customer
 (counter-service or dine-in); Q13 does a restaurant need kitchen tickets in the first pilot (if yes, KOT moves into

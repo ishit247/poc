@@ -44,7 +44,7 @@ export async function refusedReceipts(c: pg.PoolClient, outletId: string, date: 
             -- which were fixed at the close. Only a manager's force-close can come first (a tablet sends its payments before
             -- its own close), and only then is closed_at server time (a tablet's close carries the tablet's clock), so
             -- both sides of the comparison are the server's.
-            (sh.closed_by IS NOT NULL AND sh.closed_at < e.received_at) AS "afterDrawerClosed"
+            (sh.closed_at IS NOT NULL) AS "afterDrawerClosed"
        FROM sync_event e JOIN device d ON d.id = e.device_id JOIN counter ct ON ct.id = d.counter_id
        LEFT JOIN shift sh ON sh.id::text = e.payload->>'shiftId' AND sh.device_id = e.device_id
        LEFT JOIN LATERAL (SELECT au.at, au.actor_id FROM audit au

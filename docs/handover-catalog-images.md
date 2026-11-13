@@ -65,6 +65,8 @@ Landed in commit `43a4f78` on `main`. Everything below is in that commit.
    (online-only like the other manager tools, how to shrink and upload a picture: reuse `shrinkImage` from
    `apps/admin/src/api.ts`, move it to `packages/shared` or the counter app; how to show 100+ items). Ask the user those
    before building; do not decide silently.
+   **Planned 2026-11-13** (online-only, admin-style grid, `shrinkImage` moves to `packages/shared`):
+   [manager-menu-editor-plan.md](manager-menu-editor-plan.md). Not built yet.
 2. **Edit an existing template.** Templates are create-and-delete only (no edit route). Decide whether operators need edit,
    or "clone then change".
 3. **Sweep orphan objects.** A missed removal after commit leaves an object with no index row (space only). A small job that

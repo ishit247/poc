@@ -1,14 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blankDraft, groupRows, issues, parseCsv, pickCsv, resolvePictures, rowsFromCsv, toCsv, type BundleFile } from '../src/catalogIO.ts';
+import { blankDraft, groupRows, issues, pickCsv, resolvePictures, rowsFromCsv, toCsv, type BundleFile } from '../src/catalogIO.ts';
 
 const pic = (path: string): BundleFile => ({ path, file: { name: path.split('/').pop()!, type: 'image/jpeg' } as File });
 const csvFile = (path: string): BundleFile => ({ path, file: { name: path.split('/').pop()!, type: 'text/csv' } as File });
-
-test('CSV: quotes, commas inside a field, doubled quotes, CRLF and a BOM', () => {
-  const rows = parseCsv('﻿a,b\r\n"x, y","say ""hi"""\r\n\r\nlast,row');
-  assert.deepEqual(rows, [['a', 'b'], ['x, y', 'say "hi"'], ['last', 'row']]);
-});
 
 test('rows are read by header name, in any column order, with the image column', () => {
   const rows = rowsFromCsv('Price,Item,Category,Image,GST,HSN\n12,Samosa,Snacks,images/samosa.jpg,5,21069099\n');

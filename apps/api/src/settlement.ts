@@ -1,35 +1,10 @@
-import { parseRupees } from '@pos/shared';
+import { parseCsv, parseRupees } from '@pos/shared';
 
 // A platform's payout statement as CSV. Pure functions: no database, so the rules can be tested alone.
 // Amounts in the file are rupees; they become integer paise through parseRupees, never a float.
 
 export interface ParsedLine { row: number; externalOrderId: string; grossPaise: number; payoutPaise: number }
 export type ParseResult = { ok: true; lines: ParsedLine[] } | { ok: false; errors: { row: number; message: string }[] };
-
-/** RFC 4180 subset: quoted fields, doubled quotes, commas and newlines inside quotes, CRLF or LF, a leading BOM. */
-export function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let quoted = false;
-  const src = text.replace(/^\u{FEFF}/u, '');
-  for (let i = 0; i < src.length; i++) {
-    const ch = src[i]!;
-    if (quoted) {
-      if (ch === '"') {
-        if (src[i + 1] === '"') { field += '"'; i++; } else quoted = false;
-      } else field += ch;
-    } else if (ch === '"') quoted = true;
-    else if (ch === ',') { row.push(field); field = ''; }
-    else if (ch === '\n' || ch === '\r') {
-      if (ch === '\r' && src[i + 1] === '\n') i++;
-      row.push(field); field = '';
-      rows.push(row); row = [];
-    } else field += ch;
-  }
-  if (field !== '' || row.length) { row.push(field); rows.push(row); }
-  return rows.filter((r) => r.some((f) => f.trim() !== ''));
-}
 
 // Header names the platforms use, lower-cased with punctuation removed. The first match wins.
 const HEADERS = {
