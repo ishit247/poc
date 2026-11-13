@@ -2,7 +2,9 @@
 
 # Manager menu editor — plan
 
-Status: **steps 1–3 done (2026-11-14); next is step 4** (`menuDraft.ts`, STANDARD). Source: `docs/handover-catalog-images.md`, "Not done" item 1.
+Status: **steps 1–7 done (2026-11-14); next is step 8** (docs and tracker, STANDARD). Built as: pictures are chosen in the
+grid and uploaded right after Save (not at once, so undo and Discard stay simple); tags are picked from existing ones in the row
+details (new tags come with the CSV import); no category reordering yet. Source: `docs/handover-catalog-images.md`, "Not done" item 1.
 Model: steps marked HIGH touch an authorisation-scoped write route; the rest are STANDARD (CLAUDE.md model table).
 
 ## Decisions (made with the user, 2026-11-13)
@@ -111,10 +113,10 @@ HSN, description, diet, tags and the two aggregator prices move into a row drawe
 | 1 | Move `shrinkImage`, `parsePaise`, `parseGstBp`, `DESC_MAX` and the CSV reader/writer to `packages/shared`; admin imports them | STANDARD | admin + shared typecheck, shared tests, admin catalog tests pass | **Done** 2026-11-14: shared `money.ts`, `csv.ts`, `browser.ts` (`shrinkImage`); `DESC_MAX` is `ITEM_DESCRIPTION_MAX`. Admin typecheck clean, admin 9/9, shared 59/59 |
 | 2 | Extract per-entity SQL and zod schemas in `menu.ts`; add `POST /menu/apply`; route-scope declaration | **HIGH** | API tests on real Postgres: all-or-nothing (one bad op rolls back all), cross-tenant ids rejected by RLS, non-manager 403, tmp-id mapping, audit rows, 409 on a deleted row | **Done** 2026-11-14: `apps/api/test/menu-apply.test.ts` (7 tests). Fresh-DB full API run 254/256; the 2 failures are the `7d` refused-receipt tests, failing since `refused.ts` changed 2026-11-10, not this work |
 | 3 | Mutants in `scripts/mutation-checks.mjs` for `apply` (permission, tenant scope, rollback, category-in-use guard); run only these by id | HIGH | all caught | **Done** 2026-11-14: 7 `apply-*` mutants plus the 4 menu-route mutants touched by the refactor: 11/11 caught |
-| 4 | `menuDraft.ts` + unit tests (diff builder, issues, bulk ops, undo stack) | STANDARD | tablet tests pass |
-| 5 | `MenuEditor.tsx` grid, rail, search, bulk bar, undo/redo, save/discard, offline banner; Menu tab | STANDARD | typecheck; browser check at tablet size |
-| 6 | Pictures: pick, shrink, upload after save, remove; thumbnail via `/item-images/:sha256` | STANDARD | browser check: set, change, remove; second tablet sees it after pull |
-| 7 | CSV export and import of the live menu (design below) | STANDARD | unit tests on parse/match/diff; browser check: export, edit, import, preview, save |
+| 4 | `menuDraft.ts` + unit tests (diff builder, issues, bulk ops, undo stack) | STANDARD | tablet tests pass | **Done** 2026-11-14: `apps/counter/test/menuDraft.test.ts`, 15/15 |
+| 5 | `MenuEditor.tsx` grid, rail, search, bulk bar, undo/redo, save/discard, offline banner; Menu tab | STANDARD | typecheck; browser check at tablet size | **Done** 2026-11-14: counter typecheck clean; `scripts/browser-menu.mjs` 31/31 on Edge at 1024 and 820 wide (log `.validation/browser-menu.log`) |
+| 6 | Pictures: pick, shrink, upload after save, remove; thumbnail via `/item-images/:sha256` | STANDARD | browser check: set, change, remove; second tablet sees it after pull | **Done** 2026-11-14 except "second tablet sees it": set (new item, after Save), shown from the server, removed: checked. Change and the tablet pull not run |
+| 7 | CSV export and import of the live menu (design below) | STANDARD | unit tests on parse/match/diff; browser check: export, edit, import, preview, save | **Done** 2026-11-14: `menuToCsv`/`importCsv` in `menuDraft.ts`; tags joined the draft (`Draft.tags`, new ones go as `tags.create` only while a row uses them). Counter tests 86/86 (9 new CSV tests); `scripts/browser-menu.mjs` 43/43 incl. 12 CSV checks. One "CSV" button opens export/import; import shows a preview and loads as one undo step |
 | 8 | Docs and tracker (below) | STANDARD | tracker row updated |
 
 Steps 1–3 can be one session (HIGH); 4–6 another. Start a fresh session between them.
@@ -136,6 +138,11 @@ Steps 1–3 can be one session (HIGH); 4–6 another. Start a fresh session betw
   that field untouched. The preview says which.
 - Excel-safe: UTF-8 with BOM on export, quote any cell with a comma, quote or newline; the importer strips the BOM. A
   quick code like `07` must survive Excel: export it as text and the importer left-pads a single digit to two.
+  As built: quoting does not stop Excel reading `07` as 7, so the importer is what restores it — a 1-digit code gets a
+  leading zero, and a 3/5/7-digit HSN gets one too (HSN/SAC are 4, 6 or 8 digits; tea is `0902`).
+- As built: a file problem (no usable header, same item twice, a diet that is not veg/egg/non_veg, a new item with no
+  category, a tag name over 30 characters) stops the whole file and lists the rows; a value the grid checks (price, GST,
+  code, HSN) loads and is marked in the grid. Export is the **saved** menu; with unsaved edits the button says so.
 - Pictures are not in the CSV; imported rows keep their current picture, new rows have none.
 
 ## Verification
