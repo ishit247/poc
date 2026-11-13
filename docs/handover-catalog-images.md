@@ -59,14 +59,9 @@ Landed in commit `43a4f78` on `main`. Everything below is in that commit.
 
 ## Not done (candidates for the next task, in the order I would take them)
 
-1. **Manager menu editor screen** (Manager tools in the counter app, a new "Menu" tab). Managers can create and edit
-   categories, items, prices, description and picture only through the API today; no screen calls those routes. The routes,
-   permissions, scope rules and tests exist (`apps/api/src/routes/menu.ts`). The screen needs its own design questions
-   (online-only like the other manager tools, how to shrink and upload a picture: reuse `shrinkImage` from
-   `apps/admin/src/api.ts`, move it to `packages/shared` or the counter app; how to show 100+ items). Ask the user those
-   before building; do not decide silently.
-   **Planned 2026-11-13** (online-only, admin-style grid, `shrinkImage` moves to `packages/shared`):
-   [manager-menu-editor-plan.md](manager-menu-editor-plan.md). Not built yet.
+1. ~~**Manager menu editor screen**~~ **Done 2026-11-14**: Manager tools → Menu in the counter app (online-only grid,
+   three channel prices, pictures via `shrinkImage` now in `packages/shared`, CSV export/import, one transactional
+   `POST /menu/apply`). See [manager-menu-editor-plan.md](manager-menu-editor-plan.md).
 2. **Edit an existing template.** Templates are create-and-delete only (no edit route). Decide whether operators need edit,
    or "clone then change".
 3. **Sweep orphan objects.** A missed removal after commit leaves an object with no index row (space only). A small job that

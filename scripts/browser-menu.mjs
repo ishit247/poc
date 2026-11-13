@@ -3,7 +3,8 @@
 // Writes .validation/browser-menu.log and screenshots in .validation/screens/. Dev data only: seeded tenant A.
 //
 // What it checks: no horizontal scroll and 44px targets at 1024 and 820 wide; a price edit saves and the server has it;
-// a new category with a new item (and a picture set after save) saves, the picture changes and is removed; a save that
+// a new category with a new item (and a picture set after save) saves; a second tablet's till shows the picture, and after
+// the manager changes it, shows the new one after its next pull; the picture is removed; a save that
 // fails on one row (the item was deleted elsewhere) leaves the other edit unsaved; leaving with unsaved edits asks;
 // Discard reverts; offline shows the banner and disables Save; bulk GST; delete with confirmation; CSV export, an unchanged
 // re-import, an edited import (preview, load, Save, Excel-stripped code), and a file with the same item twice.
@@ -113,6 +114,44 @@ check('the new item\'s price is 3300 paise', m2.prices.find((p) => p.itemId === 
 check('its picture was stored after Save', !!newItem?.imageSha256);
 check('the saved picture shows in the grid from the server', await until(async () => (await page.locator('.me-row img.me-thumb').first().evaluate((e) => e.naturalWidth)) > 0));
 await shot('new-item');
+
+// a second tablet at the same counter shows the picture on its till, then the changed one after its next pull
+const ctx2 = await browser.newContext({ viewport: { width: 1024, height: 768 } });
+const till = await ctx2.newPage();
+till.on('pageerror', (e) => errors.push(String(e)));
+const code2 = (await api('POST', '/enrolment-codes', { outletId, counterId, label: `Menu till ${tag}` }, mgr)).json.code;
+await till.goto(BASE);
+await till.getByTestId('enrol-code').fill(code2); await till.getByTestId('enrol-go').click();
+await till.locator('[data-testid^="staff-"]').filter({ hasText: /School 1 Canteen cashier(?! 2)/i }).first().click(); // the seeded cashier
+for (const d of '482913') await till.getByTestId(`key-${d}`).click(); // DEV_PIN in scripts/seed.ts
+await till.getByTestId('pin-go').click();
+await till.locator('[data-testid="opening-cash"], [data-testid="search"]').first().waitFor({ timeout: 15000 });
+if (await till.getByTestId('opening-cash').isVisible()) { await till.getByTestId('opening-cash').fill('500'); await till.getByTestId('open-shift').click(); }
+await till.getByTestId('search').waitFor();
+const tile = till.getByTestId(`item-Test dish ${tag}`).getByTestId('item-picture');
+const tileShown = () => tile.evaluate((e) => e.complete && e.naturalWidth > 0).catch(() => false);
+const cached = () => till.evaluate(() => new Promise((res) => {
+  const r = indexedDB.open('counter'); r.onsuccess = () => { const q = r.result.transaction('itemImages').objectStore('itemImages').getAllKeys(); q.onsuccess = () => res(q.result); };
+}));
+check('second tablet: the till tile shows the picture', await until(tileShown, 15000));
+const src1 = await tile.getAttribute('src');
+
+// change the picture on the manager's tablet
+const PNG2 = (await import('./png.ts')).solidPng(200, 40, 40);
+fs.writeFileSync(`${out}/menu-test-2.png`, PNG2);
+const chooser2 = page.waitForEvent('filechooser');
+await page.locator('.me-pic').first().click();
+(await chooser2).setFiles(`${out}/menu-test-2.png`);
+await T('me-save').click(); await saved();
+const sha2 = (await menu()).items.find((i) => i.id === newItem.id)?.imageSha256;
+check('Change picture stores a different picture on the server', !!sha2 && sha2 !== newItem.imageSha256);
+
+await ctx2.setOffline(true); await ctx2.setOffline(false); // the 'online' event makes the till pull now, not in a minute
+check('second tablet: after its pull the tile shows the new picture', await until(async () => (await tile.getAttribute('src').catch(() => null)) !== src1 && await tileShown(), 15000));
+const keys = await cached();
+check('second tablet: the new picture is cached and the old one dropped', keys.includes(sha2) && !keys.includes(newItem.imageSha256));
+await till.screenshot({ path: `${out}/screens/menu-till-picture.png` });
+await ctx2.close();
 
 // remove the picture from the details dialog
 await page.locator('.me-more').first().click();

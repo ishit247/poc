@@ -8,7 +8,7 @@ order: [PLAN.md](PLAN.md). Working agreements: [CLAUDE.md](CLAUDE.md).
 | Path | What |
 |---|---|
 | `apps/api` | Fastify + zod API |
-| `apps/counter` | Vite + React counter app (shell only until phase 3) |
+| `apps/counter` | Vite + React counter app: Sell, Shift, and Manager tools (Close the day, Reports, Settlements, Menu, Tablets) |
 | `packages/shared` | Money helpers (integer paise), shared types |
 | `db/init` | Dev-only role bootstrap (`pos_owner`, `pos_app`) |
 | `db/migrations` | `0001…` SQL, applied by `scripts/migrate.mjs` |

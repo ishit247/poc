@@ -8,6 +8,9 @@ The platform operator keeps reusable menu templates (for example "School cafeter
 tenant is created the operator seeds its menu from a template. The tenant's manager then edits the menu like any
 other menu. Nothing links the tenant back to the template afterwards.
 
+Managers edit their live menu in the counter app, Manager tools → Menu ([manager-menu-editor-plan.md](manager-menu-editor-plan.md)).
+Template prices and rates stay suggestions (C7); editing the live menu never changes a template.
+
 ## Decisions
 
 | # | Decision | Why |
@@ -27,8 +30,6 @@ other menu. Nothing links the tenant back to the template afterwards.
 - Pushing a later template change to tenants that were already seeded. If wanted: an opt-in "suggested updates"
   list the manager reviews, offering only fields they have not touched. Nothing is overwritten.
 - Composed templates (base plus add-ons). Templates are flat.
-- A manager menu-editor screen. Managers can set an item's description and picture through the API
-  (`PATCH /items/:id`, `PUT/DELETE /items/:id/image`), but no counter-app screen calls them yet.
 
 ## Descriptions and pictures
 

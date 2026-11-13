@@ -19,7 +19,7 @@ doc. "Not verified" is stated, never implied.
 | # | Phase | Built | Verified | Not verified / owed | Detail |
 |---|-------|-------|----------|---------------------|--------|
 | 1 | Foundation, tenant isolation, devices | yes | RLS and route-scope tests on real Postgres; mutants | n/a | [handover-phase3.md](docs/handover-phase3.md) |
-| 2 | Menu admin, onboarding, versioned pull | yes | API tests | catalog images doc [handover-catalog-images.md](docs/handover-catalog-images.md) | [catalog-templates.md](docs/catalog-templates.md) |
+| 2 | Menu admin, onboarding, versioned pull | yes; manager menu editor (Manager tools → Menu: grid, three channel prices, pictures, CSV export/import, one transactional `POST /menu/apply`) done 2026-11-14 | API tests; `menu-apply.test.ts` 7/7 on real Postgres; 11/11 `apply`/menu mutants; counter 86/86; `scripts/browser-menu.mjs` 47/47 on Edge at 1024 and 820 wide | catalog images doc [handover-catalog-images.md](docs/handover-catalog-images.md); menu editor not checked in Safari/Firefox or on a real tablet | [catalog-templates.md](docs/catalog-templates.md), [manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md) |
 | 3 | Offline counter sale | yes | tablet unit tests; browser run (headless Edge) | storage durability and `storage.persist()` on a real tablet | [handover-phase3-progress.md](docs/handover-phase3-progress.md) |
 | 4 | Sync engine | yes | ingest and push tests; 40 mutants | **real-browser run** (offline sales, reconnect, kill tab mid-push); receipt-number gap detection (1..k); N-1 upgrade path (only v1 exists) | [handover-phase4-progress.md](docs/handover-phase4-progress.md) |
 | 5 | Printing | browser print, 58 mm layout, reprint trail | layout tests; 26 mutants | **nothing printed on the real ATPOS H58BT**; no real-browser check; no WebUSB, Bluetooth, ESC/POS or drawer kick | [handover-phase5-progress.md](docs/handover-phase5-progress.md) |
@@ -76,9 +76,9 @@ Fixed in this pass (the 2026-11-06 findings):
    rate limits reviewed, device revoke screen (Manager tools → Tablets); still owed: a full mutation run, off-site backups and PITR (Q4),
    integration admin (Q1); see the phase 11 doc), then decide the cut-over to additive-only migrations (section 18) before the first real tenant.
 6. Phase 9 UI (integrations, item mapping) once partner access is known.
-7. **Manager menu editor** (Manager tools → Menu tab): online-only, admin-style grid with counter/Zomato/Swiggy prices and CSV export/import, saved through one
-   transactional `POST /menu/apply`. Steps 1–7 done 2026-11-14 (shared helpers, `apply` route with tests and mutants, draft logic,
-   grid, pictures, CSV export/import); next is step 8, docs: [docs/manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md).
+7. ~~**Manager menu editor**~~ done 2026-11-14 (Manager tools → Menu tab): online-only, admin-style grid with counter/Zomato/Swiggy
+   prices, pictures and CSV export/import, saved through one transactional `POST /menu/apply`. All 8 steps done; evidence in
+   [docs/manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md). Known limit: two items cannot swap quick codes in one save.
    Seen in passing: the two `7d` refused-receipt tests in `running-orders.test.ts` fail since `apps/api/src/refused.ts` changed 2026-11-10.
 
 Open questions raised by D13 (add to section 17 when reached): Q12 which segment is the first paying customer

@@ -2,7 +2,7 @@
 
 # Manager menu editor — plan
 
-Status: **steps 1–7 done (2026-11-14); next is step 8** (docs and tracker, STANDARD). Built as: pictures are chosen in the
+Status: **done, all 8 steps (2026-11-14).** Built as: pictures are chosen in the
 grid and uploaded right after Save (not at once, so undo and Discard stay simple); tags are picked from existing ones in the row
 details (new tags come with the CSV import); no category reordering yet. Source: `docs/handover-catalog-images.md`, "Not done" item 1.
 Model: steps marked HIGH touch an authorisation-scoped write route; the rest are STANDARD (CLAUDE.md model table).
@@ -115,9 +115,9 @@ HSN, description, diet, tags and the two aggregator prices move into a row drawe
 | 3 | Mutants in `scripts/mutation-checks.mjs` for `apply` (permission, tenant scope, rollback, category-in-use guard); run only these by id | HIGH | all caught | **Done** 2026-11-14: 7 `apply-*` mutants plus the 4 menu-route mutants touched by the refactor: 11/11 caught |
 | 4 | `menuDraft.ts` + unit tests (diff builder, issues, bulk ops, undo stack) | STANDARD | tablet tests pass | **Done** 2026-11-14: `apps/counter/test/menuDraft.test.ts`, 15/15 |
 | 5 | `MenuEditor.tsx` grid, rail, search, bulk bar, undo/redo, save/discard, offline banner; Menu tab | STANDARD | typecheck; browser check at tablet size | **Done** 2026-11-14: counter typecheck clean; `scripts/browser-menu.mjs` 31/31 on Edge at 1024 and 820 wide (log `.validation/browser-menu.log`) |
-| 6 | Pictures: pick, shrink, upload after save, remove; thumbnail via `/item-images/:sha256` | STANDARD | browser check: set, change, remove; second tablet sees it after pull | **Done** 2026-11-14 except "second tablet sees it": set (new item, after Save), shown from the server, removed: checked. Change and the tablet pull not run |
-| 7 | CSV export and import of the live menu (design below) | STANDARD | unit tests on parse/match/diff; browser check: export, edit, import, preview, save | **Done** 2026-11-14: `menuToCsv`/`importCsv` in `menuDraft.ts`; tags joined the draft (`Draft.tags`, new ones go as `tags.create` only while a row uses them). Counter tests 86/86 (9 new CSV tests); `scripts/browser-menu.mjs` 43/43 incl. 12 CSV checks. One "CSV" button opens export/import; import shows a preview and loads as one undo step |
-| 8 | Docs and tracker (below) | STANDARD | tracker row updated |
+| 6 | Pictures: pick, shrink, upload after save, remove; thumbnail via `/item-images/:sha256` | STANDARD | browser check: set, change, remove; second tablet sees it after pull | **Done** 2026-11-14: set (new item, after Save), shown from the server, changed, removed; a second tablet at the same counter shows it on its till, and after the change and its next pull shows the new one with the old dropped from its cache. `scripts/browser-menu.mjs` 47/47 |
+| 7 | CSV export and import of the live menu (design below) | STANDARD | unit tests on parse/match/diff; browser check: export, edit, import, preview, save | **Done** 2026-11-14: `menuToCsv`/`importCsv` in `menuDraft.ts`; tags joined the draft (`Draft.tags`, new ones go as `tags.create` only while a row uses them). Counter tests 86/86 (9 new CSV tests); `scripts/browser-menu.mjs` 43/43 incl. 12 CSV checks (47/47 after step 6's last checks). One "CSV" button opens export/import; import shows a preview and loads as one undo step |
+| 8 | Docs and tracker (below) | STANDARD | tracker row updated | **Done** 2026-11-14: PLAN.md 0.1 phase 2 row and 0.3 item 7; `handover-catalog-images.md` item 1 struck; `catalog-templates.md` line added and stale out-of-scope bullet removed; README counter row; runbook needs nothing (no new service or secret; pictures already covered in its backup section) |
 
 Steps 1–3 can be one session (HIGH); 4–6 another. Start a fresh session between them.
 
