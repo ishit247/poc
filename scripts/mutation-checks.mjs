@@ -1,6 +1,6 @@
 // Mutation checks for the phase 3 guards: remove or weaken ONE guard, rebuild a fresh database,
 // run the tests that are meant to protect it, and require at least one to fail.
-//   node scripts/mutation-checks.mjs [id ...]      (no ids = all)
+//   node scripts/mutation-checks.mjs [--check] [id ...]      (no ids = all; --check only validates patterns)
 // Each run is on a fresh database (a failing test can leave state that corrupts later results).
 // The mutated file is always restored, including on Ctrl-C. A mutant whose schema or code does not
 // load is reported BROKEN, not "caught": it proves nothing.
@@ -83,7 +83,7 @@ const MUTANTS = [
     ['ingest-defer-becomes-reject', 'throw new Defer();', "throw new Reject('sale_not_found');", true],
     ['ingest-sale-rejected-waits', "if (refused.rowCount) throw new Reject('sale_rejected');", ''],
     // A whole (v1) sale is paid where it was rung up; only a table order may be paid elsewhere (7b).
-    ['ingest-pay-other-devices-sale', "if (as === 'pay' && sale.order_root_id) {", "if (as === 'pay') {"],
+    ['ingest-pay-other-devices-sale', "if ((as === 'pay' || as === 'void') && sale.order_root_id) {", "if (as === 'pay' || as === 'void') {"],
     ['ingest-after-revocation-accepted', 'if (p.revokedAt && new Date(e.createdAt) > p.revokedAt)', 'if (false)'],
     ['ingest-line-net-unchecked', "if (l.netPaise !== l.unitPaise * l.qty) throw new Reject('line_net_mismatch');", ''],
     ['ingest-line-tax-unchecked', "if (!taxes.includes(l.taxPaise)) throw new Reject('line_tax_mismatch');", ''],
@@ -122,12 +122,12 @@ const MUTANTS = [
     ['tablet-resends-parked', ".orderBy('seq').toArray()).filter((r) => !r.rejected)", ".orderBy('seq').toArray())"],
     ['tablet-deletes-before-answer', "const r = await fetch('/api/sync/push', {", "await db.outbox.clear();\n    const r = await fetch('/api/sync/push', {"],
     ['tablet-ignores-http-error', "if (!r.ok) throw new Error(`push failed: ${r.status}`);", ''],
-  ].map(([id, from, to]) => M(id, 'apps/counter/src/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'] })),
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'], noDb: true })),
   // --- phase 5: receipts and reprints
   ...[
     ['receipt-odd-paisa-lost', 'cgstPaise: tax - Math.floor(tax / 2)', 'cgstPaise: Math.floor(tax / 2)'],
     ['receipt-tax-per-line-not-per-rate', 'byRate.set(l.gstRateBp, (byRate.get(l.gstRateBp) ?? 0) + l.taxPaise)', 'byRate.set(l.gstRateBp, l.taxPaise)'],
-    ['receipt-always-tax-invoice', "centered(v.gstEnabled ? 'Tax Invoice' : 'Bill of Supply');", "centered('Tax Invoice');"],
+    ['receipt-always-tax-invoice', "v.gstEnabled ? 'Tax Invoice' : 'Bill of Supply');", "'Tax Invoice');"],
     ['receipt-gstin-when-not-registered', 'if (v.gstEnabled && v.gstin) centered', 'if (v.gstin) centered'],
     ['receipt-no-reprint-mark', "if (v.reprint) centered('*** RE-PRINT ***');", ''],
     ['receipt-round-off-sign', "v.roundOffPaise < 0 ? '-' : '+'", "'+'"],
@@ -142,7 +142,7 @@ const MUTANTS = [
     ['reprint-other-device', "(as === 'receipt' ? sale.paid_device_id ?? sale.device_id : sale.device_id)", "(as === 'receipt' ? p.deviceId : sale.device_id)"],
     ['reprint-no-audit-trail', "action: 'sale.reprinted'", "action: 'sale.noop'"],
     ['reprint-unknown-user-ok', "[ev.reprintedBy, p.outletId]);\n  if (!who.rowCount) throw new Reject('unknown_user');", '[ev.reprintedBy, p.outletId]);'],
-    ['reprint-type-not-accepted', "'payment.taken', 'print.reprinted', 'shift.opened'", "'payment.taken', 'shift.opened'"],
+    ['reprint-type-not-accepted', "'print.reprinted': [1], ", ''],
   ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('sync-push.test.ts'))),
   ...[
     ['receipt-info-scope', "const b = receiptInfoBody.safeParse(req.body);\n    if (!ps.success || !b.success) return bad(reply);\n    const p = req.principal!;\n    if (p.kind !== 'user' || !mine(p.outletIds, ps.data.id)) return notFound(reply);", "const b = receiptInfoBody.safeParse(req.body);\n    if (!ps.success || !b.success) return bad(reply);\n    const p = req.principal!;\n    if (p.kind !== 'user') return notFound(reply);"],
@@ -151,12 +151,12 @@ const MUTANTS = [
     ['receipt-info-not-trimmed', 'address: z.string().trim().min(1)', 'address: z.string().min(1)'],
   ].map(([id, from, to]) => M(id, 'apps/api/src/routes/outlets.ts', from, to, API_TESTS('outlets.test.ts'))),
   M('receipt-info-fssai-db-check', 'db/migrations/0003_menu.sql', "CHECK (fssai_no IS NULL OR fssai_no ~ '^[0-9]{14}$')", '', API_TESTS('outlets.test.ts')),
-  M('receipt-info-not-pulled', SYNC, ", 'address', address, 'fssaiNo', fssai_no)", ')', API_TESTS('sync-push.test.ts')),
+  M('receipt-info-not-pulled', SYNC, ", 'address', address, 'fssaiNo', fssai_no,", ',', API_TESTS('sync-push.test.ts')),
   ...[
     ['tablet-waiter-reprints', "if (args.actor.role !== 'cashier') throw new Error('only a cashier reprints a receipt');", ''],
     ['tablet-reprint-unpaid', "if (!sale || sale.status !== 'paid') throw new Error('only a paid sale has a receipt to reprint');", ''],
     ['tablet-recent-includes-open', "where('status').equals('paid')", "where('status').anyOf('paid', 'open')"],
-  ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/receipt.test.ts'] })),
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/receipt.test.ts'], noDb: true })),
   // --- phase 6: day close
   ...[
     ['dayclose-open-shift-ignored', 'if (bl.openShifts.length || bl.openSales || unacked.length)', 'if (bl.openSales || unacked.length)'],
@@ -167,14 +167,14 @@ const MUTANTS = [
     ['dayclose-preview-any-outlet', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);\n    return withTenant(p.tenantId, async (c) => {\n      const day", "if (p.kind !== 'user') return notFound(reply);\n    return withTenant(p.tenantId, async (c) => {\n      const day"],
     ['dayclose-reclose', 'if (day.closed_at) return reply.code(409)', 'if (false) return reply.code(409)'],
     ['dayclose-future-day', "if (date > (await today(c, ps.data.id)))", 'if (false)'],
-    ['dayclose-not-frozen', 'SET closed_at = now(), closed_by = $2, totals = $3 WHERE id = $1 AND closed_at IS NULL', "SET closed_at = now(), closed_by = $2, totals = '{}'::jsonb || $3::jsonb - 'grossPaise' WHERE id = $1 AND closed_at IS NULL"],
+    ['dayclose-not-frozen', 'SET closed_at = now(), closed_by = $2, totals = $3 WHERE id = $1 AND closed_at IS NULL', "SET closed_at = now(), closed_by = $2, totals = $3::jsonb - \\'grossPaise\\' WHERE id = $1 AND closed_at IS NULL"],
     ['dayclose-late-seen-twice', 'AND e.received_at > $3)', 'AND e.received_at > $3 - interval \'100 years\')'],
     ['dayclose-gaps-hidden', 'WHERE NOT n = ANY(g.have)', 'WHERE false AND NOT n = ANY(g.have)'],
     ['dayclose-upi-as-cash', "cashPaise: by.cash ?? 0", 'cashPaise: (by.cash ?? 0) + (by.upi ?? 0)'],
     ['forceclose-any-outlet', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);\n    return withTenant(p.tenantId, async (c) => {\n      // Lock", "if (p.kind !== 'user') return notFound(reply);\n    return withTenant(p.tenantId, async (c) => {\n      // Lock"],
     ['forceclose-shift-of-other-outlet', 'AND outlet_id = $2 FOR UPDATE', 'AND $2::uuid IS NOT NULL FOR UPDATE'],
     ['forceclose-twice', 'if (s.closed_at) return reply.code(409).send({ error: \'already closed\' });\n      const pays', 'const pays'],
-    ['forceclose-expected-ignores-sales', 'expectedCash(s.opening, pays.rows)', 'expectedCash(s.opening, [])'],
+    ['forceclose-expected-ignores-sales', 'expectedCash(s.opening, [...pays.rows, ...refused])', 'expectedCash(s.opening, [...refused])'],
     ['forceclose-no-audit', "action: 'shift.force_close'", "action: 'shift.noop'"],
     ['forceclose-negative-count', 'countedCashPaise: z.number().int().min(0).max(100_000_000)', 'countedCashPaise: z.number().int().max(100_000_000)'],
   ].map(([id, from, to]) => M(id, 'apps/api/src/routes/dayclose.ts', from, to, API_TESTS('sync-push.test.ts'))),
@@ -218,24 +218,25 @@ const MUTANTS = [
     ['void-twice-silent', "throw new Reject(sale.status === 'void' ? 'already_void' : 'not_open')", "throw new Reject('not_open')"],
     ['void-no-audit', "action: 'sale.voided'", "action: 'sale.noop'"],
     ['void-reason-not-stored', "SET status = 'void', void_reason = $2 WHERE id = $1`, [ev.saleId, ev.reason]", "SET status = 'void', void_reason = 'x' WHERE id = $1 AND $2::text IS NOT NULL`, [ev.saleId, ev.reason]"],
-  ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('sync-push.test.ts'))),
+    // `all`: the guard now exists twice (applyVoid and the order void), and the mutant weakens both.
+  ].map(([id, from, to]) => M(id, 'apps/api/src/ingest.ts', from, to, API_TESTS('sync-push.test.ts'), true)),
   M('void-reason-open-ended', 'packages/shared/src/events.ts', "reason: z.enum(['abandoned_at_shift_close'])", 'reason: z.string()', API_TESTS('sync-push.test.ts')),
   ...[
     ['tablet-abandoned-not-voided', "for (const s of await db.sales.filter((x) => x.status === 'open').toArray())", 'for (const s of [] as LocalSale[])'],
     ['tablet-void-paid-too', "db.sales.filter((x) => x.status === 'open')", "db.sales.filter((x) => x.status !== 'void')"],
-  ].map(([id, from, to]) => M(id, 'apps/counter/src/shift.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/sale.test.ts'] })),
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/shift.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/sale.test.ts'], noDb: true })),
   // --- tablet learns of a manager's force-close
   ...[
     ['forcepull-any-device', 'AND device_id = $4 AND closed_by IS NOT NULL', 'AND $4::uuid IS NOT NULL AND closed_by IS NOT NULL'],
     ['forcepull-own-closes-too', 'AND device_id = $4 AND closed_by IS NOT NULL', 'AND device_id = $4 AND closed_at IS NOT NULL'],
-  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'] })),
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'], noDb: true })),
   M('forceclose-reason-indistinct', 'apps/api/src/ingest.ts', "shift.closed_by ? 'shift_force_closed' : 'shift_already_closed'", "'shift_already_closed'", { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'] }),
   ...[
     ['tablet-force-reason-parked', "res.status === 'rejected' && res.reason === 'shift_force_closed'", "false"],
     ['tablet-pull-ignores-shift', "if (c.type === 'shift') {", "if (false) {"],
     ['tablet-pull-overwrites-own-close', 'if (s && !s.closedAt) {', 'if (s) {'],
     ['tablet-pull-no-server-figures', '} else if (s && !s.closedByManager) {', '} else if (false) {'],
-  ].map(([id, from, to]) => M(id, 'apps/counter/src/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'] })),
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/sync.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/push.test.ts'], noDb: true })),
   M('dayclose-outbox-header-ignored', 'apps/api/src/auth.ts', 'outbox_pending = COALESCE($3, outbox_pending)', 'outbox_pending = outbox_pending', API_TESTS('sync-push.test.ts')),
   // --- phase 7: online orders (schema guards)
   ...[
@@ -362,8 +363,8 @@ const MUTANTS = [
     ['plat-session-revoke-ignored', 'apps/api/src/auth.ts', 'AND s.revoked_at IS NULL AND s.expires_at > now()`, [sessionId]', 'AND s.expires_at > now()`, [sessionId]'],
     ['plat-inactive-admin-session', 'apps/api/src/auth.ts', 'JOIN platform_admin a ON a.id = s.admin_id AND a.active', 'JOIN platform_admin a ON a.id = s.admin_id'],
     ['plat-host-unchecked', 'apps/api/src/auth.ts', 'wrongPlatformHost(req)) return reply', 'false) return reply'],
-    ['plat-suspended-bearer-ok', 'apps/api/src/auth.ts', "if (await isSuspended(c, p.tenantId)) return 'suspended' as const;\r\n      return { kind: 'user'", "return { kind: 'user'"],
-    ['plat-suspended-device-ok', 'apps/api/src/auth.ts', "if (await isSuspended(c, p.tenantId)) return 'suspended' as const;\r\n    // The tablet", "// The tablet"],
+    ['plat-suspended-bearer-ok', 'apps/api/src/auth.ts', "if (await isSuspended(c, p.tenantId)) return 'suspended' as const;\n      return { kind: 'user'", "return { kind: 'user'"],
+    ['plat-suspended-device-ok', 'apps/api/src/auth.ts', "if (await isSuspended(c, p.tenantId)) return 'suspended' as const;\n    // The tablet", "// The tablet"],
     ['plat-suspended-login-ok', 'apps/api/src/routes/auth.ts', "if ((await c.query('SELECT suspended_at FROM tenant WHERE id = $1', [tenantId])).rows[0]?.suspended_at) return 'suspended' as const;", ''],
     ['plat-suspend-reason-optional', 'apps/api/src/routes/platform.ts', 'reason: z.string().trim().min(3).max(200) })', 'reason: z.string().trim().min(3).max(200).optional() })'],
     ['plat-suspend-state-unchecked', 'apps/api/src/routes/platform.ts', 'WHERE id = $1 AND (suspended_at IS NULL) = $2 RETURNING id', 'WHERE id = $1 AND $2::boolean IS NOT NULL RETURNING id'],
@@ -382,10 +383,12 @@ const MUTANTS = [
     ['plat-health-quiet-window-fixed', 'db/migrations/0008_platform_metrics.sql', 'make_interval(hours => quiet_hours)', 'make_interval(hours => 24)', 'api'],
     ['plat-usage-counts-open-sales', 'db/migrations/0008_platform_metrics.sql', "s.status IN ('paid', 'refunded') AND s.business_date", "s.status IN ('paid', 'refunded', 'open', 'void') AND s.business_date", 'api'],
     ['plat-usage-since-ignored', 'db/migrations/0008_platform_metrics.sql', "AND s.business_date >= date_trunc('month', since)::date", '', 'api'],
-    ['plat-health-route-open', 'apps/api/src/routes/platform.ts', "app.get('/platform/health', { config: any }", "app.get('/platform/health', { config: { scope: 'public' } }", 'api'],
+    ['plat-health-route-open', 'apps/api/src/routes/platform.ts', "app.get('/platform/health', { config: any }", "app.get('/platform/health', { config: { scope: 'public' } }", 'boot'],
     ['plat-warning-severity', 'apps/api/src/platformHealth.ts', "add('sync-rejected', 'alert'", "add('sync-rejected', 'warn'", 'api'],
   ].map(([id, file, from, to, kind]) => M(id, file, from, to, kind === 'db'
-    ? { cwd: '.', cmd: ['node', '--test', 'db/test/platform.test.mjs'] } : API_TESTS('platform-health.test.ts'))),
+    ? { cwd: '.', cmd: ['node', '--test', 'db/test/platform.test.mjs'] }
+    // 'boot': the app's startup check (app.ts) refuses the mutant, so the stack cannot start; run the tests in-process, no rebuild.
+    : kind === 'boot' ? { ...API_TESTS('platform-health.test.ts'), noDb: true } : API_TESTS('platform-health.test.ts'))),
   // --- support impersonation (step 4)
   ...[
     ['imp-method-gate-removed', 'apps/api/src/auth.ts', "if (req.method !== 'GET' && req.method !== 'HEAD') return reply", "if (false) return reply"],
@@ -500,7 +503,7 @@ const MUTANTS = [
     ['order-empty-paid', "CHECK (total_paise > 0 OR status IN ('open', 'void')),", ''],
     ['order-two-open', 'CREATE UNIQUE INDEX sale_one_open_per_order', 'CREATE INDEX sale_one_open_per_order'],
     ['order-line-identity-mutable', '  IF (NEW.tenant_id, NEW.sale_id, NEW.line_id', '  IF false AND (NEW.tenant_id, NEW.sale_id, NEW.line_id'],
-    ['order-table-after-close', 'NEW.business_date, NEW.table_id)', 'NEW.business_date, OLD.table_id)'],
+    ['order-table-after-close', 'NEW.business_date, NEW.table_id, NEW.paid_device_id)', 'NEW.business_date, OLD.table_id, NEW.paid_device_id)'],
     ['order-root-mutable', ' OR NEW.order_root_id IS DISTINCT FROM OLD.order_root_id THEN', ' THEN'],
     ['order-no-table', "CHECK (order_root_id IS NULL OR (table_id IS NOT NULL AND channel = 'counter')),", ''],
     ['order-line-money-unchecked', 'CHECK (line_total_paise = unit_price_paise * qty),', ''],
@@ -658,7 +661,9 @@ const MUTANTS = [
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
-const want = new Set(process.argv.slice(2));
+// `--check`: only confirm every pattern still matches its file once; run no tests.
+const checkOnly = process.argv.includes('--check');
+const want = new Set(process.argv.slice(2).filter((a) => a !== '--check'));
 const todo = MUTANTS.filter((m) => !want.size || want.has(m.id));
 let original = null;
 let current = null;
@@ -669,15 +674,23 @@ const results = [];
 for (const m of todo) {
   original = readFileSync(m.file, 'utf8');
   current = m.file;
-  // `from` is a string, or a RegExp when the text spans lines (checked-in files may use CRLF).
+  // Patterns are matched against LF text, so a multi-line `from` works whether the file is checked out with LF or CRLF.
+  // `restore` writes the untouched original back, so line endings are never changed on disk after a run.
+  const text = original.replace(/\r\n/g, '\n');
   const isRe = m.from instanceof RegExp;
-  const count = isRe ? (original.match(new RegExp(m.from.source, 'g'))?.length ?? 0) : original.split(m.from).length - 1;
+  const count = isRe ? (text.match(new RegExp(m.from.source, 'g'))?.length ?? 0) : text.split(m.from).length - 1;
   if (count === 0 || (count > 1 && !m.all)) { results.push([m.id, 'INVALID', `pattern found ${count}x`]); console.log(results.at(-1).join(' | ')); continue; }
+  if (checkOnly) { results.push([m.id, 'caught', 'pattern ok (--check)']); continue; }
   try {
-    writeFileSync(m.file, isRe ? original.replace(m.from, m.to) : m.all ? original.split(m.from).join(m.to) : original.replace(m.from, () => m.to));
+    writeFileSync(m.file, isRe ? text.replace(m.from, m.to) : m.all ? text.split(m.from).join(m.to) : text.replace(m.from, () => m.to));
     if (!m.tests.noDb) {
       const up = run(['node', 'scripts/up-fresh.mjs']);
-      if (up.status !== 0) { results.push([m.id, 'BROKEN', 'fresh start failed under the mutation']); continue; }
+      if (up.status !== 0) {
+        // The mutant most likely does not build; the full output is kept so the cause can be read.
+        const log = `.validation/broken-${m.id}.log`;
+        writeFileSync(log, `${up.stderr}\n${up.stdout}`);
+        results.push([m.id, 'BROKEN', `fresh start failed under the mutation; see ${log}`]); console.log(results.at(-1).join(' | ')); continue;
+      }
     }
     const t = run(m.tests.cmd.flatMap((a) => (a === '--test' ? [a, '--test-reporter=tap'] : [a])), m.tests.cwd);
     const out = `${t.stdout}\n${t.stderr}`;

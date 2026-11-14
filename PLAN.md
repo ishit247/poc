@@ -45,7 +45,7 @@ day close, reports). Smaller gaps per phase are in [docs/build-notes.md](docs/bu
 | 8 | Reports | yes | 5 tests, 31 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; no refund route yet | [build-notes.md](docs/build-notes.md) |
 | 9 | Aggregator adapters | **scaffold only** (placeholder contract) | webhook tests; secrets sealed (phase 11 step 6) | everything against real Zomato/Swiggy; no integration or mapping UI; counter UI ignores `unmappedLines` | [build-notes.md](docs/build-notes.md) |
 | 10 | Dynamic UPI | no (optional) | | | |
-| 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke and rename screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 | full mutation run; off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
+| 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke and rename screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 | off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
 | 12 | Tables, running orders, quick codes (D13 to D18) | **all steps done** (1 to 8, 2b, 7b, 7c, 7d) | at 7d: API 244/244, tablet 59/59, shared 55/55, DB 46/46, 22/22 mutants; `browser-tables` 56/56, `browser-sell` 27/27, `browser-flow` 46/46 (evidence per step in the phase file) | a refusal arriving after a manager force-closed its drawer is only flagged at day close ("count it separately"); open design questions at the end of the phase file | [phase12-plan.md](docs/phase12-plan.md), [prototype](docs/prototypes/sell-prototype.html) |
 
 ### 0.2 Latest full verification pass (2026-11-10)
@@ -81,19 +81,22 @@ Fixed in this pass (the 2026-11-06 findings):
 
 ### 0.3 Next steps, in order
 
-1. **Fix first:** `scripts/mutation-checks.mjs` has 23 mutants reported INVALID: 17 multi-line `from` strings
-   written with `\n` that no longer match files checked out with CRLF (use a RegExp with `\r?\n`, as others do), and 6
-   whose guard was reworded by a later feature (`ingest-pay-other-devices-sale`, `receipt-always-tax-invoice`,
-   `reprint-type-not-accepted`, `receipt-info-not-pulled`, `forceclose-expected-ignores-sales`, `order-table-after-close`).
-   Those guards are untested by mutation until fixed. Found 2026-11-14 while fixing the item below.
-2. Resolve Q4 (hosting) and Q7 (hardware); print on the real H58BT and check `storage.persist()` on a real tablet.
-3. Finish phase 11 step 6: a full mutation run (background, to a log), off-site backups and PITR (Q4), integration
+1. Resolve Q4 (hosting) and Q7 (hardware); print on the real H58BT and check `storage.persist()` on a real tablet.
+2. Finish phase 11 step 6: (the full mutation run is done, 2026-11-15; rerun it before a phase is called done, in the
+   background, to a log, never two runs at once), off-site backups and PITR (Q4), integration
    admin (Q1); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
    additive-only migrations (section 18) before the first real tenant.
-4. Small manager screens owed (API exists): tenant settings, logo, outlet address/FSSAI ([docs/build-notes.md](docs/build-notes.md)).
-5. Phase 9 UI (integrations, item mapping, showing `unmappedLines`) once partner access is known.
+3. Small manager screens owed (API exists): tenant settings, logo, outlet address/FSSAI ([docs/build-notes.md](docs/build-notes.md)).
+4. Phase 9 UI (integrations, item mapping, showing `unmappedLines`) once partner access is known.
 
-Done and struck from this list (detail in the phase files): phase 12 design and build (2026-11-07), the whole-flow
+Done and struck from this list (detail in the phase files): the 23 INVALID mutants (2026-11-15: the runner matches
+against LF text so CRLF checkouts work, `--check` validates every pattern without running tests, 483/483 match; the
+11 that needed new text or a CRLF-free pattern were each run and caught). Full mutation run 2026-11-15, log
+`.validation/mutation-full-2026-11-15.log`: 467/483 caught on the first pass, none survived. The other 16 were
+BROKEN (fresh start failed): 8 passed on a rerun; 6 tablet mutants and `dayclose-not-frozen` did not build (fixed: tablet
+groups run with `noDb`, the quoting in the SQL mutant) and `plat-health-route-open` is refused by the app's own startup
+check (`'boot'` kind, run in-process). Now 483/483 caught. A BROKEN mutant now writes `.validation/broken-<id>.log`.
+Phase 12 design and build (2026-11-07), the whole-flow
 browser run (2026-11-06), browser scripts brought up to the current UI (2026-11-10), the manager menu editor (2026-11-14), the two failing `7d` refused-receipt tests (2026-11-14: commit 6bf9eb7
 had picked up mutant `rf-late-any-closed` left applied in `apps/api/src/refused.ts`; restored, 26/26 pass, the three
 `rf-late-*` mutants caught).
