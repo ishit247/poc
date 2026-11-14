@@ -6,7 +6,7 @@ import { Modal } from './Modal.tsx';
 import { Thumb, pickPicture, savePicture } from './ItemPicture.tsx';
 import {
   MAX_OPS, addCat, addRow, buildApply, catIssues, deleteRows, editCat, editRow, fromMenu, importCsv, isNew, menuToCsv, moveRows, pasteCells, problemKeys,
-  record, redo, removeCat, rowIssues, setGst, setHsn, shownRows, startHistory, undo, type CsvCol, type CsvImport, type DRow, type DTag, type Diet, type Draft,
+  moveCat, record, redo, removeCat, rowIssues, setGst, setHsn, shownRows, startHistory, undo, type CsvCol, type CsvImport, type DRow, type DTag, type Diet, type Draft,
   type Field, type History, type MenuPayload,
 } from './menuDraft.ts';
 
@@ -305,6 +305,10 @@ export function MenuEditor({ token, onDirty }: { token: string; onDirty?: (dirty
               />
               <label>Code <input key={cat.code} defaultValue={cat.code} aria-label="Category code" disabled={ro} inputMode="numeric" className={`w-sm${catIssues(cat, cur).code ? ' bad' : ''}`} title={catIssues(cat, cur).code}
                 onBlur={(e) => { if (e.target.value !== cat.code) change$((d) => editCat(d, cat.key, { code: e.target.value })); }} /></label>
+              <button aria-label="Move category up" data-testid="me-cat-up" disabled={ro || cur.cats[0] === cat}
+                title={cur.cats[0] === cat ? 'Already first.' : 'Move up (the till shows categories in this order)'} onClick={() => change$((d) => moveCat(d, cat.key, -1))}>↑</button>
+              <button aria-label="Move category down" data-testid="me-cat-down" disabled={ro || cur.cats[cur.cats.length - 1] === cat}
+                title={cur.cats[cur.cats.length - 1] === cat ? 'Already last.' : 'Move down (the till shows categories in this order)'} onClick={() => change$((d) => moveCat(d, cat.key, 1))}>↓</button>
               <span title={counts.get(cat.key)?.items ? 'Move or delete its items first.' : ''}>
                 <button className="danger" data-testid="me-del-cat" disabled={ro || !!counts.get(cat.key)?.items} onClick={() => { change$((d) => removeCat(d, cat.key)); setCatKey(null); }}>Delete category</button>
               </span>

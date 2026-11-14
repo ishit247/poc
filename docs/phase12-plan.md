@@ -591,36 +591,15 @@ a moved item's response carries **only its new code**.
 - **A payment wins over a line change or removal that reached the server first** (decided after step 3): payment v2
   names each line with its paid quantity, and the overridden events are recorded `already_paid`.
 
-## Start here (handover for the next session)
+## Status
 
-Read `CLAUDE.md`, then PLAN.md section 0, then this file. Steps 1 to 8, 2b, 7b, 7c and 7d are done and verified (7 and 7b with
-a two-browser run, 8 with `scripts/browser-flow.mjs`, 41/41). Step 8 is uncommitted.
+**Phase 12 is complete** (all steps committed, checked 2026-11-10). This file is now the design record for running
+orders: when changing ingest, the fold or the Sell screen, read the step notes above for why it is the way it is.
+What to do next is in PLAN.md 0.3; gotchas are in [build-notes.md](build-notes.md).
 
-Phase 12's steps are all done, and the day-close void screen (step 8 notes, "Found") is built and browser-checked.
-Voiding another device's order is built (step 7c). ~~Open before a pilot: two cashiers paying one table while one is offline
-(step 7b notes), and its 7c twin, a payment taken offline on an order another device voided.~~ Done in step 7d (the
-losing tablet's refused payment). Next: PLAN.md 0.3 item 3.
-
-The notes below were written for step 4 and are kept for reference.
-
-- Code to read first: `packages/shared/src/events.ts` (v1 events), `apps/api/src/ingest.ts` (`decide`, `saleOf`, `applySale`,
-  `applyPayment`), `db/migrations/0004_trading.sql` (`sale`, `sale_line`, `sale_guard`, the payments trigger),
-  `apps/counter/src/sale.ts` and `db.ts` (the tablet's local sale and outbox), `apps/api/test/sync-push.test.ts` (how
-  ingest is tested and fault-injected).
-- Schema consequences of D15 to plan for in step 4: `sale.total_paise > 0` and `sale_line` write-once both have to
-  loosen for an `open` sale (lines get `removed_at` and a changeable `qty`; a trigger keeps the sale's money equal to the
-  fold of its live lines); `sale_guard` must still freeze money once the sale leaves `open`; `saleOf` loses its
-  `wrong_device` rule for `order.*` events; `payment.taken` v2 carries `lines: [{lineId, qty}]` and `totalPaise`.
-- Edit the original migrations in place and `up:fresh` (CLAUDE.md, no real tenant yet).
-- Gotchas found in steps 1 and 2:
-  - Run `node scripts/validate.mjs fresh --yes` before the API suite, and run stages one after another (the machine is
-    short of memory). The runner's "0 ok" count for node:test stages is wrong; read `.validation/<stage>.log`.
-  - Do not edit source or commit while `scripts/mutation-checks.mjs` runs; it rewrites files and restores them after.
-    Log it to a file and wait for the final `N/N caught` line.
-  - A test that needs a signed-in cashier should create its own via `POST /users`; other suites change seeded PINs.
-  - Bash heredocs containing backticks broke once here; use the Edit or Write tool for files.
-  - Files under `scripts/` and some migrations use CRLF; use regex `from` patterns in mutants for multi-line text.
-- All phase 12 steps are committed (checked 2026-11-10, clean tree).
+Code to read first for anything touching running orders: `packages/shared/src/events.ts` and `order.ts` (events and
+the fold), `apps/api/src/order-ingest.ts` and `ingest.ts`, `db/migrations/0004_trading.sql` (`sale`, `sale_line`,
+`sale_guard`), `apps/counter/src/order.ts` and `db.ts`, `apps/api/test/running-orders.test.ts`.
 
 ## Decisions still needed
 

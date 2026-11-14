@@ -111,6 +111,25 @@ export function addCat(d: Draft, name = ''): { draft: Draft; key: string } {
   const key = newKey();
   return { draft: { ...d, cats: [...d.cats, { key, name, code: '', sortOrder: nextSort(d.cats) }] }, key };
 }
+/**
+ * Moves a category one place up (-1) or down (+1). `cats` is kept in display order (the server sends sort_order, name),
+ * and the till sorts by `sortOrder` (counter `menu.ts`), so the two neighbours swap places and numbers. Equal numbers
+ * (ties broken by name) cannot be swapped, so then every category is numbered by its new place.
+ */
+export function moveCat(d: Draft, key: string, by: -1 | 1): Draft {
+  const i = d.cats.findIndex((c) => c.key === key);
+  const j = i + by;
+  if (i < 0 || j < 0 || j >= d.cats.length) return d;
+  const a = d.cats[i]!, b = d.cats[j]!;
+  const cats = [...d.cats];
+  if (a.sortOrder !== b.sortOrder) {
+    cats[i] = { ...b, sortOrder: a.sortOrder };
+    cats[j] = { ...a, sortOrder: b.sortOrder };
+    return { ...d, cats };
+  }
+  cats[i] = b; cats[j] = a;
+  return { ...d, cats: cats.map((c, n) => (c.sortOrder === n * 10 ? c : { ...c, sortOrder: n * 10 })) };
+}
 /** A category with items stays (the server refuses it too); move or delete its items first. */
 export function removeCat(d: Draft, key: string): Draft {
   if (d.rows.some((r) => r.categoryKey === key)) return d;

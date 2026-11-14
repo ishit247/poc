@@ -2,11 +2,24 @@
 
 # Cafeteria POS — design and delivery plan
 
-Status: **v5 (2026-11-06). Phases 1 to 8 are built; phase 9 is scaffolding; phase 11 is
+Status: **v6 (2026-11-14). Phases 1 to 8 and 12 are built; phase 9 is scaffolding; phase 11 is
 partly built. Nothing has run with a real tenant.** The design sections (1 to 20) are
-still the intended design; section 0.1 below is the single place that says what is
-actually built and verified. If a progress note and this table disagree, fix this
-table. Section 16 lists what is *unverified*; section 17 what is still undecided.
+still the intended design; section 0 is the single place that says what is actually
+built and verified. If any other document and section 0 disagree, fix section 0.
+Section 16 lists what is *unverified*; section 17 what is still undecided.
+
+**Where things are written** (one place each):
+
+| What | Where |
+|---|---|
+| Built, verified, owed, next | this section 0 |
+| Working agreements | [CLAUDE.md](CLAUDE.md) |
+| Decisions taken during the build, open gaps, gotchas (phases 1 to 9, pictures) | [docs/build-notes.md](docs/build-notes.md) |
+| An active or recent phase: design, step notes, evidence | its phase file (linked in 0.1) |
+| How to validate; run the server; log in | [docs/validation.md](docs/validation.md), [docs/runbook.md](docs/runbook.md), [docs/test-accounts.md](docs/test-accounts.md) |
+
+There are no separate handover documents. A session ends by updating its phase file's step row and table 0.1;
+the next session starts cold from CLAUDE.md, this section, and that phase file.
 
 ## 0. Progress tracker (keep this current)
 
@@ -16,20 +29,24 @@ doc. "Not verified" is stated, never implied.
 
 ### 0.1 Phases
 
+Phases 3 to 7 were browser-checked end to end by `scripts/browser-flow.mjs` (phase 12 step 8: offline reload and PIN
+sign-in, reconnect, tab killed mid-push, receipt-gap detection, reprint, UPI, online queue, shift close, force-close,
+day close, reports). Smaller gaps per phase are in [docs/build-notes.md](docs/build-notes.md), "Open gaps".
+
 | # | Phase | Built | Verified | Not verified / owed | Detail |
 |---|-------|-------|----------|---------------------|--------|
-| 1 | Foundation, tenant isolation, devices | yes | RLS and route-scope tests on real Postgres; mutants | n/a | [handover-phase3.md](docs/handover-phase3.md) |
-| 2 | Menu admin, onboarding, versioned pull | yes; manager menu editor (Manager tools → Menu: grid, three channel prices, pictures, CSV export/import, one transactional `POST /menu/apply`) done 2026-11-14 | API tests; `menu-apply.test.ts` 7/7 on real Postgres; 11/11 `apply`/menu mutants; counter 86/86; `scripts/browser-menu.mjs` 47/47 on Edge at 1024 and 820 wide | catalog images doc [handover-catalog-images.md](docs/handover-catalog-images.md); menu editor not checked in Safari/Firefox or on a real tablet | [catalog-templates.md](docs/catalog-templates.md), [manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md) |
-| 3 | Offline counter sale | yes | tablet unit tests; browser run (headless Edge) | storage durability and `storage.persist()` on a real tablet | [handover-phase3-progress.md](docs/handover-phase3-progress.md) |
-| 4 | Sync engine | yes | ingest and push tests; 40 mutants | **real-browser run** (offline sales, reconnect, kill tab mid-push); receipt-number gap detection (1..k); N-1 upgrade path (only v1 exists) | [handover-phase4-progress.md](docs/handover-phase4-progress.md) |
-| 5 | Printing | browser print, 58 mm layout, reprint trail | layout tests; 26 mutants | **nothing printed on the real ATPOS H58BT**; no real-browser check; no WebUSB, Bluetooth, ESC/POS or drawer kick | [handover-phase5-progress.md](docs/handover-phase5-progress.md) |
-| 6 | Shifts, day close | yes | API tests | **no real-browser check** of Shift screen or day close; day closed out of date order may mis-list late adjustments | [handover-phase6-progress.md](docs/handover-phase6-progress.md) |
-| 7 | Online orders (manual provider) | yes (steps 1 to 6) | API tests, mutants | browser check of the queue screen; UPI path, reprint | [handover-phase7-progress.md](docs/handover-phase7-progress.md) |
-| 8 | Reports | yes | 5 tests, 31 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; no refund route yet | [handover-phase8-progress.md](docs/handover-phase8-progress.md) |
-| 9 | Aggregator adapters | **scaffold only** (placeholder contract) | webhook tests | everything against real Zomato/Swiggy; no integration or mapping UI; secrets stored plain; counter UI ignores `unmappedLines` | [phase9-notes.md](docs/phase9-notes.md) |
+| 1 | Foundation, tenant isolation, devices | yes | RLS and route-scope tests on real Postgres; mutants | n/a | [build-notes.md](docs/build-notes.md) |
+| 2 | Menu admin, onboarding, versioned pull | yes, incl. catalog templates and pictures, and the manager menu editor (done 2026-11-14) | `menu-apply.test.ts` 7/7 on real Postgres; 11/11 menu mutants; counter 86/86; `browser-menu.mjs` 47/47 (Edge, 1024 and 820 wide) | menu editor and WebP pictures not checked in Safari/Firefox or on a real tablet; two items cannot swap quick codes in one save | [catalog-templates.md](docs/catalog-templates.md), [manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md) |
+| 3 | Offline counter sale | yes | tablet unit tests; `browser-flow` | storage durability and `storage.persist()` on a real tablet; offline-days lockout not enforced | [build-notes.md](docs/build-notes.md) |
+| 4 | Sync engine | yes; N-1 exercised by v1 + v2 events (phase 12) | ingest and push tests, mutants; `browser-flow` | nothing beyond phase 3's hardware gap | [build-notes.md](docs/build-notes.md) |
+| 5 | Printing | browser print, 58 mm layout, reprint trail | layout tests, mutants; reprint in `browser-flow` | **nothing printed on the real ATPOS H58BT**; no WebUSB, Bluetooth, ESC/POS or drawer kick | [build-notes.md](docs/build-notes.md) |
+| 6 | Shifts, day close | yes, incl. manager force-close and the day-close void screen | API tests, mutants; `browser-flow` | days closed out of date order may mis-list late adjustments | [build-notes.md](docs/build-notes.md) |
+| 7 | Online orders (manual provider) | yes | API tests, mutants; queue 23/23 and settlements 18/18 in a browser; `browser-flow` | — | [build-notes.md](docs/build-notes.md) |
+| 8 | Reports | yes | 5 tests, 31 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; no refund route yet | [build-notes.md](docs/build-notes.md) |
+| 9 | Aggregator adapters | **scaffold only** (placeholder contract) | webhook tests; secrets sealed (phase 11 step 6) | everything against real Zomato/Swiggy; no integration or mapping UI; counter UI ignores `unmappedLines` | [build-notes.md](docs/build-notes.md) |
 | 10 | Dynamic UPI | no (optional) | | | |
-| 12 | Tables, running orders, quick codes (D13 to D16) | **steps 1 to 8, 2b, 7b, 7c and 7d done (schema, manager API and pull, diet and tags, v2 events and the order fold, server ingest of running orders, tablet running orders in IndexedDB, the new Sell screen, other devices' open orders by pull and SSE nudge, paying another device's order on the payer's own receipt and drawer; step 6 browser-checked 27/27 with `scripts/browser-sell.mjs`, steps 7 and 7b 29/29 with two browsers in `scripts/browser-tables.mjs`)**; design decided 2026-11-06, layout agreed on the prototype | DB 46/46, API 234/234 (incl. a server-equals-fold property over random delivery orders), tablet 51/51 (incl. real-API running-order and two-device contracts), shared 55/55, 52/52 step 1 to 3 mutants, 51/51 step 4, 14/14 step 5, 20/20 step 7, 19/19 step 7b (see the phase 12 doc) | step 8 done: `scripts/browser-flow.mjs` 41/41 (offline reload and PIN sign-in, reconnect, tab killed mid-push, receipt-gap detection, reprint, online queue, shift close, force-close, day close, reports, diet/tag filter). Day-close void screen built 2026-11-06 (a past-day open order no longer blocks with no way out): API 235/235, 4/4 mutants, `browser-flow.mjs` 44/44. **Step 7c done 2026-11-07:** a cashier voids any open table order of the outlet from any device, a waiter only their own, with a reason (`order.voided` v2, audited with device and user); API 239/239, tablet 54/54, shared 55/55, 13/13 mutants, `browser-tables.mjs` 39/39, `browser-sell.mjs` 27/27, `browser-flow.mjs` 44/44 (one earlier flow run timed out at the online "accepted" step, unexplained, passed on re-run). **Step 7d done 2026-11-07:** when two cashiers pay one table while one is offline, or one pays offline an order another device voided, the losing payment is still refused (what wins is unchanged). The losing tablet now marks the row `refused`, counts its cash in the drawer's expected figure and on its own slip line, and shows a banner on Sell and Shift until a manager acknowledges it (new manager route, audited). The server counts that cash at shift close and force-close (`shift.refused_cash_paise`), and day close lists the number as refused, not missing. Results: API 244/244, tablet 59/59, shared 55/55, DB 46/46, 22/22 mutants, `browser-tables.mjs` 56/56, `browser-sell.mjs` 27/27, `browser-flow.mjs` 46/46 twice (it found a header race: a sync in flight when the network dropped set the header back to "Online"; fixed in `App.tsx`, and the script now forces the race every run and fails against the old code; see the 7d notes). A refusal that reaches the server after a manager force-closed its drawer leaves that shift's figures as closed and is flagged at day close ("count it separately") | [phase12-plan.md](docs/phase12-plan.md), [prototype](docs/prototypes/sell-prototype.html) |
-| 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 (revoke and rename) | full mutation run; off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
+| 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke and rename screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 | full mutation run; off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
+| 12 | Tables, running orders, quick codes (D13 to D18) | **all steps done** (1 to 8, 2b, 7b, 7c, 7d) | at 7d: API 244/244, tablet 59/59, shared 55/55, DB 46/46, 22/22 mutants; `browser-tables` 56/56, `browser-sell` 27/27, `browser-flow` 46/46 (evidence per step in the phase file) | a refusal arriving after a manager force-closed its drawer is only flagged at day close ("count it separately"); open design questions at the end of the phase file | [phase12-plan.md](docs/phase12-plan.md), [prototype](docs/prototypes/sell-prototype.html) |
 
 ### 0.2 Latest full verification pass (2026-11-10)
 
@@ -64,76 +81,34 @@ Fixed in this pass (the 2026-11-06 findings):
 
 ### 0.3 Next steps, in order
 
-1. **Phase 12 design:** try the Sell prototype, agree the layout, then build schema v2 events and the table model.
-   Do this *before* the browser run, so the Playwright script targets the screens that will ship. Until the new
-   Sell screen exists, keep test ids on the current one (a stable convention: `data-testid` or role only, ids
-   listed in one helper file, assertions on behaviour not pixels).
-2. ~~Real-browser run of the whole counter flow at tablet size~~ done 2026-11-06 (phase 12 step 8, 41/41). Follow-up
-   done the same day: the day-close screen lists open orders and voids them (44/44).
-3. ~~Bring the three browser scripts up to the current UI~~ done 2026-11-10 (0.2).
-4. Resolve Q4 (hosting), Q6 (Hindi receipts), Q7 (hardware); print on the real H58BT.
-5. Phase 11 step 6 (2026-11-10: CSP header, sealed secrets, backup and restore drill, runbook [docs/runbook.md](docs/runbook.md),
-   rate limits reviewed, device revoke screen (Manager tools → Tablets); still owed: a full mutation run, off-site backups and PITR (Q4),
-   integration admin (Q1); see the phase 11 doc), then decide the cut-over to additive-only migrations (section 18) before the first real tenant.
-6. Phase 9 UI (integrations, item mapping) once partner access is known.
-7. ~~**Manager menu editor**~~ done 2026-11-14 (Manager tools → Menu tab): online-only, admin-style grid with counter/Zomato/Swiggy
-   prices, pictures and CSV export/import, saved through one transactional `POST /menu/apply`. All 8 steps done; evidence in
-   [docs/manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md). Known limit: two items cannot swap quick codes in one save.
-   Seen in passing: the two `7d` refused-receipt tests in `running-orders.test.ts` fail since `apps/api/src/refused.ts` changed 2026-11-10.
+1. **Fix first:** `scripts/mutation-checks.mjs` has 23 mutants reported INVALID: 17 multi-line `from` strings
+   written with `\n` that no longer match files checked out with CRLF (use a RegExp with `\r?\n`, as others do), and 6
+   whose guard was reworded by a later feature (`ingest-pay-other-devices-sale`, `receipt-always-tax-invoice`,
+   `reprint-type-not-accepted`, `receipt-info-not-pulled`, `forceclose-expected-ignores-sales`, `order-table-after-close`).
+   Those guards are untested by mutation until fixed. Found 2026-11-14 while fixing the item below.
+2. Resolve Q4 (hosting) and Q7 (hardware); print on the real H58BT and check `storage.persist()` on a real tablet.
+3. Finish phase 11 step 6: a full mutation run (background, to a log), off-site backups and PITR (Q4), integration
+   admin (Q1); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
+   additive-only migrations (section 18) before the first real tenant.
+4. Small manager screens owed (API exists): tenant settings, logo, outlet address/FSSAI ([docs/build-notes.md](docs/build-notes.md)).
+5. Phase 9 UI (integrations, item mapping, showing `unmappedLines`) once partner access is known.
 
-Open questions raised by D13 (add to section 17 when reached): Q12 which segment is the first paying customer
-(counter-service or dine-in); Q13 does a restaurant need kitchen tickets in the first pilot (if yes, KOT moves into
-phase 12); Q14 GST and service-charge rules for restaurants (extends Q3).
+Done and struck from this list (detail in the phase files): phase 12 design and build (2026-11-07), the whole-flow
+browser run (2026-11-06), browser scripts brought up to the current UI (2026-11-10), the manager menu editor (2026-11-14), the two failing `7d` refused-receipt tests (2026-11-14: commit 6bf9eb7
+had picked up mutant `rf-late-any-closed` left applied in `apps/api/src/refused.ts`; restored, 26/26 pass, the three
+`rf-late-*` mutants caught).
 
-## 0.4 Handover for a new session (original text, still valid except where marked)
+## 0.4 Orientation for a new session
 
-**Read this first.** Sections 0.1 to 0.3 say what is already built; do not redo it.
-Where the notes below say "nothing is built" or list "first concrete steps", those
-steps are finished.
-
-- **What this is.** A hosted, multi-tenant, offline-capable POS for school
-  cafeterias, sold/operated by a **caterer** who serves several schools. It is a
-  standalone product: this folder is the whole project, and nothing outside it
-  is assumed.
-- **Owner/operator:** a single developer (the user) who will host the server
-  themself. Expect one person to build, run and support this.
-- **Resolved decisions** (do not re-ask): tenant = a caterer with many outlets
-  (section 4); multiple counters per outlet; cash + UPI only; per-counter-per-day
-  receipt numbering is acceptable (section 7.7); the user hosts the server.
-  Also decided by the user: Zomato and Swiggy orders for resident students are a
-  requirement; the app is online-first-with-offline-mode.
-- **Still open** (ask the user only when you reach the phase that needs it):
-  section 17.
-- **Build order:** section 19. Start with phase 1 (foundation + tenant isolation)
-  and do not skip ahead; phases 1 and 4 (sync) decide whether the product works.
-- **First concrete steps for the new session:**
-  1. Confirm the folder is a fresh repo (`git init` if not), with its own
-     `package.json`; choose `pnpm` or `npm` and say which.
-  2. Scaffold: `apps/api` (Fastify + zod), `apps/counter` (Vite + React PWA),
-     `packages/shared` (event types, money helpers, zod schemas), `db/migrations`.
-  3. `docker-compose.yml` for Postgres; a script that creates the non-owner,
-     `NOBYPASSRLS` application role; migration `0001` for tenancy tables with RLS.
-  4. A two-tenant test harness (tenants A and B) *before* any feature, so every
-     later table gets an isolation test from day one.
-  5. Write a short `CLAUDE.md`/README capturing the rules below.
-- **Working rules the user has stated** (carry them over):
-  - Fix the schema where it was first written and reseed, **while no real tenant
-    exists**; stop doing that, and switch to additive migrations only, at the
-    first real tenant (section 18). Ask before crossing that line.
-  - Money is integer paise. Never floats.
-  - Every route that takes an id needs a permission check *and* a scope check
-    (whose record), and declares its scope rule; a test enumerates routes.
-  - Behaviour people depend on (auth, isolation, sync, money) is verified with a
-    real browser/real Postgres and a mutation check that the test fails when the
-    guard is removed — not just green unit tests. Say plainly what was and was
-    not verified.
-  - Install tooling and large caches on the D: drive, not C: (Windows machine).
-  - Keep documents in the repository (a `docs/` folder); do not publish them to
-    hosted services. Do not paste project data into outside services.
-  - Use targeted reads/greps and filtered command output; background slow jobs.
-  - Do not spawn parallel subagents or remote/cloud runs unless asked.
-- **Environment:** Windows 11, PowerShell/Git Bash, VS Code. Printers and
-  tablets are not yet chosen (Q7).
+- **What this is.** A hosted, multi-tenant, offline-capable POS for school cafeterias, sold and operated by a
+  **caterer** who serves several schools. This folder is the whole project; nothing outside it is assumed.
+- **Owner/operator:** a single developer (the user) who hosts the server themself. One person builds, runs and
+  supports it.
+- **Decisions:** section 2 (D1 to D18) and the resolved items in section 17; do not re-ask them. Decisions taken
+  during the build are in [docs/build-notes.md](docs/build-notes.md).
+- **Rules of work:** [CLAUDE.md](CLAUDE.md). The rules that must not drift in code are in [README.md](README.md).
+- **Environment:** Windows 11, PowerShell/Git Bash, VS Code. Tablets and printers not yet chosen beyond the
+  ATPOS H58BT (Q7).
 
 Contents
 
@@ -588,17 +563,20 @@ mismatches, sync health. CSV export. Today's figures are labelled provisional.
 
 *Resolved:* tenants are a caterer (D10); per-counter receipt series accepted (D9); you host (D11).
 
-1. **Zomato/Swiggy (needed before phase 9):** are the outlets listed on the platforms, delivering to hostel students, or is it an internal ordering channel? Any partner contact yet? Per-outlet onboarding or one integrator for all?
+1. **Zomato/Swiggy:** *partly resolved:* outlets are listed on the platforms; onboarding is per outlet. Still open: partner contact and API access (phase 9 is gated on it).
 2. Roughly how many outlets and counters in year one? (Sizes hosting; a single VM is plenty for dozens.)
 3. **GST — provision made, specifics deferred (user's decision):** the model carries `outlet.gst_enabled` + `outlet.gstin` (a GSTIN is required to enable, format-checked in the API and the database), `item.hsn_code` (optional) and a per-item `gst_rate_bp`. A GST-disabled outlet charges 0% whatever the item rate. Still to learn before the receipt is designed: exact receipt/invoice layout, whether the caterer or the school holds the registration, composition-scheme or not, and whether GSTIN checksum validation is wanted.
 4. **Hosting (needed before phase 11):** which provider/region, and who handles OS patching, TLS and backups storage?
-5. Does the caterer need consolidated reports across all its schools (assumed yes) and does each school's management need its own read-only view of its outlet?
-6. Receipts English-only or Hindi too? (needed before phase 5)
+5. Does the caterer need consolidated reports across all its schools (assumed yes, and built in phase 8) and does each school's management need its own read-only view of its outlet?
+6. *Resolved (phase 5):* receipts are English only for now; Hindi would need a code page or bitmap printing.
 7. Counter hardware: Android tablets, Windows PCs, or mixed? Existing printers?
 8. Do tenants pay you (subscription), and when must billing exist?
-9. How long may a counter run offline before locking (default 7 days)?
+9. *Resolved (phase 3):* 7 days by default, a per-tenant setting (`offlineDays`); stored, not yet enforced on the tablet.
 10. *Resolved:* menus are **not** date-specific. Menu and pricing are set **per outlet** (the user's "cashier-specific" means outlet), with optional narrowing and a price override per counter (section 8). **Aggregator prices differ** from counter prices, per channel and per outlet. Pricing is **tax-exclusive** (GST added on top, rounded once per line); the GST rate stays with the item.
 11. Is an accountant/read-only role needed?
+12. (D13) Which segment is the first paying customer: counter-service or dine-in?
+13. (D13) Does a restaurant need kitchen tickets (KOT) in the first pilot?
+14. (D13) GST and service-charge rules for restaurants (extends Q3).
 
 ## 18. Operations
 

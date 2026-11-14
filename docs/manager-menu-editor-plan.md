@@ -4,7 +4,7 @@
 
 Status: **done, all 8 steps (2026-11-14).** Built as: pictures are chosen in the
 grid and uploaded right after Save (not at once, so undo and Discard stay simple); tags are picked from existing ones in the row
-details (new tags come with the CSV import); no category reordering yet. Source: `docs/handover-catalog-images.md`, "Not done" item 1.
+details (new tags come with the CSV import); no category reordering yet. Source: the catalog-pictures handover's "Not done" item 1 (that file is retired; its open items are in `docs/build-notes.md`).
 Model: steps marked HIGH touch an authorisation-scoped write route; the rest are STANDARD (CLAUDE.md model table).
 
 ## Decisions (made with the user, 2026-11-13)

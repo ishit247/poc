@@ -37,16 +37,28 @@ about a mutant, not the real code.
 A mutant reported BROKEN (its code did not load) proves nothing and counts as a gap. A mutant that survives means a
 guard is not protected by any test: fix the test, not the report.
 
+## Browser scripts (not stages)
+
+Playwright with the installed Edge against the Docker stack on :8080, at tablet sizes. Run `fresh` before each one
+(API tests add cashiers with other PINs). Each prints `N/N` and writes `.validation/<script>.log`.
+
+| Script | Covers |
+|---|---|
+| `scripts/browser-flow.mjs` | The whole counter flow: offline reload and PIN, reconnect, tab killed mid-push, receipt gaps, reprint, online queue, shift close, force-close, day close, reports |
+| `scripts/browser-sell.mjs` | Sell screen: code search, hold/resume, quick cash, UPI, offline sale, table strip and map |
+| `scripts/browser-tables.mjs` | Two devices on one table: open orders by pull and SSE, paying and voiding another device's order, refused payments |
+| `scripts/browser-tablets.mjs` | Manager tools → Tablets: revoke and rename |
+| `scripts/browser-menu.mjs` | Manager tools → Menu: the menu editor, pictures, CSV |
+
 ## Checks that are not scripted
 
-CLAUDE.md asks for these where the change touches them. Do them by hand, and record the result in the phase's
-progress document.
+CLAUDE.md asks for these where the change touches them. Do them by hand, and record the result in the phase file's
+step row (or PLAN.md 0.2 for a full pass).
 
-1. **Browser check at tablet size** (about 1024 x 768 and 768 x 1024): sign in with a PIN, ring a sale, take payment,
-   print or reprint a 58 mm receipt, close the shift, close the day. Owed for phases 4 to 6, and for the online queue
-   in phase 7. Unit tests have passed before while the UI was broken.
-2. **Offline behaviour**: switch the tablet's network off, ring and pay a sale, switch it on, confirm the sale reaches
-   the server once, with no gap in the receipt series. Online orders must show "needs internet" instead.
+1. **Printing and storage on real hardware**: print a 58 mm receipt on the H58BT; check `storage.persist()` and that
+   offline sales survive a tablet restart. Nothing else can stand in for these.
+2. **A new screen** not yet covered by a script above: check it at about 1024 x 768 and 768 x 1024. Unit tests have
+   passed before while the UI was broken.
 3. **Two-tenant isolation by hand**: sign in to tenant A, request an id that belongs to tenant B, expect not found.
 4. **Seed sanity**: after `fresh`, the two seeded tenants each have an outlet, a menu and a manager who can sign in.
 5. **Working tree**: after any mutation run, `git status` shows only your own changes. A modified source file you did

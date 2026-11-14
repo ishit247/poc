@@ -151,6 +151,26 @@ check('second tablet: after its pull the tile shows the new picture', await unti
 const keys = await cached();
 check('second tablet: the new picture is cached and the old one dropped', keys.includes(sha2) && !keys.includes(newItem.imageSha256));
 await till.screenshot({ path: `${out}/screens/menu-till-picture.png` });
+
+// move the new category (last) up one place; the till lists categories in the new order after its next pull
+const order = (m) => [...m.categories].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((c) => c.name);
+const before = order(await menu());
+const prev = before[before.indexOf(catName) - 1];
+check('the last category cannot move down', await T('me-cat-down').isDisabled());
+await T('me-cat-up').click();
+check('moving a category up shows in the rail at once', await until(async () => {
+  const names = await page.locator('.me-rail .nm').allInnerTexts();
+  return names.indexOf(catName) === names.indexOf(prev) - 1;
+}));
+await T('me-save').click(); await saved();
+const after = order(await menu());
+check('the new category order reached the server', after.indexOf(catName) === after.indexOf(prev) - 1, after.join(', '));
+await till.getByTestId('cats-toggle').click();
+await ctx2.setOffline(true); await ctx2.setOffline(false);
+check('second tablet: after its pull the till lists the category in its new place', await until(async () => {
+  const names = await till.locator('.seclist button').allInnerTexts();
+  return names.indexOf(catName) >= 0 && names.indexOf(catName) === names.indexOf(prev) - 1;
+}, 15000));
 await ctx2.close();
 
 // remove the picture from the details dialog

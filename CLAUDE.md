@@ -1,8 +1,8 @@
 # Cafeteria POS
 
-Start with [PLAN.md](PLAN.md). Section 0 is the handover: what this is, what is
-already decided, and the first steps. Read it before doing anything, then follow
-the phase order in section 19.
+Start with [PLAN.md](PLAN.md) section 0: what is built and verified, what is owed,
+what is next, and where each kind of document lives. Read it before doing anything.
+There are no separate handover documents; section 0 and the active phase file are the handover.
 
 Do not re-ask decisions listed as resolved in PLAN.md. Ask the user only about
 the open questions in section 17, and only when you reach the phase that needs
@@ -185,10 +185,11 @@ product's runtime and is a separate, decided matter — see D11 in PLAN.md.)
 
 Policies for keeping sessions cheap. If one is wrong for the task, say so and ask; do not drop it silently.
 
-- **Start from the handover, not from the code.** Read CLAUDE.md, PLAN.md section 0 and the current phase file (for
-  phase 12: `docs/phase12-plan.md`, "Start here"). Read source files only when the step needs them, and by line range.
+- **Start from section 0, not from the code.** Read CLAUDE.md, PLAN.md section 0 and the phase file of the work at
+  hand (linked from table 0.1). Read source files only when the step needs them, and by line range.
 - **One phase step per session.** Finish by updating the step's state in the phase file and the PLAN.md tracker, so
-  the next session can start cold. Say plainly when a step is a good place to start a fresh session.
+  the next session can start cold. Do not write a separate handover file: a decision, gap or gotcha that outlives the
+  step goes into the phase file or `docs/build-notes.md`. Say plainly when a step is a good place to start a fresh session.
 - **Results in one line.** Report tests as counts plus the names of failures; never paste logs or full output. Use
   `grep -E "^ℹ (tests|pass|fail)|^✖"` on `.validation/<stage>.log`.
 - **Mutation checks: run only the mutants for the guards that changed**, by id. The full run is for "before a phase is

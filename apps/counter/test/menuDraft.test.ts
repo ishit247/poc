@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addCat, addRow, buildApply, catIssues, deleteRows, editCat, editRow, fromMenu, moveRows, pasteCells, problemKeys, record, redo, removeCat,
+  addCat, addRow, buildApply, catIssues, deleteRows, editCat, editRow, fromMenu, moveCat, moveRows, pasteCells, problemKeys, record, redo, removeCat,
   rowIssues, setGst, shownRows, startHistory, undo, importCsv, menuToCsv, type MenuPayload,
 } from '../src/manager/menuDraft.ts';
 
@@ -103,6 +103,18 @@ test('moving an item sends its new category; renaming a category sends the name'
   const c = buildApply(editCat(base, B, {}), editCat(moveRows(base, [I1], B), A, { name: 'Bites' }), m.prices)!;
   assert.deepEqual(c.body.items?.update, [{ id: I1, categoryId: B, sortOrder: 10 }]);
   assert.deepEqual(c.body.categories?.update, [{ id: A, name: 'Bites' }]);
+});
+
+test('moving a category swaps it with its neighbour and sends both numbers; ties are renumbered', () => {
+  const { m, base } = load();
+  const up = moveCat(base, B, -1);
+  assert.deepEqual(up.cats.map((c) => [c.key, c.sortOrder]), [[B, 0], [A, 10]]);
+  assert.deepEqual(buildApply(base, up, m.prices)!.body, { categories: { update: [{ id: B, sortOrder: 0 }, { id: A, sortOrder: 10 }] } });
+  assert.equal(moveCat(base, A, -1), base, 'first stays first');
+  assert.equal(moveCat(base, B, 1), base, 'last stays last');
+  assert.equal(buildApply(base, moveCat(up, A, -1), m.prices), null, 'moved back: nothing to save');
+  const tied = editCat(editCat(base, A, { sortOrder: 3 }), B, { sortOrder: 3 });
+  assert.deepEqual(moveCat(tied, B, -1).cats.map((c) => [c.key, c.sortOrder]), [[B, 0], [A, 10]]);
 });
 
 test('row checks match the API rules', () => {

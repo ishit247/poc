@@ -9,10 +9,21 @@ order: [PLAN.md](PLAN.md). Working agreements: [CLAUDE.md](CLAUDE.md).
 |---|---|
 | `apps/api` | Fastify + zod API |
 | `apps/counter` | Vite + React counter app: Sell, Shift, and Manager tools (Close the day, Reports, Settlements, Menu, Tablets) |
-| `packages/shared` | Money helpers (integer paise), shared types |
+| `apps/admin` | Platform console for the operator (tenants, catalog templates, health) |
+| `packages/shared` | Money helpers (integer paise), events, the order fold, receipt layout, shared types |
 | `db/init` | Dev-only role bootstrap (`pos_owner`, `pos_app`) |
 | `db/migrations` | `0001…` SQL, applied by `scripts/migrate.mjs` |
-| `db/test` | Tenant-isolation tests against real Postgres |
+| `db/test` | Tenant-isolation and trading-invariant tests against real Postgres |
+| `scripts` | `up:fresh`, seed, validation runner, mutation checks, browser scripts, backup and restore drill |
+| `deploy` | nginx (security headers) and Garage config |
+
+## Documents
+
+Status and next steps: [PLAN.md](PLAN.md) section 0. Decisions taken while building, open gaps and gotchas:
+[docs/build-notes.md](docs/build-notes.md). Phase files: [phase 11](docs/phase11-platform-admin.md),
+[phase 12](docs/phase12-plan.md), [menu editor](docs/manager-menu-editor-plan.md), [catalog templates](docs/catalog-templates.md).
+Operating: [validation](docs/validation.md), [runbook](docs/runbook.md), [test accounts](docs/test-accounts.md),
+[LAN access](docs/lan-access.md).
 
 ## Run
 
