@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ComponentProps } from 'react';
 import { liveQuery } from 'dexie';
 import { formatRupees, paise } from '@pos/shared';
 import type { DeviceInfo, LocalSale } from './db.ts';
 import { payOrder, recentReceipts, recordReprint, visibleOpenOrders, type Actor } from './sale.ts';
 import { PayDialog } from './PayDialog.tsx';
-import { localSettings } from './order.ts';
+import { localSettings, orderDiscount, orderDue } from './order.ts';
 import { Receipt } from './Receipt.tsx';
-import { DraftBill } from './DraftBill.tsx';
+import { DraftBill, discountedBill, type DraftLine, type DraftTotals } from './DraftBill.tsx';
 import { RefundDialog, RefundSlip } from './RefundDialog.tsx';
 import { whyNotRefundableEach } from './refund.ts';
 
@@ -24,7 +24,16 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
   const [paying, setPaying] = useState<LocalSale | null>(null);
   const [done, setDone] = useState<LocalSale | null>(null);
   const [copy, setCopy] = useState<LocalSale | null>(null);
-  const [bill, setBill] = useState<LocalSale | null>(null);
+  const [bill, setBill] = useState<{ lines: DraftLine[]; totals: DraftTotals; discount: ComponentProps<typeof DraftBill>['discount'] } | null>(null);
+  /** The bill as it will be paid: with the order's saved discount, if one applies. */
+  const showBill = async (o: LocalSale) => {
+    const rule = orderDiscount(o);
+    setBill(rule ? discountedBill(o.lines, await localSettings(), rule) : {
+      lines: o.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.netPaise, gstRateBp: l.gstRateBp, taxPaise: l.taxPaise })),
+      totals: { subtotalPaise: o.subtotalPaise, taxPaise: o.taxPaise, roundOffPaise: o.roundOffPaise, totalPaise: o.totalPaise },
+      discount: null,
+    });
+  };
   const [recent, setRecent] = useState<{ sale: LocalSale; whyNot: string | null }[]>([]);
   const [refunding, setRefunding] = useState<LocalSale | null>(null);
   const [refunded, setRefunded] = useState<{ sale: LocalSale; rows: { method: 'cash' | 'upi'; amountPaise: number }[]; reason: string } | null>(null);
@@ -50,8 +59,7 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
   if (bill) {
     return (
       <DraftBill
-        lines={bill.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.netPaise, gstRateBp: l.gstRateBp, taxPaise: l.taxPaise }))}
-        totals={{ subtotalPaise: bill.subtotalPaise, taxPaise: bill.taxPaise, roundOffPaise: bill.roundOffPaise, totalPaise: bill.totalPaise }}
+        lines={bill.lines} totals={bill.totals} discount={bill.discount}
         device={device} staffName={actor.name} onClose={() => setBill(null)}
       />
     );
@@ -68,9 +76,9 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
               <div>{o.lines.map((l) => `${l.qty} × ${l.name}`).join(', ')}</div>
             </div>
             <span className="row">
-              <b className="amt">₹{rs(o.totalPaise)}</b>
+              <b className="amt">₹{rs(orderDue(o))}</b>
               {actor.role === 'cashier' && <button data-testid="pay-order" className="pay-btn" onClick={() => setPaying(o)}>Pay</button>}
-              <button data-testid="print-order" className="icon-btn" title="Print bill" aria-label="Print bill" onClick={() => setBill(o)}><PrintIcon /></button>
+              <button data-testid="print-order" className="icon-btn" title="Print bill" aria-label="Print bill" onClick={() => void showBill(o)}><PrintIcon /></button>
             </span>
           </li>
         ))}
@@ -108,7 +116,7 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
         <PayDialog
           lines={paying.lines}
           total={paise(paying.totalPaise)}
-          discountable={paying.kind === 'order'}
+          discountable={paying.kind === 'order'} initialDiscount={orderDiscount(paying)}
           onCancel={() => setPaying(null)}
           onConfirm={async (tenders, discount) => {
             setDone(await payOrder({ device, actor, saleId: paying.id, tenders, discount, settings: discount ? await localSettings() : undefined }));

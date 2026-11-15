@@ -83,10 +83,10 @@ try {
   await page.waitForTimeout(400);
   check('resume restores the same total', (await text('total')) === totalBefore, totalBefore);
   await shot('2-resumed-order');
-  // An open order: Void order takes Save order's middle slot, on one row with Clear and Print bill.
-  const rowY = async (id) => Math.round((await T(id).boundingBox()).y);
-  check('Void order sits in the middle slot of the action row',
-    (await rowY('void-order')) === (await rowY('clear')) && (await rowY('void-order')) === (await rowY('print-bill')));
+  // An open order: Void order sits with Clear at the left, on one row with the Save, Discount and Print icons (step 5).
+  const rowY = async (id) => { const b = await T(id).boundingBox(); return Math.round(b.y + b.height / 2); };
+  const rows = await Promise.all(['void-order', 'clear', 'save-order', 'discount-btn', 'print-bill'].map(rowY));
+  check('Void order, Clear and the Save, Discount and Print icons share one row', rows.every((y) => Math.abs(y - rows[0]) <= 2), rows.join(','));
 
   // Edit the running order, then one-tap pay with quick cash
   await page.locator('[aria-label^="more "]').first().click();
@@ -164,7 +164,7 @@ try {
   check('no sideways scroll at 768x1024', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   check('Pay buttons reachable at 768x1024', await T('pay-cash').isVisible());
 } catch (e) {
-  check('run completed', false, String(e).split('\n')[0]);
+  check('run completed', false, String(e).split('\n').slice(0, 6).join(' | '));
   await shot('failure').catch(() => {});
 } finally {
   check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 200));

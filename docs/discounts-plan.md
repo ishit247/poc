@@ -172,7 +172,7 @@ check, flag and report applies unchanged).
 | # | Step | Model | State |
 |---|------|-------|-------|
 | 4 | Event `order.discount_set`, fold `discount`, ingest checks; tablet `setOrderDiscount`, `openOrder` with a discount, `refold` totals with it, pulled views too; shared, API and tablet tests; mutants | HIGH | **done 2026-11-15**: see step 4 notes |
-| 5 | Sell: icon buttons, Discount dialog (the Pay dialog's discount fields, shared), draft-cart discount, Pay prefill, draft bill line; browser check at 1024x768 and 820x1180 (cashier and waiter, draft and order, default and map mode) | STANDARD | not started |
+| 5 | Sell: icon buttons, Discount dialog (the Pay dialog's discount fields, shared), draft-cart discount, Pay prefill, draft bill line; browser check at 1024x768 and 820x1180 (cashier and waiter, draft and order, default and map mode) | STANDARD | **done 2026-11-15**: see step 5 notes |
 
 ### Step 4 notes (built 2026-11-15)
 
@@ -196,6 +196,31 @@ Evidence: shared 72/72 (the fold property test now generates discount events; `s
 (`discounts.test.ts` 7/7: deferred, applied, waiter refused, bad payload, pulled, paid without it, `not_open` after
 payment, the split takes its own); tablet 102/102 (2 new); 8 mutants 8/8 caught
 (`.validation/mutation-discount-step4.log`), `--check` 565/565.
+
+### Step 5 notes (built 2026-11-15)
+
+- **One set of fields:** `DiscountFields.tsx` (`useDiscountForm` + `DiscountFields`) is the % / ₹, value and reason
+  entry, priced by `priced`; the Pay dialog and the new `DiscountDialog.tsx` both use it. Pay takes `initialDiscount`
+  (opens with the fields filled in) and still gets `total` as the bill **before** the discount.
+- **Sell:** the draft cart's discount is `draftDiscount` state, applied only while `discountProblem` passes (else shown as
+  "Discount not applied: why" at the plain total); it is cleared with the cart, saved by `openOrder({ discount })` on
+  Save order, on holding and on leaving Sell. An open order's discount goes through `setOrderDiscount`. Totals, Pay
+  buttons, held list and table map show `orderDue(o)`; `orderDiscount(o)` is what Pay and Print bill open with
+  (`order.ts`). The draft bill and Orders' Print bill price with `discountedBill` (`DraftBill.tsx`).
+- **Action row:** Clear and Void (plain text) at the left, then Save order, Discount, Print bill as 46x44 icon buttons;
+  all always shown, disabled with a title when they do not apply (Save on a saved order or in map mode, Discount for a
+  waiter, with no lines, on an online order, or with the cap at 0). The button reads **Void** (title "Void this order"),
+  shortened so the row fits the cart's width on an open order. Placed by slot (flex row and a spacer), not by test id.
+- **Also fixed:** the plain `.dialog` had no max height, so with many held orders the Hold button was pushed off screen
+  and could not be reached; it now scrolls like the Pay dialog.
+- Known: the Pay dialog's due shows the plain total for a moment until the settings load from IndexedDB (Confirm stays
+  disabled meanwhile, so nothing can be paid at the wrong amount).
+
+Evidence (UI only, so no mutants: no guard changed): tablet typecheck clean, tablet 102/102;
+`scripts/browser-discount-saved.mjs` 55/55 at 1024x768 and 820x1180 (draft discount, print bill, Pay prefilled, Save
+order and held total, resume, remove, flat ₹ on an open order, pay and receipt, not-applied, waiter disabled, row layout);
+`browser-sell` 30/30 (its row check updated for the new action row). `browser-discount` 67/69: the two failures are the
+server rows flagged `table_shared`, from held orders that earlier runs left on the dev default table, not from this step.
 
 ## Tests that must exist
 

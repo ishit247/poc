@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { renderReceipt, type ReceiptView } from '@pos/shared';
+import { renderReceipt, type BillDiscount, type ReceiptView, type TradingSettings } from '@pos/shared';
 import type { DeviceInfo } from './db.ts';
+import { priced, type BillLine } from './sale.ts';
 import { useLogoUrl } from './logo.ts';
 import { outletInfo } from './receipt.ts';
 
@@ -9,12 +10,22 @@ const svgProps = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', st
 export interface DraftLine { name: string; qty: number; unitPaise: number; netPaise: number; gstRateBp: number; taxPaise: number }
 export interface DraftTotals { subtotalPaise: number; taxPaise: number; roundOffPaise: number; totalPaise: number }
 
+/** A bill with a discount, priced as the sale will be: each line's tax on its discounted net, the discount line for the receipt. */
+export function discountedBill(lines: readonly BillLine[], settings: TradingSettings, rule: BillDiscount) {
+  const p = priced(lines, settings, rule);
+  return {
+    lines: p.lines.map((l): DraftLine => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.netPaise, gstRateBp: l.gstRateBp, taxPaise: l.taxPaise })),
+    totals: { subtotalPaise: p.subtotalPaise, taxPaise: p.taxPaise, roundOffPaise: p.roundOffPaise, totalPaise: p.totalPaise } as DraftTotals,
+    discount: { paise: p.discountPaise, bp: rule.kind === 'percent' ? rule.value : null, reason: rule.reason } as ReceiptView['discount'],
+  };
+}
+
 /**
  * The bill before payment, for a customer who wants to see (or check) it first. Same 58 mm layout as the receipt,
  * headed DRAFT BILL: it takes no receipt number and writes nothing, so printing it twice changes no record.
  */
-export function DraftBill({ lines, totals, device, staffName, onClose }: {
-  lines: DraftLine[]; totals: DraftTotals; device: DeviceInfo; staffName: string; onClose: () => void;
+export function DraftBill({ lines, totals, discount = null, device, staffName, onClose }: {
+  lines: DraftLine[]; totals: DraftTotals; discount?: ReceiptView['discount']; device: DeviceInfo; staffName: string; onClose: () => void;
 }) {
   const logoUrl = useLogoUrl();
   const [text, setText] = useState<string[] | null>(null);
@@ -25,11 +36,11 @@ export function DraftBill({ lines, totals, device, staffName, onClose }: {
       const view: ReceiptView = {
         outletName: device.outletName, address: o.address, gstEnabled: o.gstEnabled, gstin: o.gstin, fssaiNo: o.fssaiNo,
         receiptNo: 'DRAFT', at: new Date().toISOString(), timezone: device.timezone, staffName, reprint: false, draft: true,
-        lines, ...totals, payments: [],
+        lines, ...totals, discount, payments: [],
       };
       setText(renderReceipt(view));
     });
-  }, [lines, totals, device, staffName]);
+  }, [lines, totals, discount, device, staffName]);
 
   const print = () => {
     setProblem('');

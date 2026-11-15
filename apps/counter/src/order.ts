@@ -92,6 +92,11 @@ const sameDiscount = (a: BillDiscount | null, b: BillDiscount | null) =>
   a === b || (!!a && !!b && a.kind === b.kind && a.value === b.value && a.reason === b.reason);
 
 /** Who may save a discount on an order: whoever may take its payment (docs/discounts-plan.md). The server checks the same. */
+/** What an open order is to be paid: its total with the saved discount, if one applies (else the bill as it is). */
+export const orderDue = (o: Pick<LocalSale, 'totalPaise' | 'saved'>): number => o.saved?.totalPaise ?? o.totalPaise;
+/** The saved discount Pay should open with: none if there is none, or it no longer fits the bill. */
+export const orderDiscount = (o: Pick<LocalSale, 'saved'>): BillDiscount | null => (o.saved && !o.saved.problem ? o.saved.discount : null);
+
 function checkMayDiscount(actor: Actor): void {
   if (actor.role !== 'cashier') throw new Error('Only a cashier may give a discount.');
 }

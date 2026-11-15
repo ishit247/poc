@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { liveQuery } from 'dexie';
 import { addItem, formatRupees, paise, setQty, totals, type BillDiscount, type Cart, type MenuEntry, type Tender } from '@pos/shared';
 import { db, type DeviceInfo, type LocalSale } from './db.ts';
 import type { MenuView } from './menu.ts';
-import { createSale, payOrder, type Actor } from './sale.ts';
-import { addToOrder, openOrder, orderById, setLineQty, tableMode, tableStates, voidOrder } from './order.ts';
+import { createSale, discountProblem, payOrder, type Actor } from './sale.ts';
+import { addToOrder, openOrder, orderById, orderDiscount, orderDue, setLineQty, setOrderDiscount, tableMode, tableStates, voidOrder } from './order.ts';
 import { useItemImageUrl } from './itemImages.ts';
+import { DiscountDialog } from './DiscountDialog.tsx';
 import { PayDialog } from './PayDialog.tsx';
 import { Receipt } from './Receipt.tsx';
-import { DraftBill, type DraftLine, type DraftTotals } from './DraftBill.tsx';
+import { DraftBill, discountedBill, type DraftLine, type DraftTotals } from './DraftBill.tsx';
 
 const rs = (n: number) => formatRupees(paise(n));
 const AUTO_RETURN_MS = 6000;
@@ -29,6 +30,8 @@ function ItemPicture({ sha }: { sha: string | null | undefined }) {
   return url ? <img src={url} alt="" loading="lazy" decoding="async" width={48} height={48} data-testid="item-picture" /> : null;
 }
 
+const svgProps = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
+
 /** One line as the cart shows it, whether it belongs to a draft cart or to a running order. */
 interface ShownLine { key: string; name: string; qty: number; netPaise: number; more: () => void; less: () => void }
 
@@ -45,7 +48,9 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const [paying, setPaying] = useState<'cash' | 'upi' | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
   const [heldOpen, setHeldOpen] = useState(false);     // the held-orders popup
-  const [bill, setBill] = useState<{ lines: DraftLine[]; totals: DraftTotals } | null>(null); // snapshot for the draft bill
+  const [bill, setBill] = useState<{ lines: DraftLine[]; totals: DraftTotals; discount: ComponentProps<typeof DraftBill>['discount'] } | null>(null); // snapshot for the draft bill
+  const [draftDiscount, setDraftDiscount] = useState<BillDiscount | null>(null); // a cashier's discount on the draft cart, saved with the order
+  const [discounting, setDiscounting] = useState(false); // the Discount dialog is open
   const [done, setDone] = useState<LocalSale | null>(null);
   const [popular, setPopular] = useState<string[]>([]);
   const [voiding, setVoiding] = useState<string | null>(null); // the reason being typed, while the void form is open
@@ -70,12 +75,27 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     });
   }, [done]);
 
-  const draftT = totals(cart, menu.settings);
+  // The draft cart's discount applies only while it still fits the bill and the cap; otherwise it is shown as not applied.
+  const draftGross = totals(cart, menu.settings);
+  const draftWhy = draftDiscount ? (cart.length ? discountProblem(draftGross.subtotal, draftDiscount, menu.settings) : 'There is nothing on this bill to discount.') : null;
+  const draftApplied = draftDiscount && !draftWhy ? draftDiscount : null;
+  const draftT = draftApplied ? totals(cart, menu.settings, draftApplied) : draftGross;
+  useEffect(() => { if (cart.length === 0) setDraftDiscount(null); }, [cart.length]);
   const inOrder = activeOrder !== null;
+  // An open order's totals are its bill with the saved discount (`saved`), when it has one (docs/discounts-plan.md).
+  const saved = inOrder ? activeOrder.saved : undefined;
   const subtotal = inOrder ? activeOrder.subtotalPaise : draftT.subtotal;
-  const tax = inOrder ? activeOrder.taxPaise : draftT.tax;
-  const roundOff = inOrder ? activeOrder.roundOffPaise : draftT.roundOff;
-  const total = inOrder ? activeOrder.totalPaise : draftT.total;
+  const tax = inOrder ? saved?.taxPaise ?? activeOrder.taxPaise : draftT.tax;
+  const roundOff = inOrder ? saved?.roundOffPaise ?? activeOrder.roundOffPaise : draftT.roundOff;
+  const total = inOrder ? orderDue(activeOrder) : draftT.total;
+  const grossTotal = inOrder ? activeOrder.totalPaise : draftGross.total; // the bill before the discount: what Pay starts from
+  const discountRule = inOrder ? orderDiscount(activeOrder) : draftApplied;
+  const discountPaise = inOrder ? (saved && !saved.problem ? saved.discountPaise : 0) : draftT.discount;
+  const discountNotApplied = inOrder ? saved?.problem ?? null : draftWhy;
+  const noDiscountWhy = actor.role !== 'cashier' ? 'Only a cashier may give a discount.'
+    : (inOrder ? activeOrder.lines.length : cart.length) === 0 ? 'Add items first.'
+    : inOrder && activeOrder.kind !== 'order' ? 'This bill cannot take a discount.'
+    : menu.settings.discountMaxBp === 0 ? 'Discounts are off. A manager can turn them on in Settings.' : undefined;
 
   const guard = async (f: () => Promise<void> | void) => {
     try { await f(); setMessage(''); } catch (e) { setMessage(e instanceof Error ? e.message : 'Not allowed.'); }
@@ -118,30 +138,42 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   /** Parks the draft as an open order on the default table, so the counter can start the next customer. */
   const holdDraft = async (): Promise<boolean> => {
     if (cart.length === 0) return true;
-    await openOrder({ device, actor, settings: menu.settings, menuVersion: menu.menuVersion, cart });
-    setCart([]);
+    await openOrder({ device, actor, settings: menu.settings, menuVersion: menu.menuVersion, cart, discount: draftApplied });
+    setCart([]); setDraftDiscount(null);
     return true;
   };
   // Leaving Sell (another tab, sign-out, manager tools) unmounts it and would lose the draft: hold it instead, as the
   // signed-in person, so it waits under Held orders. A ref, because the cleanup runs after the last render's closure.
-  const leaving = useRef({ cart, device, actor, menu });
-  leaving.current = { cart, device, actor, menu };
+  const leaving = useRef({ cart, device, actor, menu, discount: draftApplied });
+  leaving.current = { cart, device, actor, menu, discount: draftApplied };
   useEffect(() => () => {
-    const { cart: left, device: d, actor: a, menu: m } = leaving.current;
+    const { cart: left, device: d, actor: a, menu: m, discount } = leaving.current;
     if (left.length === 0) return;
-    void openOrder({ device: d, actor: a, settings: m.settings, menuVersion: m.menuVersion, cart: left })
+    void openOrder({ device: d, actor: a, settings: m.settings, menuVersion: m.menuVersion, cart: left, discount })
       .catch((e) => console.error('could not hold the draft on leaving Sell', e));
   }, []);
 
   const hold = () => guard(async () => { await holdDraft(); setOrderId(null); setHeldOpen(false); });
   const resume = (id: string) => guard(async () => { await holdDraft(); setOrderId(id); setHeldOpen(false); });
   /** Freezes what is on screen as a draft bill (nothing is saved; no receipt number is used). */
-  const showBill = () => setBill({
-    lines: inOrder
-      ? activeOrder.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.netPaise, gstRateBp: l.gstRateBp, taxPaise: l.taxPaise }))
-      : draftT.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.net, gstRateBp: l.gstRateBp, taxPaise: l.tax })),
-    totals: { subtotalPaise: subtotal, taxPaise: tax, roundOffPaise: roundOff, totalPaise: total },
-  });
+  const showBill = () => {
+    if (discountRule) { // lines with their tax on the discounted net, as the receipt will show them
+      setBill(discountedBill(inOrder ? activeOrder.lines : cart, menu.settings, discountRule));
+      return;
+    }
+    setBill({
+      lines: inOrder
+        ? activeOrder.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.netPaise, gstRateBp: l.gstRateBp, taxPaise: l.taxPaise }))
+        : draftT.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.net, gstRateBp: l.gstRateBp, taxPaise: l.tax })),
+      totals: { subtotalPaise: subtotal, taxPaise: tax, roundOffPaise: roundOff, totalPaise: total },
+      discount: null,
+    });
+  };
+  const applyDiscount = async (d: BillDiscount | null) => {
+    if (inOrder) await setOrderDiscount({ device, actor, settings: menu.settings, saleId: activeOrder.id, discount: d });
+    else setDraftDiscount(d);
+    setDiscounting(false);
+  };
   const pickTable = (id: string) => guard(async () => {
     const s = states.find((x) => x.table.id === id);
     setTableId(id);
@@ -153,7 +185,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
       let last = activeOrder;
       for (const l of activeOrder.lines) last = await setLineQty({ device, actor, settings: menu.settings, saleId: activeOrder.id, lineId: l.lineId!, qty: 0 });
       await dropIfEmpty(last);
-    } else setCart([]);
+    } else { setCart([]); setDraftDiscount(null); }
   });
 
   const confirmVoid = async () => {
@@ -168,7 +200,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     const sale = inOrder
       ? await payOrder({ device, actor, saleId: activeOrder.id, tenders, discount, settings: menu.settings })
       : await createSale({ device, actor, cart, settings: menu.settings, menuVersion: menu.menuVersion, tenders, discount });
-    setCart([]); setOrderId(null); setPaying(null); setQ('');
+    setCart([]); setDraftDiscount(null); setOrderId(null); setPaying(null); setQ('');
     setDone(sale);
   };
 
@@ -240,7 +272,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     : '';
 
   if (done) return <Receipt sale={done} device={device} onClose={() => setDone(null)} />;
-  if (bill) return <DraftBill lines={bill.lines} totals={bill.totals} device={device} staffName={actor.name} onClose={() => setBill(null)} />;
+  if (bill) return <DraftBill lines={bill.lines} totals={bill.totals} discount={bill.discount} device={device} staffName={actor.name} onClose={() => setBill(null)} />;
 
   const heldOrders = states.filter((s) => s.table.isDefault).flatMap((s) => s.orders).filter((o) => o.id !== activeOrder?.id);
   const stateOf = (orders: LocalSale[]) => (orders.length ? 'busy' : 'free');
@@ -254,7 +286,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
             <div className="tables">
               {states.map(({ table, orders }) => (
                 <button key={table.id} data-testid={`table-${table.code}`} className={`tbl ${stateOf(orders)} ${table.id === shownTableId ? 'cur' : ''}`} onClick={() => void pickTable(table.id)}>
-                  <b>{table.code}</b> {orders.length ? `₹${rs(orders.reduce((s, o) => s + o.totalPaise, 0))}` : 'Free'}
+                  <b>{table.code}</b> {orders.length ? `₹${rs(orders.reduce((s, o) => s + orderDue(o), 0))}` : 'Free'}
                 </button>
               ))}
             </div>
@@ -338,10 +370,12 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
         {message && <p className="error" role="alert" data-testid="sell-message">{message}</p>}
         <dl className="sums">
           <dt>Subtotal</dt><dd data-testid="subtotal">₹{rs(subtotal)}</dd>
+          {discountRule && discountPaise > 0 && (<><dt data-testid="discount-label">Discount ({discountRule.reason})</dt><dd data-testid="discount-amount">−₹{rs(discountPaise)}</dd></>)}
           {tax > 0 && (<><dt>GST</dt><dd data-testid="tax">₹{rs(tax)}</dd></>)}
           {roundOff !== 0 && (<><dt>Round off</dt><dd data-testid="round-off">{roundOff < 0 ? '−' : '+'}₹{rs(Math.abs(roundOff))}</dd></>)}
           <dt className="total">Total</dt><dd className="total" data-testid="total">₹{rs(total)}</dd>
         </dl>
+        {discountNotApplied && <p className="warn" data-testid="discount-not-applied">Discount not applied: {discountNotApplied}</p>}
         {otherDevice && <p className="warn" data-testid="other-device">Opened on another device. Paid here, it goes on this counter's receipt and drawer.</p>}
         {actor.role === 'cashier' && (
           <div className="payrow">
@@ -350,13 +384,22 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           </div>
         )}
         <div className="actions">
+          {/* Plain text buttons at the left, icon buttons at the right: every one is always there (disabled, with why). */}
           <button data-testid="clear" disabled={lines.length === 0} onClick={() => void clear()}>Clear</button>
-          {!inOrder && mode === 'default' && (
-            <button data-testid="save-order" disabled={cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage('Order saved.'); })}>Save order</button>
-          )}
-          {/* Same slot as Save order: that one is for a draft, this one for an open order, never both at once. */}
-          {mayVoid && <button data-testid="void-order" disabled={voiding !== null} onClick={() => setVoiding('')}>Void order</button>}
-          <button data-testid="print-bill" disabled={lines.length === 0} onClick={showBill}>Print bill</button>
+          {mayVoid && <button data-testid="void-order" disabled={voiding !== null} title="Void this order" onClick={() => setVoiding('')}>Void</button>}
+          <span className="spacer" />
+          <button data-testid="save-order" className="icon-btn" aria-label="Save order"
+            title={inOrder ? 'This order is already saved.' : mode === 'map' ? 'A table order is saved as you add items.' : 'Save order'}
+            disabled={inOrder || mode !== 'default' || cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage('Order saved.'); })}>
+            <svg {...svgProps}><path d="M5 3h11l3 3v15H5z" /><path d="M8 3v6h7V3" /><rect x="8" y="14" width="8" height="7" /></svg>
+          </button>
+          <button data-testid="discount-btn" className={`icon-btn ${discountRule ? 'active' : ''}`} aria-label="Discount" title={noDiscountWhy ?? (discountRule ? 'Change or remove the discount' : 'Discount')}
+            disabled={!!noDiscountWhy} onClick={() => setDiscounting(true)}>
+            <svg {...svgProps}><path d="M19 5L5 19" /><circle cx="7" cy="7" r="2" /><circle cx="17" cy="17" r="2" /></svg>
+          </button>
+          <button data-testid="print-bill" className="icon-btn" aria-label="Print bill" title="Print bill" disabled={lines.length === 0} onClick={showBill}>
+            <svg {...svgProps}><path d="M6 9V3h12v6" /><rect x="3" y="9" width="18" height="9" rx="2" /><rect x="7" y="14" width="10" height="7" /></svg>
+          </button>
         </div>
         {mayVoid && voiding !== null && (
           <div className="row" data-testid="void-form">
@@ -373,7 +416,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
             <div className="map" data-testid="table-map">
               {states.map(({ table, orders }) => (
                 <button key={table.id} data-testid={`map-${table.code}`} className={`tbl ${stateOf(orders)} ${table.id === shownTableId ? 'cur' : ''}`} onClick={() => void pickTable(table.id)}>
-                  {table.code}<small>{orders.length ? `Busy · ₹${rs(orders.reduce((s, o) => s + o.totalPaise, 0))}` : 'Free'}</small>
+                  {table.code}<small>{orders.length ? `Busy · ₹${rs(orders.reduce((s, o) => s + orderDue(o), 0))}` : 'Free'}</small>
                 </button>
               ))}
             </div>
@@ -388,15 +431,19 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
             {heldOrders.length === 0 && <p className="muted">No held orders.</p>}
             {heldOrders.map((o) => (
               <button key={o.id} data-testid="held-order" className="tbl busy" onClick={() => void resume(o.id)}>
-                {o.lines.map((l) => `${l.qty} × ${l.name}`).join(', ')} · ₹{rs(o.totalPaise)}
+                {o.lines.map((l) => `${l.qty} × ${l.name}`).join(', ')} · ₹{rs(orderDue(o))}
               </button>
             ))}
           </div>
         </div>
       )}
       {paying && (
-        <PayDialog key={paying} initialMode={paying} lines={inOrder ? activeOrder.lines : cart} total={paise(total)}
+        <PayDialog key={paying} initialMode={paying} lines={inOrder ? activeOrder.lines : cart} total={paise(grossTotal)} initialDiscount={discountRule}
           discountable={!inOrder || activeOrder.kind === 'order'} onCancel={() => setPaying(null)} onConfirm={finish} />
+      )}
+      {discounting && (
+        <DiscountDialog lines={inOrder ? activeOrder.lines : cart} settings={menu.settings} current={discountRule}
+          onApply={applyDiscount} onCancel={() => setDiscounting(false)} />
       )}
     </div>
   );

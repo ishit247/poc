@@ -74,7 +74,7 @@ header button { min-height: 40px; }
 .map { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
 .map .tbl { min-height: 84px; font-size: 18px; }
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 10; }
-.dialog { background: var(--surface); border-radius: 12px; padding: 16px; width: 460px; max-width: 94vw; display: flex; flex-direction: column; gap: 12px; }
+.dialog { background: var(--surface); border-radius: 12px; padding: 16px; width: 460px; max-width: 94vw; max-height: 96vh; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .dialog h2 { margin: 0; }
 /* Wide enough for quick cash and the reason picks on one row each; Confirm stays in view if the content still scrolls. */
 .dialog.pay { width: min(580px, 94vw); max-height: 96vh; overflow: auto; }
@@ -183,11 +183,11 @@ button.primary[data-testid='add-code'] { font-size: 28px; line-height: 1; paddin
 .sell { padding-right: 0; padding-bottom: 0; gap: 8px; }
 .cart { background: var(--surface); border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 12px; }
 .qty button { border: 0; border-radius: 50%; background: var(--active-bg); }
-.cart .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; gap: 8px; }
-/* Placed by position, not by name: the middle slot is Save order (a draft) or Void order (an open order), never both. */
-.cart .actions > :first-child { justify-self: start; grid-column: 1; }
-.cart .actions > :nth-child(2):not(:last-child) { justify-self: center; grid-column: 2; }
-.cart .actions > :last-child { justify-self: end; grid-column: 3; }
+/* Plain text buttons (Clear, Void order) at the left, a spacer, then the icon buttons (Save, Discount, Print) at the right. */
+.cart .actions { display: flex; align-items: center; justify-content: flex-start; gap: 6px; flex-wrap: nowrap; }
+.cart .actions .spacer { flex: 1; }
+.cart .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 46px; min-width: 46px; min-height: 44px; padding: 0; }
+.cart .icon-btn.active { background: var(--active-bg); border-color: var(--primary); }
 
 .item .nm, .item .pr { font-weight: 400; }
 .item small .code { color: var(--muted); opacity: 0.55; }
