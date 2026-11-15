@@ -9,7 +9,7 @@
 // (or `sale_void`). Every change to one visit happens under a lock on its root row, whichever device sends it.
 import type pg from 'pg';
 import {
-  checkPayment, exclusiveLine, foldOrder, openLines, orderTotals, OrderEvent, paise,
+  checkPayment, discountOverCap, exclusiveLine, foldOrder, openLines, orderTotals, OrderEvent, paise,
   type ClosedLine, type FoldedLine, type GstRounding, type OrderEnvelope, type OrderFold, type OrderOpened, type PaymentTaken, type TradingSettings,
 } from '@pos/shared';
 import { audit } from './audit.js';
@@ -212,7 +212,7 @@ export async function payOrder(c: pg.PoolClient, p: DevicePrincipal, saleId: str
   const view: OrderFold = { saleId, opened: null, tableId: null, lines: rows.map(toFolded), anomalies: [] };
 
   const tries = variants(s);
-  let check = checkPayment(view, ev.lines, ev.totalPaise, tries[0]);
+  let check = checkPayment(view, ev.lines, ev.totalPaise, tries[0], ev.discount);
   if (check.kind === 'defer') {
     // Not on this sale. Settled on another sale of the visit, or turned away: never payable here. Otherwise not arrived yet.
     const fold = foldOrder(rootId, await visitEvents(c, rootId));
@@ -225,21 +225,26 @@ export async function payOrder(c: pg.PoolClient, p: DevicePrincipal, saleId: str
   // The tablet may have totalled under settings the manager has since changed: accept any consistent rounding, and flag it.
   let used = 0;
   for (let i = 1; check.kind === 'mismatch' && i < tries.length; i++) {
-    const next = checkPayment(view, ev.lines, ev.totalPaise, tries[i]);
+    const next = checkPayment(view, ev.lines, ev.totalPaise, tries[i], ev.discount);
     if (next.kind === 'ok') { check = next; used = i; }
   }
+  if (check.kind === 'bad_discount') throw new Reject('discount_invalid');
   if (check.kind !== 'ok') throw new Reject('payment_total_mismatch');
 
   for (const [i, l] of check.paid.entries()) {
     const a = check.totals.lines[i]!;
     await c.query(
-      `UPDATE sale_line SET qty = $3, line_total_paise = $4, tax_paise = $5, removed_by = NULL, removed_at = NULL WHERE sale_id = $1 AND line_id = $2`,
-      [saleId, l.lineId, l.qty, a.net, a.tax]);
+      `UPDATE sale_line SET qty = $3, line_total_paise = $4, discount_paise = $5, tax_paise = $6, removed_by = NULL, removed_at = NULL
+        WHERE sale_id = $1 AND line_id = $2`,
+      [saleId, l.lineId, l.qty, a.net, a.discount, a.tax]);
   }
   // Live lines the payment did not name leave this sale (removed ones stay, as the history of what was taken off).
   await c.query('DELETE FROM sale_line WHERE sale_id = $1 AND removed_at IS NULL AND NOT (line_id = ANY($2::uuid[]))', [saleId, check.paid.map((l) => l.lineId)]);
-  await c.query('UPDATE sale SET subtotal_paise = $2, tax_paise = $3, round_off_paise = $4, total_paise = $5 WHERE id = $1',
-    [saleId, check.totals.subtotal, check.totals.tax, check.totals.roundOff, check.totals.total]);
+  const t = check.totals;
+  await c.query(
+    `UPDATE sale SET subtotal_paise = $2, discount_paise = $3, discount_bp = $4, discount_reason = $5, tax_paise = $6, round_off_paise = $7, total_paise = $8
+      WHERE id = $1`,
+    [saleId, t.subtotal, t.discount, ev.discount?.kind === 'percent' ? ev.discount.value : null, ev.discount?.reason ?? null, t.tax, t.roundOff, t.total]);
 
   for (const o of check.overridden) {
     await audit(c, { tenantId: p.tenantId, actorKind: 'device', actorId: p.deviceId, action: 'order.payment_overrode', entity: 'sale', entityId: saleId,
@@ -248,6 +253,8 @@ export async function payOrder(c: pg.PoolClient, p: DevicePrincipal, saleId: str
   const flags: string[] = [];
   if (used !== 0) flags.push('settings_differ');
   if (check.overridden.length) flags.push('payment_overrode');
+  // The cap in force now; the tablet may have paid offline under an older one. The payment stands (docs/discounts-plan.md).
+  if (ev.discount && discountOverCap(t.subtotal, ev.discount, s.discountMaxBp)) flags.push('over_discount_cap');
   return flags;
 }
 

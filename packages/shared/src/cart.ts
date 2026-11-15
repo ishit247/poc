@@ -1,7 +1,7 @@
 // The cart: pure, immutable, integer paise. The tablet and the server both total a
 // sale with this, so a receipt can never disagree with what the server accepts.
 import type { MenuEntry } from './menu.ts';
-import { add, exclusiveLine, paise, roundOffFor, type LineAmounts, type Paise } from './money.ts';
+import { add, discountLines, discountOn, mul, paise, roundOffFor, taxOn, type DiscountRule, type LineAmounts, type Paise } from './money.ts';
 import { DEFAULT_SETTINGS, type TradingSettings } from './settings.ts';
 
 export interface CartLine {
@@ -14,13 +14,16 @@ export interface CartLine {
 
 export type Cart = readonly CartLine[];
 
-export interface PricedLine extends CartLine, LineAmounts {}
+export interface PricedLine extends CartLine, LineAmounts {
+  discount: Paise; // this line's share of the bill discount (0 without one)
+}
 
 export interface CartTotals {
   lines: PricedLine[];
-  subtotal: Paise; // sum of line nets
-  tax: Paise;
-  roundOff: Paise; // signed; total = subtotal + tax + roundOff
+  subtotal: Paise; // sum of line nets, before the discount
+  discount: Paise; // the bill discount, the sum of the lines' shares
+  tax: Paise; // sum of line taxes, each on its discounted net
+  roundOff: Paise; // signed, last; total = subtotal - discount + tax + roundOff
   total: Paise;
 }
 
@@ -42,12 +45,23 @@ export function setQty(cart: Cart, itemId: string, qty: number, s: CartSettings 
   return cart.map((l) => (l.itemId === itemId ? { ...l, qty } : l));
 }
 
-export function totals(cart: Cart, s: TotalSettings = DEFAULT_SETTINGS): CartTotals {
-  const lines = cart.map((l) => ({ ...l, ...exclusiveLine(l.unitPaise, l.qty, l.gstRateBp, s.gstRounding) }));
-  const subtotal = add(...lines.map((l) => l.net));
+/**
+ * A bill's money (docs/discounts-plan.md): the discount is taken off before GST, split over the lines by their nets,
+ * each line's GST is rounded once on its discounted net, and round-off comes last. Splits in the cart's line order.
+ * Mirrors: ingest `checkArithmetic`/`policyFlags`, order-ingest `writeOpen`/`payOrder` (through `checkPayment`).
+ */
+export function totals(cart: Cart, s: TotalSettings = DEFAULT_SETTINGS, discount: DiscountRule | null = null): CartTotals {
+  const nets = cart.map((l) => mul(l.unitPaise, l.qty));
+  const subtotal = add(...nets);
+  const off = discount ? discountOn(subtotal, discount) : paise(0);
+  const shares = discountLines(nets, off);
+  const lines = cart.map((l, i) => {
+    const tax = taxOn(paise(nets[i]! - shares[i]!), l.gstRateBp, s.gstRounding);
+    return { ...l, net: nets[i]!, discount: shares[i]!, tax, total: paise(nets[i]! - shares[i]! + tax) };
+  });
   const tax = add(...lines.map((l) => l.tax));
-  const roundOff = roundOffFor(paise(subtotal + tax), s.billRoundTo);
-  return { lines, subtotal, tax, roundOff, total: paise(subtotal + tax + roundOff) };
+  const roundOff = roundOffFor(paise(subtotal - off + tax), s.billRoundTo);
+  return { lines, subtotal, discount: off, tax, roundOff, total: paise(subtotal - off + tax + roundOff) };
 }
 
 function checkQty(qty: number, cap: number): void {

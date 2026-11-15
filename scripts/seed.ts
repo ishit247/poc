@@ -4,6 +4,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { solidPng } from './png.ts';
+import { paise, totals, type GstRounding } from '../packages/shared/src/index.ts';
 import { closeObjects, putObject, tenantKey } from '../apps/api/src/objects.ts';
 import { hashPassword } from '../apps/api/src/security/password.ts';
 import { newSecret, sealSecret, sealWebhookSecret, sha256, totpSecretContext } from '../apps/api/src/security/crypto.ts';
@@ -33,9 +34,10 @@ for (const t of Object.values(SEED)) {
     "INSERT INTO tenant_logo (tenant_id, content_type, bytes, sha256) VALUES ($1, 'image/png', $2, $3)",
     [t.id, png, createHash('sha256').update(png).digest('hex')]);
   // Trading settings differ per tenant so a leak between them would show: A uses defaults, B rounds to the rupee.
+  // Discounts are on in both (the column default is off), up to 10% in A and 20% in B.
   await client.query(
-    'INSERT INTO tenant_setting (tenant_id, max_line_qty, gst_rounding, bill_round_to, offline_days) VALUES ($1, $2, $3, $4, 7)',
-    [t.id, t.key === 'a' ? 99 : 20, t.key === 'a' ? 'half_up' : 'down', t.key === 'a' ? 0 : 100]);
+    'INSERT INTO tenant_setting (tenant_id, max_line_qty, gst_rounding, bill_round_to, offline_days, discount_max_bp) VALUES ($1, $2, $3, $4, 7, $5)',
+    [t.id, t.key === 'a' ? 99 : 20, t.key === 'a' ? 'half_up' : 'down', t.key === 'a' ? 0 : 100, t.key === 'a' ? 1000 : 2000]);
   let i = 0;
   const outletIds: string[] = [];
   const counterIds: string[][] = [];
@@ -220,6 +222,28 @@ for (const t of Object.values(SEED)) {
       `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
        VALUES ($1, $2, $3, 'Tea', 1000, 500, 1, 1000, 50)`, [t.id, refunded.rows[0].id, itemIds['Tea']]);
     await client.query("INSERT INTO payment (tenant_id, sale_id, method, amount_paise) VALUES ($1, $2, 'upi', 1050)", [t.id, refunded.rows[0].id]);
+    // Two discounted UPI sales of the same shift (docs/discounts-plan.md), each mixing 5% and 18% GST so the split and the
+    // per-line rounding are exercised: 10% off, and a flat 5.55 off. Money from the shared rule, in the tenant's rounding.
+    const rules = { gstRounding: (t.key === 'a' ? 'half_up' : 'down') as GstRounding, billRoundTo: (t.key === 'a' ? 0 : 100) as 0 | 100 };
+    for (const [k, qtySamosa, discount] of [[3, 2, { kind: 'percent', value: 1000, reason: 'Staff meal' }], [4, 1, { kind: 'amount', value: 555, reason: 'Complaint' }]] as const) {
+      const cart = [
+        { itemId: itemIds['Samosa']!, name: 'Samosa', unitPaise: paise(1500), gstRateBp: 500, qty: qtySamosa },
+        { itemId: itemIds['Cold Coffee']!, name: 'Cold Coffee', unitPaise: paise(6000), gstRateBp: 1800, qty: 1 },
+      ];
+      const m = totals(cart, rules, discount);
+      const s = await client.query(
+        `INSERT INTO sale (id, tenant_id, outlet_id, business_day_id, business_date, shift_id, device_id, created_by, status, receipt_no, receipt_seq,
+                           device_seq, menu_version, subtotal_paise, discount_paise, discount_bp, discount_reason, tax_paise, round_off_paise, total_paise, created_at_device)
+         VALUES (gen_random_uuid(), $1, $2, $3, '2026-01-01', $4, $5, $6, 'paid', $7, $8, $9, 1, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id`,
+        [t.id, outletId, day.rows[0].id, shift.rows[0].id, deviceIds[n], cashierIds[n], `C1-20260101-000${k}`, k, k + 2,
+         m.subtotal, m.discount, discount.kind === 'percent' ? discount.value : null, discount.reason, m.tax, m.roundOff, m.total, `2026-01-01T10:0${k}:00Z`]);
+      for (const l of m.lines) {
+        await client.query(
+          `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, discount_paise, tax_paise)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, [t.id, s.rows[0].id, l.itemId, l.name, l.unitPaise, l.gstRateBp, l.qty, l.net, l.discount, l.tax]);
+      }
+      await client.query("INSERT INTO payment (tenant_id, sale_id, method, amount_paise) VALUES ($1, $2, 'upi', $3)", [t.id, s.rows[0].id, m.total]);
+    }
     await client.query(
       `INSERT INTO refund (tenant_id, sale_id, method, amount_paise, reason, shift_id, device_id, refunded_by, refunded_at)
        VALUES ($1, $2, 'upi', 1050, 'wrong item', $3, $4, $5, '2026-01-01T09:40:00Z')`,

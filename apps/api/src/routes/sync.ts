@@ -54,7 +54,8 @@ const PULL_SQL = `
   UNION ALL
   SELECT 'tenant_setting', tenant_id, version, false,
          jsonb_build_object('maxLineQty', max_line_qty, 'gstRounding', gst_rounding,
-                            'billRoundTo', bill_round_to, 'offlineDays', offline_days, 'refundReasons', to_jsonb(refund_reasons))
+                            'billRoundTo', bill_round_to, 'offlineDays', offline_days, 'refundReasons', to_jsonb(refund_reasons),
+                            'discountMaxBp', discount_max_bp, 'discountReasons', to_jsonb(discount_reasons))
     FROM tenant_setting WHERE version > $1
   UNION ALL
   -- The logo's bytes are not in pull: only its hash and type, so a tablet fetches /branding/logo when the hash changes.
@@ -142,10 +143,11 @@ const pushBody = z.object({
 
 async function tenantSettings(tenantId: string): Promise<TradingSettings> {
   const row = await withTenant(tenantId, async (c) =>
-    (await c.query('SELECT max_line_qty, gst_rounding, bill_round_to, offline_days FROM tenant_setting')).rows[0]);
+    (await c.query('SELECT max_line_qty, gst_rounding, bill_round_to, offline_days, discount_max_bp FROM tenant_setting')).rows[0]);
   return row
-    // Ingest needs the selling rules only; refund reasons are a tablet picker and are left at their default here.
-    ? { ...DEFAULT_SETTINGS, maxLineQty: row.max_line_qty, gstRounding: row.gst_rounding, billRoundTo: row.bill_round_to, offlineDays: row.offline_days }
+    // Ingest needs the selling rules only; refund and discount reasons are tablet pickers and are left at their default here.
+    ? { ...DEFAULT_SETTINGS, maxLineQty: row.max_line_qty, gstRounding: row.gst_rounding, billRoundTo: row.bill_round_to, offlineDays: row.offline_days,
+        discountMaxBp: row.discount_max_bp }
     : DEFAULT_SETTINGS;
 }
 

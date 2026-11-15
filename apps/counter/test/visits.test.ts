@@ -225,7 +225,7 @@ test('a split the server made after this device\'s payment becomes its own open 
   await payOrder({ device, actor: cashier, saleId: split, tenders: cash(two!.totalPaise) });
   const tail = (await db.outbox.toArray()).map((r) => r.payload).slice(-2) as any[];
   assert.deepEqual([tail[0].type, tail[0].saleId], ['order.line_changed', s.id]);
-  assert.deepEqual([tail[1].type, tail[1].saleId, tail[1].lines], ['payment.taken', split, [{ lineId: l2, qty: 2 }]]);
+  assert.deepEqual([tail[1].type, tail[1].saleId, tail[1].lines], ['payment.taken', split, [{ lineId: l2, qty: 2, discountPaise: 0 }]]);
   assert.equal(await db.orderEvents.count(), 0, 'settled: the kept events (filed under the root) go');
 });
 

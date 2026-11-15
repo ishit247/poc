@@ -2,7 +2,7 @@
 
 # Discounts — plan
 
-Status: **decided 2026-11-15; ready for step 1.** Model plan: **HIGH** for steps 1 and 2 (money arithmetic, GST,
+Status: **step 1 done 2026-11-15 (server, shared rule, schema); step 2 (tablet) next.** Model plan: **HIGH** for steps 1 and 2 (money arithmetic, GST,
 sync events, ingest); STANDARD for step 3.
 
 ## Decided (PLAN 17 Q17, 2026-11-15)
@@ -57,11 +57,46 @@ sync events, ingest); STANDARD for step 3.
 8. **Seed:** one percentage-discounted and one flat-discounted sale per outlet, with mixed GST rates, so the split and
    per-line rounding are exercised.
 
+## Step 1 notes (built 2026-11-15)
+
+Decided while building, for steps 2 and 3 to rely on:
+
+- **The rule is `totals(cart, settings, discount)`** (`cart.ts`): `discountOn` (`money.ts`) turns `{ kind, value }` into
+  paise (percent half up on the subtotal, value in basis points; flat value in paise), `discountLines` splits it, and
+  each `PricedLine` carries `discount`; `CartTotals` gains `discount`. `discountOverCap(subtotal, d, capBp)` judges a
+  percentage by its rate and a flat amount by its share of the subtotal; the tablet should use it to decide what to
+  offer. A discount that comes to under a paisa, or to the whole subtotal or more, throws: **something of the
+  subtotal is always left**. That is the CHECK `discount_paise = 0 OR discount_paise < subtotal_paise`, stricter
+  than the "< subtotal + tax" first written above.
+- **Ties in the split go by line order**, so both sides must split in the same order. A whole sale splits in its
+  event's line order. A v2 payment's `lines` are now **in the order the cashier saw them**, and `checkPayment` totals
+  the paid lines in that order (it used to use fold order). The tablet must send them in the order it priced them.
+- **Wire shape:** `sale.created` has `discount` (`{ kind, value, reason }` or null) and `discountPaise`, and each line
+  has `discountPaise`. v2 `payment.taken` has `discount`, and each line has `discountPaise`. All default to none when
+  absent, so older fixtures and tablets parse unchanged. The tablet's `queue` takes `OutboxEventInput`. A v1 payment
+  carries no discount: the tablet only creates a whole sale with its tenders in the same step, so the discount goes on
+  `sale.created`.
+- **Refusals:** `discount_invalid` (nothing left to pay, or under a paisa), `discount_mismatch` (the amount does not
+  match the percentage), `line_discount_mismatch` (a share is not `discountLines`). A v2 payment with a wrong share is
+  `payment_total_mismatch`, as a wrong total is. `over_discount_cap` is a flag on both the whole sale and the order
+  payment.
+- **Schema:** the commit-time function is `app.assert_sale_lines`, renamed from `assert_order_lines`. It now checks
+  every sale's discount against its live lines' shares, and order money as before. Trigger names are unchanged.
+  `discount_bp` is 1..10000 or NULL, the reason is 1..200 characters, and only counter sales carry a discount.
+- **Settings:** `TradingSettings` has `discountMaxBp` and `discountReasons`, in `GET`/`PUT /settings` and the pull.
+  The manager screen keeps the values but has no fields for them yet (step 2). Default reasons: Staff meal, Regular
+  customer, Complaint, Late order. **Seed:** tenant A's cap is 10% and B's is 20%. Each outlet has a 10%-off and a
+  flat-5.55-off UPI sale (receipts 0003 and 0004 of 2026-01-01), each mixing 5% and 18% GST.
+
+Evidence: shared 71/71 (`test/discount.test.ts` 9 new), DB 50/50 (2 new), API 270/270 (`discounts.test.ts` 6 new;
+`settings.test.ts` extended), tablet 95/95 (2 expectations now include `discountPaise: 0`); fresh start passed.
+Mutants: see the step table.
+
 ## Steps
 
 | # | Step | Model | State |
 |---|------|-------|-------|
-| 1 | Shared rule (`discountLines`, `totals`), events, schema 0004 in place, ingest and order-ingest checks and flag, seed; shared, DB and API tests; mutants (`discount-*`) | HIGH | not started |
+| 1 | Shared rule (`discountLines`, `totals`), events, schema 0004 in place, ingest and order-ingest checks and flag, seed; shared, DB and API tests; mutants (`discount-*`) | HIGH | **done 2026-11-15**: tests above; 16 `discount-*` mutants and the 6 re-pointed (`sale-total-unchecked`, `order-totals-count-removed`, `order-pay-removed-line-unpaid`, `order-pay-fold-qty`, `order-pay-total-unchecked`, `ro-pay-fold-qty`) 22/22 caught, log `.validation/mutation-discount-step1.log`; `--check` 545/545 |
 | 2 | Settings (cap, reasons) in Settings → Selling rules; tablet Pay dialog, store, receipt and shift slip; tablet tests; `scripts/browser-discount.mjs` at 1024x768 and 820x1180 (counter sale, running-order payment, through shift close) | HIGH (store), STANDARD (screen) | not started |
 | 3 | Reports and day-close discount lines; API tests; browser check of the reports | STANDARD | not started |
 

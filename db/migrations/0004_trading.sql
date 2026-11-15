@@ -13,6 +13,11 @@ CREATE TABLE tenant_setting (
   -- 1..60 characters, checked by the API (TradingSettings); the list is short so the tablet's picker stays short.
   refund_reasons text[] NOT NULL DEFAULT ARRAY['Wrong item served', 'Customer changed mind', 'Food quality', 'Item ran out', 'Charged by mistake']
                 CHECK (cardinality(refund_reasons) <= 10),
+  -- Bill discounts (docs/discounts-plan.md): the largest a tablet offers, in basis points (0 = off), and the reasons
+  -- it offers (a typed one is still allowed). A sale over the cap in force is flagged at ingest, never refused.
+  discount_max_bp  int NOT NULL DEFAULT 0 CHECK (discount_max_bp BETWEEN 0 AND 10000),
+  discount_reasons text[] NOT NULL DEFAULT ARRAY['Staff meal', 'Regular customer', 'Complaint', 'Late order']
+                   CHECK (cardinality(discount_reasons) <= 10),
   version       bigint NOT NULL DEFAULT 0,
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
@@ -112,6 +117,12 @@ CREATE TABLE sale (
   -- lines that arrived after a payment points at that root. NULL: a whole sale (v1 `sale.created`, online order).
   order_root_id   uuid,
   subtotal_paise  bigint NOT NULL CHECK (subtotal_paise >= 0),
+  -- A bill discount, fixed at payment (docs/discounts-plan.md): taken off before GST and split over the lines, so it is
+  -- the sum of the lines' discount_paise (checked at commit, app.assert_sale_lines). discount_bp is the percentage
+  -- given (NULL for a flat amount); the reason is required with any discount.
+  discount_paise  bigint NOT NULL DEFAULT 0 CHECK (discount_paise >= 0),
+  discount_bp     int CHECK (discount_bp BETWEEN 1 AND 10000),
+  discount_reason text CHECK (length(discount_reason) BETWEEN 1 AND 200),
   tax_paise       bigint NOT NULL CHECK (tax_paise >= 0),
   round_off_paise bigint NOT NULL DEFAULT 0 CHECK (abs(round_off_paise) <= 50), -- signed; the largest step is 100, to nearest
   -- An open order may be empty (0); money that changed hands never is.
@@ -125,8 +136,13 @@ CREATE TABLE sale (
   paid_device_id  uuid,
   flags           text[] NOT NULL DEFAULT '{}',
   UNIQUE (tenant_id, id),
-  CHECK (total_paise = subtotal_paise + tax_paise + round_off_paise),
+  CHECK (total_paise = subtotal_paise - discount_paise + tax_paise + round_off_paise),
   CHECK (total_paise > 0 OR status IN ('open', 'void')),
+  -- Something is always left to pay (a free meal is not a 100% discount), and a discount always says why.
+  CHECK (discount_paise = 0 OR discount_paise < subtotal_paise),
+  CHECK ((discount_paise > 0) = (discount_reason IS NOT NULL)),
+  CHECK (discount_bp IS NULL OR discount_paise > 0),
+  CHECK (discount_paise = 0 OR channel = 'counter'),
   -- A running order always sits on a table and is rung up at a counter.
   CHECK (order_root_id IS NULL OR (table_id IS NOT NULL AND channel = 'counter')),
   FOREIGN KEY (tenant_id, order_root_id)   REFERENCES sale(tenant_id, id),
@@ -170,6 +186,8 @@ CREATE TABLE sale_line (
   gst_rate_bp      int NOT NULL CHECK (gst_rate_bp BETWEEN 0 AND 10000),
   qty              int NOT NULL CHECK (qty > 0),
   line_total_paise bigint NOT NULL CHECK (line_total_paise >= 0),
+  -- This line's share of the sale's bill discount; its GST (tax_paise) is on line_total_paise - discount_paise.
+  discount_paise   bigint NOT NULL DEFAULT 0,
   tax_paise        bigint NOT NULL CHECK (tax_paise >= 0),
   -- Who rang the line up, and who took it off (a removed line is kept so reports can show it). Order lines only.
   added_by         uuid,
@@ -178,6 +196,7 @@ CREATE TABLE sale_line (
   removed_at       timestamptz,
   UNIQUE (sale_id, line_id),
   CHECK (line_total_paise = unit_price_paise * qty),
+  CHECK (discount_paise BETWEEN 0 AND line_total_paise),
   CHECK ((added_by IS NULL) = (added_at IS NULL)),
   CHECK ((removed_by IS NULL) = (removed_at IS NULL)),
   FOREIGN KEY (tenant_id, sale_id) REFERENCES sale(tenant_id, id),
@@ -298,8 +317,10 @@ BEGIN
      OR NEW.device_id <> OLD.device_id OR NEW.created_by <> OLD.created_by OR NEW.order_root_id IS DISTINCT FROM OLD.order_root_id THEN
     RAISE EXCEPTION 'sale identity is immutable';
   END IF;
-  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.tax_paise, NEW.round_off_paise, NEW.total_paise, NEW.receipt_no, NEW.receipt_seq, NEW.business_date, NEW.table_id, NEW.paid_device_id)
-       IS DISTINCT FROM (OLD.subtotal_paise, OLD.tax_paise, OLD.round_off_paise, OLD.total_paise, OLD.receipt_no, OLD.receipt_seq, OLD.business_date, OLD.table_id, OLD.paid_device_id) THEN
+  IF OLD.status <> 'open' AND (NEW.subtotal_paise, NEW.discount_paise, NEW.discount_bp, NEW.discount_reason, NEW.tax_paise, NEW.round_off_paise, NEW.total_paise,
+                               NEW.receipt_no, NEW.receipt_seq, NEW.business_date, NEW.table_id, NEW.paid_device_id)
+       IS DISTINCT FROM (OLD.subtotal_paise, OLD.discount_paise, OLD.discount_bp, OLD.discount_reason, OLD.tax_paise, OLD.round_off_paise, OLD.total_paise,
+                         OLD.receipt_no, OLD.receipt_seq, OLD.business_date, OLD.table_id, OLD.paid_device_id) THEN
     RAISE EXCEPTION 'a % sale cannot be edited', OLD.status;
   END IF;
   IF NEW.status <> OLD.status AND NOT (
@@ -350,29 +371,34 @@ CREATE CONSTRAINT TRIGGER payment_sale_ck AFTER INSERT ON payment
 CREATE CONSTRAINT TRIGGER refund_sale_ck AFTER INSERT ON refund
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.payment_sale_ck();
 
--- A running order's money is a cache of its live lines (phase 12): subtotal and tax are their sums, open or paid.
--- (A whole v1 sale's arithmetic is checked at ingest, where the device's own rounding is known.) Deferred to commit,
--- like the payments check, so lines and the sale can be rewritten in any order within one transaction.
-CREATE FUNCTION app.assert_order_lines(sid uuid) RETURNS void
+-- Every sale's bill discount is the sum of its live lines' shares (docs/discounts-plan.md). A running order's money is
+-- also a cache of its live lines (phase 12): subtotal and tax are their sums, open or paid. (A whole v1 sale's
+-- arithmetic is checked at ingest, where the device's own rounding is known.) Deferred to commit, like the payments
+-- check, so lines and the sale can be rewritten in any order within one transaction.
+CREATE FUNCTION app.assert_sale_lines(sid uuid) RETURNS void
 LANGUAGE plpgsql AS
 $$
-DECLARE s record; net bigint; tax bigint;
+DECLARE s record; net bigint; tax bigint; off bigint;
 BEGIN
-  SELECT id, order_root_id, subtotal_paise, tax_paise INTO s FROM sale WHERE id = sid;
-  IF s.id IS NULL OR s.order_root_id IS NULL THEN RETURN; END IF;
-  SELECT COALESCE(sum(line_total_paise), 0), COALESCE(sum(tax_paise), 0) INTO net, tax
+  SELECT id, order_root_id, subtotal_paise, discount_paise, tax_paise INTO s FROM sale WHERE id = sid;
+  IF s.id IS NULL THEN RETURN; END IF;
+  SELECT COALESCE(sum(line_total_paise), 0), COALESCE(sum(tax_paise), 0), COALESCE(sum(discount_paise), 0) INTO net, tax, off
     FROM sale_line WHERE sale_id = s.id AND removed_at IS NULL;
+  IF off <> s.discount_paise THEN
+    RAISE EXCEPTION 'sale % discount (%) is not the sum of its lines'' shares (%)', s.id, s.discount_paise, off;
+  END IF;
+  IF s.order_root_id IS NULL THEN RETURN; END IF;
   IF (net, tax) IS DISTINCT FROM (s.subtotal_paise, s.tax_paise) THEN
     RAISE EXCEPTION 'order % money (% + % tax) is not the sum of its live lines (% + % tax)', s.id, s.subtotal_paise, s.tax_paise, net, tax;
   END IF;
 END
 $$;
 CREATE FUNCTION app.sale_order_lines_ck() RETURNS trigger LANGUAGE plpgsql AS
-$$ BEGIN PERFORM app.assert_order_lines(NEW.id); RETURN NULL; END $$;
+$$ BEGIN PERFORM app.assert_sale_lines(NEW.id); RETURN NULL; END $$;
 CREATE FUNCTION app.line_order_lines_ck() RETURNS trigger LANGUAGE plpgsql AS
 $$ BEGIN
-  IF TG_OP <> 'INSERT' THEN PERFORM app.assert_order_lines(OLD.sale_id); END IF;
-  IF TG_OP <> 'DELETE' THEN PERFORM app.assert_order_lines(NEW.sale_id); END IF;
+  IF TG_OP <> 'INSERT' THEN PERFORM app.assert_sale_lines(OLD.sale_id); END IF;
+  IF TG_OP <> 'DELETE' THEN PERFORM app.assert_sale_lines(NEW.sale_id); END IF;
   RETURN NULL;
 END $$;
 CREATE CONSTRAINT TRIGGER sale_order_lines_ck AFTER INSERT OR UPDATE ON sale

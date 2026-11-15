@@ -117,8 +117,9 @@ still open, and a trap that cost time once. Active phases keep their own file (p
 - Bash heredocs containing backticks broke once; use the Edit or Write tool for files. Files under `scripts/` and some
   migrations are CRLF, so mutant `from` patterns over several lines should be regexes.
 - The machine is short of memory: run validation stages one after another.
-- From Git Bash, `validate.mjs unit-api` can report "✔ 0 ok" in 1 s: its pnpm filter matched no project ("No projects
-  matched the filters" in `.validation/unit-api.log`). Treat 0 ok as not run; run `pnpm run test` in `apps/api` instead.
+- From Git Bash, `validate.mjs unit-api` used to report "✔ 0 ok" in 1 s: its path filter (`--filter ./apps/api`)
+  matched no project when the shell's drive letter (`E:`) differed in case from pnpm's root (`e:`). Fixed 2026-11-15:
+  the stages filter by package name (`@pos/api`, `@pos/counter`), and a test stage that runs no tests now fails.
 - Console sign-in codes are one per 30 seconds per operator; two scripted sign-ins in one step time out.
 
 **Tests and shared state**

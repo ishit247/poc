@@ -41,10 +41,56 @@ export function roundOffFor(total: Paise, step: number): Paise {
   return paise(rounded === 0 ? 0 : rounded - total);
 }
 
+/** A bill discount as the cashier gave it (docs/discounts-plan.md): a percentage in basis points, or flat paise. */
+export interface DiscountRule {
+  kind: 'percent' | 'amount';
+  value: number; // percent: 1..10000 bp; amount: paise
+}
+
+/**
+ * The discount in paise on a bill of `subtotal` (line nets before GST). A percentage is rounded half up, once, on the
+ * subtotal; a flat amount is taken as given. Something must be left to pay: a discount of the whole subtotal or more,
+ * or one that comes to nothing, throws. Mirrors: ingest `checkArithmetic`, order-ingest via `checkPayment`.
+ */
+export function discountOn(subtotal: Paise, d: DiscountRule): Paise {
+  if (!Number.isSafeInteger(d.value) || d.value < 1 || (d.kind === 'percent' && d.value > 10000)) throw new RangeError(`bad discount: ${d.value}`);
+  const p = d.kind === 'percent' ? Number((BigInt(subtotal) * BigInt(d.value) + 5000n) / 10000n) : d.value;
+  if (p < 1) throw new RangeError('discount comes to less than one paisa');
+  if (p >= subtotal) throw new RangeError('discount must leave something to pay');
+  return paise(p);
+}
+
+/** Over the manager's cap (`tenant_setting.discount_max_bp`)? A percentage by its rate; a flat amount by its share of the subtotal. */
+export function discountOverCap(subtotal: Paise, d: DiscountRule, capBp: number): boolean {
+  return d.kind === 'percent' ? d.value > capBp : BigInt(d.value) * 10000n > BigInt(capBp) * BigInt(subtotal);
+}
+
+/**
+ * Splits a bill discount over lines in proportion to each line's net, so lines with different GST rates each carry
+ * their share. Each share is rounded down; the paise left over go one each to the lines with the largest remainders,
+ * ties to the earlier line, so the shares add up to the discount exactly and none exceeds its line's net.
+ * Line ORDER matters for ties: callers split in the order the event lists the lines.
+ */
+export function discountLines(nets: readonly Paise[], discount: Paise): Paise[] {
+  const sum = nets.reduce((a, n) => a + n, 0);
+  if (discount === 0) return nets.map(() => paise(0));
+  if (!Number.isSafeInteger(discount) || discount < 0 || discount >= sum) throw new RangeError(`bad discount ${discount} on ${sum}`);
+  const parts = nets.map((n, i) => {
+    const exact = BigInt(n) * BigInt(discount);
+    return { i, share: Number(exact / BigInt(sum)), rem: exact % BigInt(sum) };
+  });
+  let left = discount - parts.reduce((a, x) => a + x.share, 0);
+  for (const x of [...parts].sort((a, b) => (a.rem === b.rem ? a.i - b.i : a.rem > b.rem ? -1 : 1))) {
+    if (left-- <= 0) break;
+    x.share += 1;
+  }
+  return parts.map((x) => paise(x.share));
+}
+
 export interface LineAmounts {
-  net: Paise; // unit price x qty, before GST
-  tax: Paise; // GST on the line total (tax-exclusive pricing)
-  total: Paise; // what the customer pays for the line
+  net: Paise; // unit price x qty, before GST and discount
+  tax: Paise; // GST on the line total less its discount share (tax-exclusive pricing)
+  total: Paise; // what the customer pays for the line: net - discount + tax
 }
 
 /**

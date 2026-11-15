@@ -4,7 +4,8 @@ import { withTenant } from '../db.js';
 import { audit } from '../audit.js';
 
 const SELECT = `SELECT max_line_qty AS "maxLineQty", gst_rounding AS "gstRounding",
-                       bill_round_to AS "billRoundTo", offline_days AS "offlineDays", refund_reasons AS "refundReasons"
+                       bill_round_to AS "billRoundTo", offline_days AS "offlineDays", refund_reasons AS "refundReasons",
+                       discount_max_bp AS "discountMaxBp", discount_reasons AS "discountReasons"
                   FROM tenant_setting`;
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
@@ -32,10 +33,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     if (p.kind !== 'user') return reply.code(403).send({ error: 'forbidden' });
     await withTenant(p.tenantId, async (c) => {
       await c.query(
-        `INSERT INTO tenant_setting (tenant_id, max_line_qty, gst_rounding, bill_round_to, offline_days, refund_reasons)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (tenant_id) DO UPDATE SET max_line_qty = $2, gst_rounding = $3, bill_round_to = $4, offline_days = $5, refund_reasons = $6`,
-        [p.tenantId, b.data.maxLineQty, b.data.gstRounding, b.data.billRoundTo, b.data.offlineDays, b.data.refundReasons]);
+        `INSERT INTO tenant_setting (tenant_id, max_line_qty, gst_rounding, bill_round_to, offline_days, refund_reasons, discount_max_bp, discount_reasons)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (tenant_id) DO UPDATE SET max_line_qty = $2, gst_rounding = $3, bill_round_to = $4, offline_days = $5, refund_reasons = $6,
+                                               discount_max_bp = $7, discount_reasons = $8`,
+        [p.tenantId, b.data.maxLineQty, b.data.gstRounding, b.data.billRoundTo, b.data.offlineDays, b.data.refundReasons,
+         b.data.discountMaxBp, b.data.discountReasons]);
       await audit(c, { tenantId: p.tenantId, actorKind: 'user', actorId: p.userId, action: 'settings.update', entity: 'tenant_setting', entityId: p.tenantId, detail: b.data });
     });
     return { ok: true };

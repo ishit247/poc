@@ -1,7 +1,7 @@
 // Writing a sale. The sale, its outbox events and the receipt counter are written in ONE
 // IndexedDB transaction, so there is no state where a receipt number was spent without the
 // sale, or a sale exists that the server will never hear about.
-import { nextReceipt, OutboxEvent, totals, validatePayments, EVENT_SCHEMA_VERSION, ORDER_SCHEMA_VERSION, paise, type Cart, type Tender, type TradingSettings } from '@pos/shared';
+import { nextReceipt, OutboxEvent, totals, type OutboxEventInput, validatePayments, EVENT_SCHEMA_VERSION, ORDER_SCHEMA_VERSION, paise, type Cart, type Tender, type TradingSettings } from '@pos/shared';
 import { currentShift, db, getMeta, type DeviceInfo, type LocalSale } from './db.ts';
 
 export interface Actor { id: string; name: string; role: 'cashier' | 'waiter' }
@@ -11,14 +11,14 @@ export function businessDate(timezone: string, now = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
 }
 
-const saleCreated = (s: LocalSale): OutboxEvent => ({
+const saleCreated = (s: LocalSale): OutboxEventInput => ({
   type: 'sale.created', schemaVersion: EVENT_SCHEMA_VERSION, saleId: s.id, channel: s.channel, createdBy: s.createdBy,
   businessDate: s.businessDate, createdAtDevice: s.createdAt, menuVersion: s.menuVersion, lines: s.lines,
   subtotalPaise: s.subtotalPaise, taxPaise: s.taxPaise, roundOffPaise: s.roundOffPaise, totalPaise: s.totalPaise,
 });
 
 /** Queues an event and returns its outbox seq (the device order the server replays, and the fold's event identity). */
-export async function queue(event: OutboxEvent): Promise<number> {
+export async function queue(event: OutboxEventInput): Promise<number> {
   // parse() is the gate: a malformed event throws here and rolls the whole transaction back.
   return db.outbox.add({ eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), payload: OutboxEvent.parse(event) });
 }

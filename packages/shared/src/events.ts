@@ -8,6 +8,18 @@ export const EVENT_SCHEMA_VERSION = 1;
 const paiseInt = z.number().int().nonnegative();
 const uuid = z.string().uuid();
 
+// A bill discount, given at Pay on a counter sale (docs/discounts-plan.md). `value` is basis points for a percentage
+// (1..10000) and paise for a flat amount; what it comes to in paise is `discountOn` (money.ts). The reason is required:
+// picked from the manager's list or typed. Absent on the wire (older fixtures, no discount) reads as null.
+export const DISCOUNT_REASON_MAX = 200; // the CHECK on sale.discount_reason in 0004
+export const BillDiscount = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('percent'), value: z.number().int().min(1).max(10000), reason: z.string().trim().min(1).max(DISCOUNT_REASON_MAX) }),
+  z.object({ kind: z.literal('amount'), value: z.number().int().positive(), reason: z.string().trim().min(1).max(DISCOUNT_REASON_MAX) }),
+]);
+export type BillDiscount = z.infer<typeof BillDiscount>;
+const discountField = BillDiscount.nullable().default(null);
+const lineDiscount = paiseInt.default(0); // the line's share of the bill discount (discountLines)
+
 export const SaleLine = z.object({
   itemId: uuid,
   name: z.string().min(1),
@@ -15,7 +27,8 @@ export const SaleLine = z.object({
   gstRateBp: z.number().int().min(0).max(10000),
   qty: z.number().int().min(1).max(QTY_CAP_MAX),
   netPaise: paiseInt,
-  taxPaise: paiseInt,
+  discountPaise: lineDiscount,
+  taxPaise: paiseInt, // on netPaise - discountPaise
 });
 
 export const SaleCreated = z.object({
@@ -29,10 +42,14 @@ export const SaleCreated = z.object({
   menuVersion: z.number().int().nonnegative(),
   lines: z.array(SaleLine).min(1),
   subtotalPaise: paiseInt,
+  discount: discountField,
+  discountPaise: paiseInt.default(0),
   taxPaise: paiseInt,
   roundOffPaise: z.number().int(), // signed bill round-off
   totalPaise: paiseInt.positive(),
-}).refine((e) => e.totalPaise === e.subtotalPaise + e.taxPaise + e.roundOffPaise, { message: 'total must equal subtotal + tax + round-off' });
+})
+  .refine((e) => e.totalPaise === e.subtotalPaise - e.discountPaise + e.taxPaise + e.roundOffPaise, { message: 'total must equal subtotal - discount + tax + round-off' })
+  .refine((e) => (e.discount === null) === (e.discountPaise === 0), { message: 'a discount and its amount go together' });
 
 // Schema versions are per event type: an event's version is the version of ITS shape. Types that never changed stay
 // at 1, `payment.taken` exists as 1 and 2, and the phase 12 order events start at 2 (PLAN 7.8, N-1: the server keeps
@@ -73,10 +90,12 @@ const PaymentTakenV2 = z
   .object({
     ...paymentFields,
     schemaVersion: z.literal(ORDER_SCHEMA_VERSION),
+    // In the order the cashier saw them: the discount is split in this order (checkPayment), so ties land alike everywhere.
     lines: z
-      .array(z.object({ lineId: uuid, qty: z.number().int().min(1).max(QTY_CAP_MAX) }))
+      .array(z.object({ lineId: uuid, qty: z.number().int().min(1).max(QTY_CAP_MAX), discountPaise: lineDiscount }))
       .min(1)
       .refine((ls) => new Set(ls.map((l) => l.lineId)).size === ls.length, { message: 'lines must be unique' }),
+    discount: discountField,
     totalPaise: paiseInt.positive(),
   })
   .refine((e) => e.payments.reduce((s, p) => s + p.amountPaise, 0) === e.totalPaise, { message: 'payments must add up to totalPaise' });
@@ -219,3 +238,5 @@ export type SaleCreated = z.infer<typeof SaleCreated>;
 export type PaymentTaken = z.infer<typeof PaymentTaken>;
 export type PrintReprinted = z.infer<typeof PrintReprinted>;
 export type OutboxEvent = z.infer<typeof OutboxEvent>;
+/** What a tablet hands to `OutboxEvent.parse`: fields with a default (no discount) may be left out. */
+export type OutboxEventInput = z.input<typeof OutboxEvent>;

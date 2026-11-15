@@ -12,7 +12,7 @@
 //   5. Disagreements that should not happen (two different adds with one lineId, two different opens for one sale)
 //      resolve to the earliest event and are reported as anomalies, never silently merged.
 import { totals, type CartLine, type CartTotals } from './cart.ts';
-import { paise, type Paise } from './money.ts';
+import { paise, type DiscountRule, type Paise } from './money.ts';
 import type { OrderEvent, OrderLineAdded, OrderOpened } from './events.ts';
 import { DEFAULT_SETTINGS, type TradingSettings } from './settings.ts';
 
@@ -161,14 +161,15 @@ export function openLines(f: OrderFold, closed: readonly ClosedLine[]): FoldedLi
 type TotalSettings = Pick<TradingSettings, 'gstRounding' | 'billRoundTo'>;
 
 /** The order's money: the same totals() a counter sale uses, over the live lines only. */
-export function orderTotals(f: OrderFold, s: TotalSettings = DEFAULT_SETTINGS): CartTotals {
-  return totals(liveLines(f), s);
+export function orderTotals(f: OrderFold, s: TotalSettings = DEFAULT_SETTINGS, discount: DiscountRule | null = null): CartTotals {
+  return totals(liveLines(f), s, discount);
 }
 
-/** What a v2 payment says it paid for. */
+/** What a v2 payment says it paid for, and each line's share of its discount (0 without one). */
 export interface PaidLine {
   lineId: string;
   qty: number;
+  discountPaise?: number;
 }
 
 /** Live quantity the payment did not cover: a whole unpaid line, or the excess of a paid line raised elsewhere. */
@@ -188,23 +189,34 @@ export interface Overridden {
 export type PaymentCheck =
   | { kind: 'defer'; missing: string[] } // paid lines whose add this fold has not seen: retry when they arrive
   | { kind: 'mismatch'; expectedPaise: Paise } // the paid lines at the paid quantities total differently here
+  | { kind: 'bad_discount' } // a discount that leaves nothing to pay, or comes to nothing: no honest tablet sends it
   | { kind: 'ok'; paid: FoldedLine[]; late: LateLine[]; overridden: Overridden[]; totals: CartTotals };
 
 /**
  * Checks a v2 payment against a fold. The payment wins: each paid line is paid at the PAID quantity, even if the fold
  * has it removed or at another quantity. Only a line the fold has never seen defers (its price is unknown), and only a
- * total that disagrees at the paid quantities is refused, which no honest tablet produces. Pure: the caller acts on it.
+ * total (or a line's discount share) that disagrees at the paid quantities is refused, which no honest tablet produces.
+ * The paid lines are totalled in the PAYMENT's order, so the discount split breaks ties as the paying tablet did.
+ * Pure: the caller acts on it.
  */
-export function checkPayment(f: OrderFold, paidLines: readonly PaidLine[], totalPaise: number, s: TotalSettings = DEFAULT_SETTINGS): PaymentCheck {
+export function checkPayment(
+  f: OrderFold, paidLines: readonly PaidLine[], totalPaise: number, s: TotalSettings = DEFAULT_SETTINGS, discount: DiscountRule | null = null,
+): PaymentCheck {
   const want = new Map(paidLines.map((l) => [l.lineId, l.qty]));
   if (want.size !== paidLines.length) throw new RangeError('paid lines must be unique');
   const byId = new Map(f.lines.map((l) => [l.lineId, l]));
   const missing = paidLines.map((l) => l.lineId).filter((id) => !byId.has(id));
   if (missing.length) return { kind: 'defer', missing };
 
-  const paid = f.lines.filter((l) => want.has(l.lineId)).map((l) => ({ ...l, qty: want.get(l.lineId)!, removedBy: null, removedAt: null }));
-  const t = totals(paid, s);
-  if (t.total !== totalPaise) return { kind: 'mismatch', expectedPaise: t.total };
+  const paid = paidLines.map((p) => ({ ...byId.get(p.lineId)!, qty: p.qty, removedBy: null, removedAt: null }));
+  let t: CartTotals;
+  try {
+    t = totals(paid, s, discount);
+  } catch (err) {
+    if (err instanceof RangeError && discount) return { kind: 'bad_discount' };
+    throw err;
+  }
+  if (t.total !== totalPaise || paidLines.some((p, i) => (p.discountPaise ?? 0) !== t.lines[i]!.discount)) return { kind: 'mismatch', expectedPaise: t.total };
 
   const late: LateLine[] = [];
   const overridden: Overridden[] = [];

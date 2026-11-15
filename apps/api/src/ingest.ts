@@ -12,7 +12,7 @@
 // an unknown person or item) is rejected.
 import type pg from 'pg';
 import {
-  OutboxEvent, exclusiveLine, expectedCash, paise, roundOffFor,
+  OutboxEvent, discountLines, discountOn, discountOverCap, expectedCash, paise, taxOn, totals,
   type GstRounding, type OrderVoided, type PaymentTaken, type PrintReprinted, type SaleCreated, type SaleVoided, type ShiftClosed, type ShiftOpened, type TradingSettings,
 } from '@pos/shared';
 import { audit } from './audit.js';
@@ -118,29 +118,45 @@ async function businessDay(c: pg.PoolClient, p: DevicePrincipal, date: string): 
   return r.rows[0];
 }
 
-/** Lines must add up on their own terms. Which settings were in force is NOT judged here (see flags). */
+/**
+ * Lines must add up on their own terms, with the shared rule (cart.ts `totals`, docs/discounts-plan.md): the discount
+ * comes to `discountOn` of the subtotal, its split over the lines is `discountLines` in the event's line order, and each
+ * line's GST is on its discounted net, in any of the three rounding modes. Which settings were in force is NOT judged
+ * here (see flags).
+ */
 function checkArithmetic(ev: SaleCreated): void {
   let net = 0;
-  let tax = 0;
   for (const l of ev.lines) {
     if (l.netPaise !== l.unitPaise * l.qty) throw new Reject('line_net_mismatch');
-    const taxes = MODES.map((m) => exclusiveLine(paise(l.unitPaise), l.qty, l.gstRateBp, m).tax as number);
-    if (!taxes.includes(l.taxPaise)) throw new Reject('line_tax_mismatch');
     net += l.netPaise;
-    tax += l.taxPaise;
   }
   if (net !== ev.subtotalPaise) throw new Reject('subtotal_mismatch');
+  let off = paise(0);
+  if (ev.discount) {
+    try { off = discountOn(paise(net), ev.discount); } catch { throw new Reject('discount_invalid'); }
+  }
+  if (off !== ev.discountPaise) throw new Reject('discount_mismatch');
+  const shares = discountLines(ev.lines.map((l) => paise(l.netPaise)), off);
+  let tax = 0;
+  for (const [i, l] of ev.lines.entries()) {
+    if (l.discountPaise !== shares[i]) throw new Reject('line_discount_mismatch');
+    const taxes = MODES.map((m) => taxOn(paise(l.netPaise - l.discountPaise), l.gstRateBp, m) as number);
+    if (!taxes.includes(l.taxPaise)) throw new Reject('line_tax_mismatch');
+    tax += l.taxPaise;
+  }
   if (tax !== ev.taxPaise) throw new Reject('tax_mismatch');
   if (Math.abs(ev.roundOffPaise) > 50) throw new Reject('round_off_too_large'); // the largest step is 100, nearest
 }
 
+const cartOf = (ev: SaleCreated) => ev.lines.map((l) => ({ itemId: l.itemId, name: l.name, unitPaise: paise(l.unitPaise), gstRateBp: l.gstRateBp, qty: l.qty }));
+
 function policyFlags(ev: SaleCreated, s: TradingSettings): string[] {
   const flags: string[] = [];
   if (ev.lines.some((l) => l.qty > s.maxLineQty)) flags.push('over_qty_cap');
-  const lines = ev.lines.map((l) => exclusiveLine(paise(l.unitPaise), l.qty, l.gstRateBp, s.gstRounding));
-  const tax = lines.reduce((a, l) => a + l.tax, 0);
-  const net = lines.reduce((a, l) => a + l.net, 0);
-  if (tax !== ev.taxPaise || roundOffFor(paise(net + tax), s.billRoundTo) !== ev.roundOffPaise) flags.push('settings_differ');
+  // The cap in force here and now; the tablet may have been offline when the manager lowered it. The sale stands.
+  if (ev.discount && discountOverCap(paise(ev.subtotalPaise), ev.discount, s.discountMaxBp)) flags.push('over_discount_cap');
+  const t = totals(cartOf(ev), s, ev.discount); // checkArithmetic has already shown the discount is valid
+  if (t.tax !== ev.taxPaise || t.roundOff !== ev.roundOffPaise) flags.push('settings_differ');
   return flags;
 }
 
@@ -169,15 +185,17 @@ async function applySale(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, ev: 
 
   await c.query(
     `INSERT INTO sale (id, tenant_id, outlet_id, business_day_id, business_date, device_id, created_by, channel, status,
-                       device_seq, menu_version, subtotal_paise, tax_paise, round_off_paise, total_paise, created_at_device, flags)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$12,$13,$14,$15,$16)`,
+                       device_seq, menu_version, subtotal_paise, discount_paise, discount_bp, discount_reason, tax_paise, round_off_paise, total_paise,
+                       created_at_device, flags)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
     [ev.saleId, p.tenantId, p.outletId, day.id, ev.businessDate, p.deviceId, ev.createdBy, ev.channel, e.seq, ev.menuVersion,
-     ev.subtotalPaise, ev.taxPaise, ev.roundOffPaise, ev.totalPaise, ev.createdAtDevice, flags]);
+     ev.subtotalPaise, ev.discountPaise, ev.discount?.kind === 'percent' ? ev.discount.value : null, ev.discount?.reason ?? null,
+     ev.taxPaise, ev.roundOffPaise, ev.totalPaise, ev.createdAtDevice, flags]);
   for (const l of ev.lines) {
     await c.query(
-      `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [p.tenantId, ev.saleId, l.itemId, l.name, l.unitPaise, l.gstRateBp, l.qty, l.netPaise, l.taxPaise]);
+      `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, discount_paise, tax_paise)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [p.tenantId, ev.saleId, l.itemId, l.name, l.unitPaise, l.gstRateBp, l.qty, l.netPaise, l.discountPaise, l.taxPaise]);
   }
 }
 

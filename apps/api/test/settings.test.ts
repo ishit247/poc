@@ -45,7 +45,7 @@ test('settings: manager reads, validates, replaces; tablets of that tenant only 
   const credB = await deviceFor(app, b1, B, 'b1@example.test');
   const before = (await app.inject({ method: 'GET', url: '/settings', headers: bearer(a1) })).json();
   try {
-    assert.deepEqual(before, DEFAULT_SETTINGS); // seeded A = defaults
+    assert.deepEqual(before, { ...DEFAULT_SETTINGS, discountMaxBp: 1000 }); // seeded A = defaults, with discounts up to 10%
     const bSeen = await pulledSetting(app, credB);
     assert.equal(bSeen.length, 1);
     assert.equal(bSeen[0]!.id, B);
@@ -55,12 +55,16 @@ test('settings: manager reads, validates, replaces; tablets of that tenant only 
                        { ...DEFAULT_SETTINGS, billRoundTo: 25 }, { maxLineQty: 5 }, { ...DEFAULT_SETTINGS, extra: 1 },
                        { ...DEFAULT_SETTINGS, refundReasons: [''] }, { ...DEFAULT_SETTINGS, refundReasons: ['x'.repeat(61)] },
                        { ...DEFAULT_SETTINGS, refundReasons: Array.from({ length: 11 }, (_, i) => `r${i}`) },
-                       { ...DEFAULT_SETTINGS, refundReasons: ['Cold', 'cold'] }]) {
+                       { ...DEFAULT_SETTINGS, refundReasons: ['Cold', 'cold'] },
+                       { ...DEFAULT_SETTINGS, discountMaxBp: -1 }, { ...DEFAULT_SETTINGS, discountMaxBp: 10001 }, { ...DEFAULT_SETTINGS, discountMaxBp: 2.5 },
+                       { ...DEFAULT_SETTINGS, discountReasons: [''] }, { ...DEFAULT_SETTINGS, discountReasons: ['Staff', 'STAFF'] },
+                       { ...DEFAULT_SETTINGS, discountReasons: Array.from({ length: 11 }, (_, i) => `r${i}`) }]) {
       const r = await app.inject({ method: 'PUT', url: '/settings', headers: bearer(a1), payload: bad });
       assert.equal(r.statusCode, 400, JSON.stringify(bad));
     }
 
-    const next = { maxLineQty: 12, gstRounding: 'down', billRoundTo: 50, offlineDays: 3, refundReasons: ['Cold tea', 'Spilt'] };
+    const next = { maxLineQty: 12, gstRounding: 'down', billRoundTo: 50, offlineDays: 3, refundReasons: ['Cold tea', 'Spilt'],
+                   discountMaxBp: 1500, discountReasons: ['Teacher'] };
     assert.equal((await app.inject({ method: 'PUT', url: '/settings', headers: bearer(a1), payload: next })).statusCode, 200);
     assert.deepEqual((await app.inject({ method: 'GET', url: '/settings', headers: bearer(a1) })).json(), next);
 

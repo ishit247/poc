@@ -133,7 +133,7 @@ test('paying an order sends v2 with the lines at the quantities shown, and settl
   const pay = (await payloads()).at(-1)!;
   assert.equal(pay.type, 'payment.taken');
   assert.equal(pay.schemaVersion, 2);
-  assert.deepEqual((pay as any).lines, s.lines.map((l) => ({ lineId: l.lineId, qty: l.qty })));
+  assert.deepEqual((pay as any).lines, s.lines.map((l) => ({ lineId: l.lineId, qty: l.qty, discountPaise: 0 }))); // no discount given
   assert.equal((pay as any).totalPaise, 3150 + 5250);
   assert.equal(await db.orderEvents.count(), 0);
   await assert.rejects(addToOrder({ ...base, actor: waiter, saleId: s.id, entry: tea }), /already closed/);

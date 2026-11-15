@@ -19,10 +19,12 @@ const STAGES = {
   typecheck: { what: 'tsc --noEmit in every package', run: 'pnpm typecheck' },
   'unit-api': {
     what: 'API tests on real Postgres (scope, auth, orders, sync, tenancy)',
-    run: 'pnpm --filter ./apps/api test',
+    // By package name: a path filter matched nothing when the shell's drive letter differed in case from pnpm's root.
+    run: 'pnpm --filter @pos/api test',
     needsDb: true,
+    tests: true,
   },
-  'unit-counter': { what: 'Tablet tests (sale, push, receipt)', run: 'pnpm --filter ./apps/counter test' },
+  'unit-counter': { what: 'Tablet tests (sale, push, receipt)', run: 'pnpm --filter @pos/counter test', tests: true },
   fresh: {
     what: 'DESTROYS the dev volume, reruns migrations 0001.., reseeds two tenants',
     run: 'pnpm run up:fresh',
@@ -33,8 +35,9 @@ const STAGES = {
     what: 'Schema tests: RLS isolation, trading invariants, online orders',
     run: 'node --test db/test/rls.test.mjs db/test/tables.test.mjs db/test/tags.test.mjs db/test/trading.test.mjs db/test/online.test.mjs db/test/platform.test.mjs',
     needsDb: true,
+    tests: true,
   },
-  build: { what: 'Tablet production build (tsc + vite)', run: 'pnpm --filter ./apps/counter build' },
+  build: { what: 'Tablet production build (tsc + vite)', run: 'pnpm --filter @pos/counter build' },
   mutation: {
     what: 'Weaken one guard at a time, require a test to fail. Rewrites source files while running',
     run: 'node scripts/mutation-checks.mjs',
@@ -112,7 +115,8 @@ function runStage(name) {
       clearInterval(tick); log.end();
       Object.assign(counts, summary);
       const ms = Date.now() - started;
-      const pass = code === 0;
+      // A test stage that ran no tests did not pass (a pnpm filter that matched nothing once exited 0 here).
+      const pass = code === 0 && (!st.tests || counts.ok > 0);
       if (tty) process.stdout.write('\r\x1b[2K');
       console.log(`  ${pass ? green('✔') : red('✘')} ${name.padEnd(13)} ${fmt(ms).padEnd(7)} ${counts.ok} ok${counts.fail ? red(` ${counts.fail} failed`) : ''}${pass ? '' : red(`  exit ${code}`)}`);
       if (!pass) for (const l of tail.slice(-12)) console.log(dim(`      ${l.slice(0, 160)}`));

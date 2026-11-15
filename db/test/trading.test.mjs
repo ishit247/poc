@@ -311,6 +311,62 @@ test('sale arithmetic: total = subtotal + tax, and money is never negative', asy
   });
 });
 
+// A discounted sale (docs/discounts-plan.md): 100.00 at 5% and 50.00 at 18%, 10% off = 15.00 split 10.00 / 5.00.
+const discounted = (c, x, { off = 1500, bp = 1000, reason = 'Staff meal', total = 14760 } = {}) =>
+  c.query(
+    `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, menu_version,
+                       subtotal_paise, discount_paise, discount_bp, discount_reason, tax_paise, total_paise, created_at_device)
+     VALUES (gen_random_uuid(), $1, $2, '2026-03-01', $3, $4, 1, 15000, $5, $6, $7, 1260, $8, now()) RETURNING id`,
+    [A, x.outlet, x.device, x.cashier, off, bp, reason, total]).then((r) => r.rows[0].id);
+const discountedLine = (c, x, sale, net, share, gst, tax) =>
+  c.query(`INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, discount_paise, tax_paise)
+           VALUES ($1,$2,$3,'x',$4,$5,1,$4,$6,$7)`, [A, sale, x.item, net, gst, share, tax]);
+
+test('discounts: total = subtotal - discount + tax; something left to pay; a reason with every discount', async () => {
+  await inTx(async (c, x) => {
+    const bad = async (o) => {
+      await c.query(`SAVEPOINT d${++n}`);
+      await assert.rejects(discounted(c, x, o), /check constraint/, JSON.stringify(o));
+      await c.query(`ROLLBACK TO d${n}`);
+    };
+    await bad({ total: 16260 }); // total ignores the discount
+    await bad({ reason: null }); // a discount needs a reason
+    await bad({ off: 0, total: 16260 }); // a reason without a discount
+    await bad({ off: 15000, total: 1260 }); // the whole subtotal off: a free meal is not a discount
+    await bad({ bp: 0 }); // a percentage is 1..10000 bp
+    await bad({ bp: 10001 });
+    await bad({ reason: '' });
+    await bad({ off: -1, total: 16261 });
+    // A line's share is between 0 and its own net.
+    const s = await discounted(c, x);
+    await fails(c, `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, discount_paise, tax_paise)
+                    VALUES ($1,$2,$3,'x',100,0,1,100,101,0)`, [A, s, x.item], /check constraint/);
+    await fails(c, `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, discount_paise, tax_paise)
+                    VALUES ($1,$2,$3,'x',100,0,1,100,-1,0)`, [A, s, x.item], /check constraint/);
+  });
+});
+
+test('discounts: a sale\'s discount is the sum of its lines\' shares, checked at commit; a paid sale\'s discount is fixed', async () => {
+  await inTx(async (c, x) => {
+    const s = await discounted(c, x);
+    await discountedLine(c, x, s, 10000, 1000, 500, 450);
+    await discountedLine(c, x, s, 5000, 499, 1800, 810); // one paisa short of 500
+    await assert.rejects(c.query('SET CONSTRAINTS ALL IMMEDIATE'), /discount \(1500\) is not the sum of its lines' shares \(1499\)/);
+  });
+  await inTx(async (c, x) => {
+    const s = await discounted(c, x);
+    await discountedLine(c, x, s, 10000, 1000, 500, 450);
+    await discountedLine(c, x, s, 5000, 500, 1800, 810);
+    await pay(c, s, 14760, { method: 'upi' });
+    await c.query("UPDATE sale SET status = 'paid', receipt_no = 'C1-20260301-0030', receipt_seq = 30 WHERE id = $1", [s]);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE'); // all of it holds together
+    await fails(c, 'UPDATE sale SET discount_paise = 1400, total_paise = 14860 WHERE id = $1', [s], /cannot be edited/);
+    await fails(c, 'UPDATE sale SET discount_reason = $2 WHERE id = $1', [s, 'Other'], /cannot be edited/);
+    await fails(c, 'UPDATE sale SET discount_bp = NULL WHERE id = $1', [s], /cannot be edited/);
+    await fails(c, 'UPDATE sale_line SET discount_paise = 0 WHERE sale_id = $1', [s], /line of a paid sale cannot be changed/);
+  });
+});
+
 test('shift and business_day rows are never hard-deleted', async () => {
   await inTx(async (c) => {
     await fails(c, 'DELETE FROM shift', [], /permission denied/);
