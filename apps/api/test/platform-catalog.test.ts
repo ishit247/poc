@@ -79,6 +79,23 @@ test('HSN codes and GST rates outside the allowed ranges are refused', async () 
   assert.equal((await send(app, 'POST', '/platform/catalog-templates', owner, body(dup.toUpperCase()))).statusCode, 409);
 });
 
+test('diet marks are kept in the template, refused if unknown, and copied to the tenant item when seeded', async () => {
+  const app = buildApp();
+  const owner = await signIn(app, OWNER);
+  const mk = (diet: string) => send(app, 'POST', '/platform/catalog-templates', owner,
+    { name: `Diet ${uniq()}`, categories: [{ name: 'C', items: [{ name: 'Dal', diet, pricePaise: 100, gstRateBp: 500 }] }] });
+  assert.equal((await mk('vegan')).statusCode, 400);
+  const made = await send(app, 'POST', '/platform/catalog-templates', owner, { name: `Diet ${uniq()}`, categories: [{ name: 'C', items: [
+    { name: 'Dal', diet: 'veg', pricePaise: 100, gstRateBp: 500 }, { name: 'Egg Curry', diet: 'egg', pricePaise: 100, gstRateBp: 500 },
+    { name: 'Chicken Curry', diet: 'non_veg', pricePaise: 100, gstRateBp: 500 }, { name: 'Water', pricePaise: 100, gstRateBp: 500 }] }] });
+  assert.equal(made.statusCode, 201);
+  assert.deepEqual(made.json().categories[0].items.map((i: { diet: string | null }) => i.diet), ['veg', 'egg', 'non_veg', null]);
+  const tenantId = await newTenant(app, owner);
+  assert.equal((await send(app, 'POST', `/platform/tenants/${tenantId}/seed-catalog`, owner, { templateId: made.json().id })).statusCode, 201);
+  const rows = await withTenant(tenantId, async (c) => (await c.query('SELECT name, diet FROM item ORDER BY name')).rows);
+  assert.deepEqual(rows.map((r) => [r.name, r.diet]), [['Chicken Curry', 'non_veg'], ['Dal', 'veg'], ['Egg Curry', 'egg'], ['Water', null]]);
+});
+
 test('seeding copies HSN, GST and counter price into the tenant, which can then override them', async () => {
   const app = buildApp();
   const owner = await signIn(app, OWNER);

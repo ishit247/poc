@@ -4,6 +4,7 @@ import { ITEM_DESCRIPTION_MAX, csvFile, csvText, parseCsv, parseGstBp, parsePais
 
 export interface Draft {
   id: string; name: string; hsn: string; gst: string; price: string; desc: string;
+  diet?: 'veg' | 'egg' | 'non_veg' | null; // carried through edits so saving a template keeps the mark; no control for it yet
   sha: string | null;      // a picture already stored (by hash)
   blob: Blob | null;       // a picture chosen in this session, uploaded when the template is saved
   preview: string | null;  // object URL of `blob`

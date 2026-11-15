@@ -41,6 +41,8 @@ CREATE TABLE catalog_item (
   gst_rate_bp int NOT NULL DEFAULT 0 CHECK (gst_rate_bp BETWEEN 0 AND 4000),
   price_paise bigint NOT NULL CHECK (price_paise BETWEEN 0 AND 100000000),
   description text CHECK (length(description) BETWEEN 1 AND 300),
+  -- Diet mark, same values as item.diet (0003); copied to the tenant's item when seeded. NULL = not stated.
+  diet        text CHECK (diet IN ('veg', 'egg', 'non_veg')),
   image_sha256 text REFERENCES catalog_image(sha256),
   sort_order  int NOT NULL DEFAULT 0,
   FOREIGN KEY (template_id, category_id) REFERENCES catalog_category(template_id, id)

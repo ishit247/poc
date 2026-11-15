@@ -50,6 +50,7 @@ const templateBody = z.object({
       name: z.string().trim().min(1).max(100),
       hsnCode: z.string().regex(/^[0-9]{4,8}$/).optional(),
       description: z.string().trim().min(1).max(ITEM_DESCRIPTION_MAX).optional(),
+      diet: z.enum(['veg', 'egg', 'non_veg']).optional(),
       imageSha256: z.string().regex(SHA256_HEX).optional(),
       gstRateBp: z.number().int().min(0).max(4000),
       pricePaise: z.number().int().min(0).max(100000000),
@@ -58,7 +59,7 @@ const templateBody = z.object({
 }).strict();
 const seedBody = z.object({ templateId: uuid }).strict();
 
-interface TemplateItem { id: string; name: string; hsnCode: string | null; description: string | null; imageSha256: string | null; gstRateBp: number; pricePaise: number; sortOrder: number }
+interface TemplateItem { id: string; name: string; hsnCode: string | null; description: string | null; diet: 'veg' | 'egg' | 'non_veg' | null; imageSha256: string | null; gstRateBp: number; pricePaise: number; sortOrder: number }
 interface Template { id: string; name: string; categories: { id: string; name: string; sortOrder: number; items: TemplateItem[] }[] }
 
 /** A live template with its categories and items in order, or null. */
@@ -67,7 +68,7 @@ async function loadTemplate(c: import('pg').PoolClient, id: string): Promise<Tem
   if (!t) return null;
   const cats = (await c.query('SELECT id, name, sort_order AS "sortOrder" FROM catalog_category WHERE template_id = $1 ORDER BY sort_order, name', [id])).rows;
   const items = (await c.query(
-    `SELECT id, category_id AS "categoryId", name, hsn_code AS "hsnCode", description, image_sha256 AS "imageSha256", gst_rate_bp::int AS "gstRateBp",
+    `SELECT id, category_id AS "categoryId", name, hsn_code AS "hsnCode", description, diet, image_sha256 AS "imageSha256", gst_rate_bp::int AS "gstRateBp",
             price_paise::int AS "pricePaise", sort_order AS "sortOrder"
        FROM catalog_item WHERE template_id = $1 ORDER BY sort_order, name`, [id])).rows;
   return { ...t, categories: cats.map((k) => ({ ...k, items: items.filter((i) => i.categoryId === k.id) })) };
@@ -345,9 +346,9 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
       const k = (await c.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [t.id, cat.name, ci])).rows[0];
       for (const [ii, it] of cat.items.entries()) {
         await c.query(
-          `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, description, image_sha256, gst_rate_bp, price_paise, sort_order)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [t.id, k.id, it.name, it.hsnCode ?? null, it.description ?? null, it.imageSha256 ?? null, it.gstRateBp, it.pricePaise, ii]);
+          `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, description, diet, image_sha256, gst_rate_bp, price_paise, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [t.id, k.id, it.name, it.hsnCode ?? null, it.description ?? null, it.diet ?? null, it.imageSha256 ?? null, it.gstRateBp, it.pricePaise, ii]);
       }
     }
     return t.id as string;
@@ -475,8 +476,8 @@ export const platformRoutes: FastifyPluginAsync = async (app) => {
         const k = (await c.query('INSERT INTO category (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [tenantId, cat.name, cat.sortOrder])).rows[0];
         for (const it of cat.items) {
           const row = (await c.query(
-            'INSERT INTO item (tenant_id, category_id, name, hsn_code, description, image_sha256, sort_order, source_catalog_item_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
-            [tenantId, k.id, it.name, it.hsnCode, it.description, it.imageSha256, it.sortOrder, it.id])).rows[0];
+            'INSERT INTO item (tenant_id, category_id, name, hsn_code, description, diet, image_sha256, sort_order, source_catalog_item_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
+            [tenantId, k.id, it.name, it.hsnCode, it.description, it.diet, it.imageSha256, it.sortOrder, it.id])).rows[0];
           // Counter price only: aggregator prices differ per channel and outlet, so they are the manager's to set.
           await c.query(
             "INSERT INTO item_price (tenant_id, item_id, channel, price_paise, gst_rate_bp) VALUES ($1, $2, 'counter', $3, $4)",

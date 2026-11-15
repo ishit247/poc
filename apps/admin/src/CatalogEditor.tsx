@@ -25,7 +25,7 @@ const toDoc = (t: TemplateFull): Doc => ({
   name: t.name,
   cats: t.categories.map((c) => ({
     id: uid(), name: c.name,
-    items: c.items.map((i) => ({ id: uid(), name: i.name, hsn: i.hsnCode ?? '', gst: String(i.gstRateBp / 100), price: (i.pricePaise / 100).toFixed(2), desc: i.description ?? '', sha: i.imageSha256, blob: null, preview: null })),
+    items: c.items.map((i) => ({ id: uid(), name: i.name, hsn: i.hsnCode ?? '', gst: String(i.gstRateBp / 100), price: (i.pricePaise / 100).toFixed(2), desc: i.description ?? '', diet: i.diet, sha: i.imageSha256, blob: null, preview: null })),
   })),
 });
 /** Shrinks a picture file for upload; a picture the browser cannot read or cannot make small enough is reported, not fatal. */
@@ -238,7 +238,7 @@ export function CatalogEditor({ id, isOwner, onDirty, go }: { id: string; isOwne
     setBusy('Saving…');
     const body = { name: d.name.trim(), categories: withItems.map((c) => ({ name: c.name.trim(), items: c.items.map((i) => {
       const sha = i.sha ?? shas.get(i.id);
-      return { name: i.name.trim(), ...(i.hsn.trim() ? { hsnCode: i.hsn.trim() } : {}), ...(i.desc.trim() ? { description: i.desc.trim() } : {}), ...(sha ? { imageSha256: sha } : {}), gstRateBp: parseGstBp(i.gst)!, pricePaise: parsePaise(i.price)! };
+      return { name: i.name.trim(), ...(i.hsn.trim() ? { hsnCode: i.hsn.trim() } : {}), ...(i.desc.trim() ? { description: i.desc.trim() } : {}), ...(i.diet ? { diet: i.diet } : {}), ...(sha ? { imageSha256: sha } : {}), gstRateBp: parseGstBp(i.gst)!, pricePaise: parsePaise(i.price)! };
     }) })) };
     const r = await api<TemplateFull>(id === 'new' ? '/platform/catalog-templates' : `/platform/catalog-templates/${id}`, { method: id === 'new' ? 'POST' : 'PUT', body });
     setBusy('');

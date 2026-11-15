@@ -2,10 +2,12 @@
 // the shared password below must never reach a real environment.
 // Runs as pos_owner; RLS is FORCEd, so each tenant is stamped like the app does.
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import pg from 'pg';
 import { solidPng } from './png.ts';
+import { GST_BP, HSN, menuCard } from './menu-card.ts';
 import { paise, totals, type GstRounding } from '../packages/shared/src/index.ts';
-import { closeObjects, putObject, tenantKey } from '../apps/api/src/objects.ts';
+import { catalogKey, closeObjects, putObject, tenantKey } from '../apps/api/src/objects.ts';
 import { hashPassword } from '../apps/api/src/security/password.ts';
 import { newSecret, sealSecret, sealWebhookSecret, sha256, totpSecretContext } from '../apps/api/src/security/crypto.ts';
 
@@ -326,25 +328,34 @@ for (const [email, name, role] of [['owner@platform.test', 'Platform Owner', 'ow
     [adminId, email, name, role, passwordHash, sealSecret(DEV_TOTP_SECRET, totpSecretContext(adminId))]);
 }
 
-// Operator catalog template (docs/catalog-templates.md): HSN/SAC and GST per item, prices tax-exclusive paise.
-// Sample figures for development only; the seeded tenants above keep their own menus and are not linked to it.
+// Operator catalog templates (docs/catalog-templates.md, docs/menu-template-seed-plan.md): the restaurant menu card, in two
+// templates, with diet marks and the dish photos cropped from the card. Prices are tax-exclusive paise at 5% GST.
+// The seeded tenants above keep their own menus and are not linked to them.
 {
-  const tpl = await client.query("INSERT INTO catalog_template (name) VALUES ('School cafeteria (sample)') RETURNING id");
-  const catalog = {
-    Snacks: [['Samosa', '21069099', 500, 1500], ['Veg Sandwich', '21069099', 500, 4000], ['Idli (2 pc)', '19059020', 500, 3000]],
-    Drinks: [['Tea', '996331', 500, 1000], ['Cold Coffee', '21011190', 1800, 6000], ['Bottled Water', '22011010', 0, 2000]],
-  } as const;
-  let catSort = 0;
-  for (const [cat, items] of Object.entries(catalog)) {
-    const k = await client.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [tpl.rows[0].id, cat, catSort++]);
-    let itemSort = 0;
-    for (const [name, hsn, gst, price] of items) {
-      await client.query(
-        'INSERT INTO catalog_item (template_id, category_id, name, hsn_code, gst_rate_bp, price_paise, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [tpl.rows[0].id, k.rows[0].id, name, hsn, gst, price, itemSort++]);
+  const stored = new Set<string>(); // each picture once: the object store and catalog_image are content-addressed
+  const photoSha = async (photo: string): Promise<string> => {
+    const bytes = readFileSync(new URL(`./assets/menu/${photo}.png`, import.meta.url));
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    if (!stored.has(sha)) {
+      await putObject(catalogKey(sha), bytes, 'image/png');
+      await client.query("INSERT INTO catalog_image (sha256, content_type, byte_size) VALUES ($1, 'image/png', $2)", [sha, bytes.length]);
+      stored.add(sha);
+    }
+    return sha;
+  };
+  for (const [name, vegOnly] of [['Restaurant menu - veg only', true], ['Restaurant menu - veg and non-veg', false]] as const) {
+    const tpl = await client.query('INSERT INTO catalog_template (name) VALUES ($1) RETURNING id', [name]);
+    for (const [ci, cat] of menuCard(vegOnly).entries()) {
+      const k = await client.query('INSERT INTO catalog_category (template_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id', [tpl.rows[0].id, cat.name, ci]);
+      for (const [ii, it] of cat.items.entries()) {
+        await client.query(
+          `INSERT INTO catalog_item (template_id, category_id, name, hsn_code, diet, image_sha256, gst_rate_bp, price_paise, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [tpl.rows[0].id, k.rows[0].id, it.name, HSN, it.diet, it.photo ? await photoSha(it.photo) : null, GST_BP, it.pricePaise, ii]);
+      }
     }
   }
 }
 await client.end();
 closeObjects();
-console.log('seeded tenants A and B, two platform operators and a sample catalog template');
+console.log('seeded tenants A and B, two platform operators and two catalog templates (restaurant menu)');

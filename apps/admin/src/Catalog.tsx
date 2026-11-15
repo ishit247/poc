@@ -15,7 +15,7 @@ export function Catalog({ isOwner, templateId, onDirty, go }: { isOwner: boolean
 
 const toDraft = (t: TemplateFull): DraftCat[] => t.categories.map((c) => ({
   id: uid(), name: c.name,
-  items: c.items.map((i) => ({ id: uid(), name: i.name, hsn: i.hsnCode ?? '', gst: String(i.gstRateBp / 100), price: (i.pricePaise / 100).toFixed(2), desc: i.description ?? '', sha: i.imageSha256, blob: null, preview: null })),
+  items: c.items.map((i) => ({ id: uid(), name: i.name, hsn: i.hsnCode ?? '', gst: String(i.gstRateBp / 100), price: (i.pricePaise / 100).toFixed(2), desc: i.description ?? '', diet: i.diet, sha: i.imageSha256, blob: null, preview: null })),
 }));
 
 function TemplateList({ isOwner }: { isOwner: boolean }) {
@@ -40,7 +40,7 @@ function TemplateList({ isOwner }: { isOwner: boolean }) {
     const names = new Set((rows ?? []).map((x) => x.name.toLowerCase()));
     let name = `${t.name} (copy)`;
     for (let n = 2; names.has(name.toLowerCase()); n++) name = `${t.name} (copy ${n})`;
-    const r = await api<TemplateFull>('/platform/catalog-templates', { body: { name, categories: src.categories.map((c) => ({ name: c.name, items: c.items.map((i) => ({ name: i.name, ...(i.hsnCode ? { hsnCode: i.hsnCode } : {}), ...(i.description ? { description: i.description } : {}), ...(i.imageSha256 ? { imageSha256: i.imageSha256 } : {}), gstRateBp: i.gstRateBp, pricePaise: i.pricePaise })) })) } });
+    const r = await api<TemplateFull>('/platform/catalog-templates', { body: { name, categories: src.categories.map((c) => ({ name: c.name, items: c.items.map((i) => ({ name: i.name, ...(i.hsnCode ? { hsnCode: i.hsnCode } : {}), ...(i.description ? { description: i.description } : {}), ...(i.diet ? { diet: i.diet } : {}), ...(i.imageSha256 ? { imageSha256: i.imageSha256 } : {}), gstRateBp: i.gstRateBp, pricePaise: i.pricePaise })) })) } });
     if (r.status === 201) { toast('Template duplicated'); void load(); } else setError(r.status === 403 ? 'Only an owner can do this.' : 'Could not duplicate the template.');
   };
   const exportCsv = async (t: TemplateRow) => {

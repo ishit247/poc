@@ -29,7 +29,7 @@ export interface Outlet { id: string; name: string; timezone: string; counters: 
 export interface Manager { id: string; name: string; email: string; active: boolean; invited: boolean; acceptedInvite: boolean; invitePending: boolean; outletIds: string[] }
 
 export interface TemplateRow { id: string; name: string; createdAt: string; categories: number; items: number }
-export interface TemplateItem { id: string; name: string; hsnCode: string | null; description: string | null; imageSha256: string | null; gstRateBp: number; pricePaise: number }
+export interface TemplateItem { id: string; name: string; hsnCode: string | null; description: string | null; diet: 'veg' | 'egg' | 'non_veg' | null; imageSha256: string | null; gstRateBp: number; pricePaise: number }
 export interface TemplateFull { id: string; name: string; categories: { id: string; name: string; items: TemplateItem[] }[] }
 
 // Money and rates: the API speaks tax-exclusive paise and GST basis points; the screens speak rupees and percent.
