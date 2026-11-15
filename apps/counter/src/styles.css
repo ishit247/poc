@@ -38,9 +38,10 @@ header button { min-height: 40px; }
 .pad { display: grid; grid-template-columns: repeat(3, 84px); gap: 10px; }
 .pad button { min-height: 64px; font-size: 24px; }
 
-.sell { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 340px; gap: 12px; padding: 0 14px 12px; }
-.menu { min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.sell { flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 1fr 340px; grid-template-rows: minmax(0, 1fr); gap: 12px; padding: 0 14px 12px; }
+.menu { min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: clip; }
 .menu > * { flex: none; }
+.menu > .browse { flex: 1 1 0; min-height: 0; }
 .grid.pop .cats { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 8px; }
 .cart { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; min-height: 0; }
 .cart h2 { margin: 0 0 6px; font-size: 20px; }
@@ -147,12 +148,12 @@ header button { min-height: 40px; }
 .mgr .scroll { overflow-x: auto; }
 
 /* Menu area: filters on the left, item cards on the right. A card is a thumbnail (always a square, cropped to fit) beside its text. */
-.browse { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: start; }
-.side { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 0; max-height: 100%; overflow-y: auto; }
+.browse { display: grid; grid-template-columns: 140px 1fr; gap: 10px; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
+.side { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; }
 .side button { min-height: 0; text-align: left; width: 100%; }
-.side .sechead { display: flex; justify-content: space-between; align-items: center; background: var(--side-bg); color: var(--side-fg); border: 0; border-radius: 0; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; min-height: 34px; padding: 4px 8px; }
+.side .sechead { display: flex; justify-content: space-between; align-items: center; background: var(--side-bg); color: var(--side-fg); border: 0; border-radius: 0; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; min-height: 44px; padding: 4px 8px; }
 .seclist { display: flex; flex-direction: column; gap: 0; }
-.seclist button { border: 0; border-radius: 0; background: transparent; padding: 6px 8px; font-size: 16px; }
+.seclist button { border: 0; border-radius: 0; background: transparent; padding: 10px 8px; min-height: 44px; display: flex; align-items: center; font-size: 16px; }
 .seclist button.active { background: var(--active-bg); color: var(--fg); font-weight: 600; box-shadow: inset 3px 0 0 var(--primary); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 6px; align-content: start; }
 .item { min-height: 64px; padding: 4px 6px; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 6px; text-align: left; }
@@ -166,7 +167,7 @@ header button { min-height: 40px; }
 
 .chipbtn { font-size: 18px; }
 button.primary[data-testid='add-code'] { font-size: 28px; line-height: 1; padding: 0; width: 48px; }
-.items { min-width: 0; }
+.items { position: relative; min-width: 0; min-height: 0; overflow-y: auto; }
 .catgroup { scroll-margin-top: 4px; }
 .divider { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; color: var(--muted); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
 .divider::before, .divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }

@@ -244,7 +244,10 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const loose = visible.filter((e) => !known.has(e.categoryId));
   const gotoCategory = (id: string) => {
     setCategory(id);
-    document.getElementById(`cat-${id}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    // Scroll only the item list; scrollIntoView would also move the search bar and filters.
+    const group = document.getElementById(`cat-${id}`);
+    const list = group?.closest('.items');
+    if (group && list) list.scrollTo?.({ top: group.offsetTop, behavior: 'smooth' }); // .items is position: relative, so offsetTop is measured from it (and ignores the body zoom)
   };
   const exact = byCode ? menu.entries.filter((e) => menu.extras[e.itemId]?.code === q) : [];
   const exactEntry = exact.length === 1 && exact[0]!.available ? exact[0]! : null;
