@@ -94,6 +94,11 @@ export function OnlineQueue({ device, actor, menu, hidden, onCount }: {
                     {o.status === 'received' && <span data-testid="online-countdown" className={countdown(o.acceptBy, now) === 'overdue' ? 'warn' : ''}> accept within {countdown(o.acceptBy, now)}</span>}
                     {o.customerLabel && <span className="muted"> · {o.customerLabel}</span>}
                   </div>
+                  {!!o.unmappedLines?.length && (
+                    <div data-testid="online-unmapped" className="warn" role="note">
+                      Not on this bill, check the platform app: {o.unmappedLines.map((l) => `${l.qty} × ${l.name}`).join(', ')}
+                    </div>
+                  )}
                 </div>
                 <div className="actions">
                   {declining?.id === o.id ? (

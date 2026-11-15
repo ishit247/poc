@@ -68,6 +68,14 @@ still open, and a trap that cost time once. Active phases keep their own file (p
 - Q1: outlets are listed on the platforms; onboarding is per outlet. The webhook payload and signature
   (hex HMAC-SHA256 of `<unix seconds>.<raw body>`, 5-minute window) are our own placeholders until partner docs
   arrive. Outbound senders throw "partner API not configured", so messages end `failed` and visible.
+- Manager setup (2026-11-15): Platforms tab (`apps/counter/src/manager/Platforms.tsx`) over `routes/integrations.ts`.
+  Per outlet and platform: map platform item ids to items (the "needs an item" list is built from the last 30 days of
+  `online_order.unmapped_lines`), store id, webhook secret (sealed on save, never returned; left blank it is kept),
+  receiving tablet and booked-to person (both must be at that outlet), on/off, and the last 20 inbound calls. No delete
+  for an integration: turn it off. The store id is unique per platform across tenants, so a 409 can come from another
+  tenant's row. Only items with a live price on the platform can be picked (the `createOrder` rule); a mapping whose item
+  later loses its price is flagged. The counter's order card lists unmapped lines ("Not on this bill, check the
+  platform app").
 
 **Catalog pictures**
 - Bytes live in Garage (S3-compatible); Postgres keeps an index. Uploads are shrunk in the browser to a 320 px WebP of
@@ -86,7 +94,7 @@ still open, and a trap that cost time once. Active phases keep their own file (p
 | Online | Online voids are not in the day's void count (they carry no business day) |
 | Online | Only Samosa has a Zomato price in the seed and no item has a Swiggy price; other items return `422 unknown_item` |
 | Reports | No refund route, so the refund half of the voids report is empty; no `EXPLAIN` on a year of data; multi-outlet view only API-tested |
-| Phase 9 | No integration or item-mapping UI; the counter does not show `unmappedLines`; no menu or stock push to platforms |
+| Phase 9 | No menu or stock push to platforms. The Platforms tab was checked only in Edge at 1024 and 820 wide; the "needs an item" list has no paging (capped at 100) and is not grouped by name |
 | Pictures | No sweep for orphan objects in the bucket; WebP encoding checked only in Edge (Safari/Firefox may need a JPEG fallback in `shrinkImage`); the console picture browser check is not in the repo |
 | Scale | A 50K-item catalogue is a different product (one button per item, the whole menu in memory, no barcode). Give it its own phase if it becomes real |
 

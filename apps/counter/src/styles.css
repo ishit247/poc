@@ -115,7 +115,8 @@ header button { min-height: 40px; }
 .online h2 { display: flex; align-items: center; gap: 12px; }
 .online h2 button { margin-left: auto; }
 .online li.fresh { border-color: var(--primary); box-shadow: 0 0 0 2px var(--active-bg); }
-.online .actions button { color: var(--fg); min-height: 48px; }
+.online .actions button { min-height: 48px; }
+.online .actions button:not(.primary) { color: var(--fg); } /* Accept keeps the primary's white text */
 .chip { display: inline-block; background: var(--soft); border-radius: 999px; padding: 1px 10px; font-size: 13px; }
 .badge { background: var(--error); color: #fff; border-radius: 999px; padding: 0 8px; margin-left: 6px; font-size: 13px; }
 .logo { height: 36px; width: auto; max-width: 120px; object-fit: contain; }

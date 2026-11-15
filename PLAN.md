@@ -43,7 +43,7 @@ day close, reports). Smaller gaps per phase are in [docs/build-notes.md](docs/bu
 | 6 | Shifts, day close | yes, incl. manager force-close and the day-close void screen | API tests, mutants; `browser-flow` | days closed out of date order may mis-list late adjustments | [build-notes.md](docs/build-notes.md) |
 | 7 | Online orders (manual provider) | yes | API tests, mutants; queue 23/23 and settlements 18/18 in a browser; `browser-flow` | — | [build-notes.md](docs/build-notes.md) |
 | 8 | Reports | yes | 5 tests, 31 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; no refund route yet | [build-notes.md](docs/build-notes.md) |
-| 9 | Aggregator adapters | **scaffold only** (placeholder contract) | webhook tests; secrets sealed (phase 11 step 6) | everything against real Zomato/Swiggy; no integration or mapping UI; counter UI ignores `unmappedLines` | [build-notes.md](docs/build-notes.md) |
+| 9 | Aggregator adapters | **scaffold** (placeholder contract); manager Platforms tab (integration setup, item mapping) and the counter's unmapped-line note done 2026-11-15 | webhook tests; secrets sealed (phase 11 step 6); `integrations.test.ts` 3/3, 7/7 mutants, `browser-platforms.mjs` 29/29 (Edge, 1024 and 820 wide) | everything against real Zomato/Swiggy; no menu or stock push; Platforms tab not in Safari/Firefox or on a real tablet | [build-notes.md](docs/build-notes.md) |
 | 10 | Dynamic UPI | no (optional) | | | |
 | 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke and rename screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 | off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
 | 12 | Tables, running orders, quick codes (D13 to D18) | **all steps done** (1 to 8, 2b, 7b, 7c, 7d) | at 7d: API 244/244, tablet 59/59, shared 55/55, DB 46/46, 22/22 mutants; `browser-tables` 56/56, `browser-sell` 27/27, `browser-flow` 46/46 (evidence per step in the phase file) | a refusal arriving after a manager force-closed its drawer is only flagged at day close ("count it separately"); open design questions at the end of the phase file | [phase12-plan.md](docs/phase12-plan.md), [prototype](docs/prototypes/sell-prototype.html) |
@@ -83,12 +83,14 @@ Fixed in this pass (the 2026-11-06 findings):
 
 1. Resolve Q4 (hosting) and Q7 (hardware); print on the real H58BT and check `storage.persist()` on a real tablet.
 2. Finish phase 11 step 6: (the full mutation run is done, 2026-11-15; rerun it before a phase is called done, in the
-   background, to a log, never two runs at once), off-site backups and PITR (Q4), integration
-   admin (Q1); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
+   background, to a log, never two runs at once), off-site backups and PITR (Q4); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
    additive-only migrations (section 18) before the first real tenant.
-3. Phase 9 UI (integrations, item mapping, showing `unmappedLines`) once partner access is known.
+3. Phase 9 against real partner APIs once access is known (Q1): replace the placeholder payload and signature, the
+   senders, and add menu/stock push.
 
-Done and struck from this list (detail in the phase files): the manager Settings tab (2026-11-15: selling rules, logo,
+Done and struck from this list (detail in the phase files): the phase 9 UI (2026-11-15: manager Platforms tab for
+integration setup and item mapping, unmapped lines on the counter's order card; `integrations.test.ts` 3/3, 7/7 mutants,
+`browser-platforms.mjs` 29/29 in Edge at 1024 and 820 wide), the manager Settings tab (2026-11-15: selling rules, logo,
 outlet address/FSSAI/GST; API tests 12/12 in `tenancy-host`, 3/3 logo mutants caught, `browser-settings` 25/25 in Edge at
 1024 and 820 wide), the 23 INVALID mutants (2026-11-15: the runner matches
 against LF text so CRLF checkouts work, `--check` validates every pattern without running tests, 483/483 match; the

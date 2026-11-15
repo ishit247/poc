@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { DayClose } from './DayClose.tsx';
 import { MenuEditor } from './MenuEditor.tsx';
 import { Modal } from './Modal.tsx';
+import { Platforms } from './Platforms.tsx';
 import { Reports } from './Reports.tsx';
 import { Settings } from './Settings.tsx';
 import { Settlements } from './Settlements.tsx';
@@ -9,9 +10,9 @@ import { Tablets } from './Tablets.tsx';
 import { RefusedAck } from '../RefusedBanner.tsx';
 import { api, type Me } from './api.ts';
 
-type Tab = 'close' | 'reports' | 'settle' | 'tablets' | 'menu' | 'settings';
+type Tab = 'close' | 'reports' | 'settle' | 'platforms' | 'tablets' | 'menu' | 'settings';
 
-/** The manager's six areas. Profile, text size, theme and Sign out live in the header's More menu (see App.tsx). */
+/** The manager's seven areas. Profile, text size, theme and Sign out live in the header's More menu (see App.tsx). */
 export function ManagerTools({ token, outletId, deviceId, onProfile }: { token: string; outletId?: string; deviceId?: string; onProfile?: (name: string) => void }) {
   const [tab, setTab] = useState<Tab>('close');
   const [blocking, setBlocking] = useState(0);
@@ -33,13 +34,14 @@ export function ManagerTools({ token, outletId, deviceId, onProfile }: { token: 
         {btn('close', 'Close the day', blocking > 0 && <span className="m-count" aria-label={`${blocking} to sort out`}>{blocking}</span>)}
         {btn('reports', 'Reports')}
         {btn('settle', 'Settlements')}
+        {btn('platforms', 'Platforms')}
         {btn('menu', 'Menu')}
         {btn('tablets', 'Tablets')}
         {btn('settings', 'Settings')}
       </nav>
       {tab === 'close' ? <DayClose token={token} onBlockers={setBlocking} /> : tab === 'reports' ? <Reports token={token} />
         : tab === 'settle' ? <Settlements token={token} /> : tab === 'menu' ? <MenuEditor token={token} onDirty={onMenuDirty} />
-        : tab === 'settings' ? <Settings token={token} /> : <Tablets token={token} thisDeviceId={deviceId} />}
+        : tab === 'settings' ? <Settings token={token} /> : tab === 'platforms' ? <Platforms token={token} /> : <Tablets token={token} thisDeviceId={deviceId} />}
       {leaveTo && (
         <Modal title="Leave without saving?" onClose={() => setLeaveTo(null)}>
           <p>Your menu changes are not saved. Leaving loses them.</p>

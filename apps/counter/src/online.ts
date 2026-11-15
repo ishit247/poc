@@ -8,6 +8,8 @@ export interface OnlineOrder {
   status: 'received' | 'accepted' | 'preparing' | 'ready' | 'handed_over' | 'rejected' | 'cancelled' | 'expired';
   acceptBy: string | null; prepMinutes: number | null; customerLabel: string | null; deliveryNote: string | null;
   reason: string | null; priceOverridden: boolean; receivedAt: string; totalPaise: number | string;
+  /** Platform lines with no menu item (not on the sale): the kitchen must still make them. Set by the webhook path. */
+  unmappedLines?: { externalItemId: string; name: string; qty: number; unitPaise: number }[] | null;
 }
 
 export type SignIn = { ok: true; token: string } | { ok: false; message: string };

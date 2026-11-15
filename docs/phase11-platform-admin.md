@@ -35,7 +35,7 @@ PLAN.md refs: sections 5 (roles), 14 (reports), 15 (audit), 18 (operations), 19 
 | 3 | Health and usage views (device last-seen, unsynced, sync rejects, outbox backlog, webhook quiet, app-version skew; counts per month) | done, committed |
 | 4 | Impersonation (reason, 30-minute expiry, read-only only, tenant-visible audit) | done, committed |
 | 5 | `apps/admin` UI, checked in a real browser at tablet size | done (see notes); impersonation, audit viewer and usage screens not yet in the UI |
-| 6 | Mutation checks per gate; fold phase 9 gaps (integration/mapping admin, encrypt webhook secrets); runbook, backups/restore drill, rate limits | **partly done 2026-11-10**, see "Step 6 notes". Done: sealed secrets, backup and restore drill, runbook, rate limits reviewed, CSP header, device revoke screen. Owed: integration/mapping admin (needs partner access, Q1), off-site copies and PITR (Q4), a full mutation run |
+| 6 | Mutation checks per gate; fold phase 9 gaps (integration/mapping admin, encrypt webhook secrets); runbook, backups/restore drill, rate limits | **partly done 2026-11-10**, see "Step 6 notes". Done: sealed secrets, backup and restore drill, runbook, rate limits reviewed, CSP header, device revoke screen, integration/mapping admin (2026-11-15, manager Platforms tab; see build-notes phase 9). Owed: off-site copies and PITR (Q4), a full mutation run |
 
 ## Notes per step
 

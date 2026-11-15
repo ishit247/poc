@@ -292,7 +292,18 @@ const MUTANTS = [
     ['webhook-rejection-not-recorded', 'apps/api/src/routes/webhooks.ts', 'await c.query(`INSERT INTO inbound_event', 'await c.query(`SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::text -- INSERT INTO inbound_event'],
     ['webhook-sender-pretends-success', 'apps/api/src/jobs/outbox.ts', "async () => { throw new Error(`${provider}: partner API not configured`); }", 'async () => {}'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('webhooks.test.ts'))),
-  M('webhook-event-editable', 'db/migrations/0006_integrations.sql', 'REVOKE UPDATE, DELETE, TRUNCATE ON inbound_event FROM pos_app;', '', API_TESTS('webhooks.test.ts')),
+  // --- phase 9 UI: manager integration and item-map routes (routes/integrations.ts)
+  M('integ-any-outlet', 'apps/api/src/routes/integrations.ts', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);",
+    "if (p.kind !== 'user') return notFound(reply);", API_TESTS('integrations.test.ts'), true),
+  ...[
+    ['integ-device-any-outlet', 'FROM device WHERE id = $2 AND outlet_id = $1 AND revoked_at IS NULL', 'FROM device WHERE id = $2 AND $1::uuid IS NOT NULL AND revoked_at IS NULL'],
+    ['integ-user-any-outlet', 'WHERE u.id = $3 AND uo.outlet_id = $1 AND uo.deleted_at IS NULL AND u.active) AS usr', 'WHERE u.id = $3 AND $1::uuid IS NOT NULL AND uo.deleted_at IS NULL AND u.active) AS usr'],
+    ['integ-secret-cleared-when-omitted', 'webhook_secret_sealed = COALESCE($6, webhook_secret_sealed)', "webhook_secret_sealed = COALESCE($6, 'v1:' || repeat('A', 40))"],
+    ['integ-secret-returned', 'enabled, last_event_at AS "lastEventAt"\n           FROM outlet_integration', 'enabled, last_event_at AS "lastEventAt", webhook_secret_sealed AS "secretSealed"\n           FROM outlet_integration'],
+    ['itemmap-delete-any-outlet', 'DELETE FROM item_channel_map WHERE id = $1 AND outlet_id = $2', 'DELETE FROM item_channel_map WHERE id = $1 AND $2::uuid IS NOT NULL'],
+    ['itemmap-unmapped-includes-mapped', "m.external_item_id = l->>'externalItemId')", "m.external_item_id = l->>'externalItemId' AND false)"],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/integrations.ts', from, to, API_TESTS('integrations.test.ts'))),
+  M('webhook-event-editable', 'db/migrations/0006_integrations.sql','REVOKE UPDATE, DELETE, TRUNCATE ON inbound_event FROM pos_app;', '', API_TESTS('webhooks.test.ts')),
   // --- phase 11 step 6: the revoke reason is validated before anything changes
   M('revoke-reason-unchecked', 'apps/api/src/routes/auth.ts', 'if (!params.success || !body.success) return bad(reply);', 'if (!params.success) return bad(reply);', API_TESTS('auth.test.ts')),
   // --- phase 11 step 6: sealed secrets (security/crypto.ts and the two sealed columns)
