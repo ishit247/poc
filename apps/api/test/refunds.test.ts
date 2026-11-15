@@ -26,7 +26,7 @@ async function enrol(app: App, tenant: string, email: string, outletName: string
     assert.equal(r.statusCode, 200);
     return { token: r.json().token as string, userId };
   };
-  return { mgr, outletId: o.id as string, deviceId: cred.split('.')[1]!, signIn };
+  return { mgr, cred, outletId: o.id as string, deviceId: cred.split('.')[1]!, signIn };
 }
 
 let seq = Date.now() % 100_000; // receipts are unique per device per day
@@ -173,6 +173,33 @@ test('whose: another cashier’s shift, a closed shift, another tablet, an onlin
     assert.equal(r.body, nothing.body, `${name}: response distinguishes "not yours" from "does not exist"`);
     assert.equal(await statusOf(tenant, id), 'paid', `${name}: refunded anyway`);
   }
+});
+
+test('expected cash: a cash refund leaves the drawer at force-close, a UPI one does not; pull tells only that tablet', async () => {
+  const app = buildApp();
+  const w = await enrol(app, A, 'a1@example.test', 'School 1 Canteen');
+  const cashier = await w.signIn('School 1 Canteen cashier');
+  const shift = await openShift(A, w.outletId, w.deviceId, cashier.userId); // float 100.00
+  const split = await paidSale(A, w.outletId, w.deviceId, cashier.userId, shift); // 6.00 cash + 4.50 UPI
+  await paidSale(A, w.outletId, w.deviceId, cashier.userId, shift, { pays: [['cash', 1050]] }); // kept
+  const cursor = await withTenant(A, async (c) => (await c.query('SELECT v::int FROM tenant_version')).rows[0].v as number);
+  assert.equal((await refund(app, cashier.token, split)).statusCode, 200);
+
+  // Only the refunding tablet's pull carries the refund, one row per method.
+  const pulled = async (cred: string) => ((await app.inject({ method: 'GET', url: `/sync/pull?cursor=${cursor}`, headers: { authorization: `Device ${cred}` } })).json()
+    .changes as { type: string; data: { saleId: string; method: string; amountPaise: number } }[]).filter((c) => c.type === 'refund');
+  assert.deepEqual((await pulled(w.cred)).map((c) => c.data).sort((a, b) => a.method.localeCompare(b.method)),
+    [{ saleId: split, method: 'cash', amountPaise: 600 }, { saleId: split, method: 'upi', amountPaise: 450 }]);
+  const other = await enrol(app, A, 'a1@example.test', 'School 1 Canteen');
+  assert.deepEqual(await pulled(other.cred), [], 'another tablet of the same outlet');
+
+  // 100.00 + 6.00 + 10.50 cash taken, 6.00 cash paid back: 110.50 expected. The UPI 4.50 never touched the drawer.
+  const fc = await app.inject({ method: 'POST', url: `/outlets/${w.outletId}/shifts/${shift}/force-close`, headers: bearer(w.mgr), payload: { countedCashPaise: 11_050 } });
+  assert.equal(fc.statusCode, 200, fc.body);
+  assert.deepEqual([fc.json().expectedCashPaise, fc.json().variancePaise], [11_050, 0]);
+  // The drawer is closed: no refund can follow and move a figure already fixed.
+  const late = await paidSale(A, w.outletId, w.deviceId, cashier.userId, shift);
+  assert.equal((await refund(app, cashier.token, late)).statusCode, 404);
 });
 
 test('who: a waiter and a manager’s web session cannot refund', async () => {

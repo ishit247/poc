@@ -4,9 +4,16 @@
 import { formatRupees, paise } from './money.ts';
 import { RECEIPT_WIDTH } from './receipt-text.ts';
 
-/** Cash that should be in the drawer: the float plus the cash part of every payment. Change handed back is already out of `amountPaise`. */
-export function expectedCash(openingCashPaise: number, payments: readonly { method: string; amountPaise: number }[]): number {
-  return openingCashPaise + payments.filter((p) => p.method === 'cash').reduce((a, p) => a + p.amountPaise, 0);
+type Money = readonly { method: string; amountPaise: number }[];
+const cashIn = (xs: Money) => xs.filter((x) => x.method === 'cash').reduce((a, x) => a + x.amountPaise, 0);
+
+/**
+ * Cash that should be in the drawer: the float, plus the cash part of every payment, less the cash refunds paid out of
+ * it (docs/refunds-plan.md). Change handed back is already out of `amountPaise`; a UPI refund is paid back outside the
+ * app and does not touch the drawer. Server: shift close (ingest.ts) and force-close (routes/dayclose.ts). Tablet: the slip (shift.ts).
+ */
+export function expectedCash(openingCashPaise: number, payments: Money, refunds: Money): number {
+  return openingCashPaise + cashIn(payments) - cashIn(refunds);
 }
 
 export interface ShiftSlipView {
@@ -25,6 +32,11 @@ export interface ShiftSlipView {
    * stood. Not in the sales above; the cash IS in `expectedCash` (it is in the drawer). Absent on older slips.
    */
   refused?: { count: number; cashPaise: number; upiPaise: number };
+  /**
+   * Sales of this shift refunded by its cashier. Their payments are still in the sales above; the cash part left the
+   * drawer, so it is OUT of `expectedCash`. UPI is paid back outside the app. Absent on older slips.
+   */
+  refunds?: { count: number; cashPaise: number; upiPaise: number };
   countedCashPaise: number;
   /** counted - expected. Negative is short. */
   variancePaise: number;
@@ -60,6 +72,11 @@ export function renderShiftSlip(v: ShiftSlipView, width = RECEIPT_WIDTH): string
     if (v.refused.cashPaise) out.push(row(' Cash, in drawer', money(v.refused.cashPaise), width));
     if (v.refused.upiPaise) out.push(row(' UPI', money(v.refused.upiPaise), width));
     out.push('Refund or hand to manager.');
+  }
+  if (v.refunds && v.refunds.count > 0) {
+    out.push(rule, `Refunded (${v.refunds.count})`);
+    if (v.refunds.cashPaise) out.push(row(' Cash, from drawer', money(-v.refunds.cashPaise), width));
+    if (v.refunds.upiPaise) out.push(row(' UPI, paid back', money(v.refunds.upiPaise), width));
   }
   out.push(
     rule,

@@ -20,6 +20,7 @@ import { withTenant } from './db.js';
 import { applyOrderChange, applyOrderOpened, lockVisit, payOrder, settleVisit } from './order-ingest.js';
 import { Defer, Reject, RejectUnrecorded } from './sync-outcome.js';
 import { cashOf, refusedPaymentsOf } from './refused.js';
+import { refundsOf } from './refunds.js';
 
 export interface Envelope { eventId: string; seq: number; createdAt: string; payload: unknown }
 export type Status = 'applied' | 'duplicate' | 'rejected' | 'deferred';
@@ -294,7 +295,8 @@ async function applyShiftClosed(c: pg.PoolClient, p: DevicePrincipal, ev: ShiftC
   // Payments refused for this drawer (step 7d) put real cash in it: expected counts them, refused_cash_paise says how much.
   // The tablet sends events in its own order, so every payment it took on this shift was decided before this close.
   const refused = await refusedPaymentsOf(c, ev.shiftId, p.deviceId); // shiftOf checked that this is the shift's device
-  const expected = expectedCash(shift.opening, [...pays.rows, ...refused]);
+  // Cash refunds this cashier paid out of the drawer (docs/refunds-plan.md). The refunded sales' payments stay in `pays`.
+  const expected = expectedCash(shift.opening, [...pays.rows, ...refused], await refundsOf(c, ev.shiftId));
   await c.query(
     `UPDATE shift SET closed_at = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint,
                       refused_cash_paise = $5::bigint WHERE id = $1`,

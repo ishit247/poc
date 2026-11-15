@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import { expectedCash, renderShiftSlip, RECEIPT_WIDTH, type ShiftSlipView } from '../src/index.ts';
 
 test('expected cash is the float plus the cash part only; UPI and change are not in the drawer', () => {
-  assert.equal(expectedCash(50_000, []), 50_000);
+  assert.equal(expectedCash(50_000, [], []), 50_000);
   // A 1,050 bill paid 1,000 cash (tendered 1,500, so 500 change was handed back) + 50 UPI: the drawer gained 1,000.
-  assert.equal(expectedCash(50_000, [{ method: 'cash', amountPaise: 1000 }, { method: 'upi', amountPaise: 50 }]), 51_000);
+  assert.equal(expectedCash(50_000, [{ method: 'cash', amountPaise: 1000 }, { method: 'upi', amountPaise: 50 }], []), 51_000);
+});
+
+test('a cash refund leaves the drawer; a UPI refund is paid back outside it', () => {
+  const pays = [{ method: 'cash', amountPaise: 1000 }, { method: 'upi', amountPaise: 50 }];
+  assert.equal(expectedCash(50_000, pays, [{ method: 'cash', amountPaise: 1000 }, { method: 'upi', amountPaise: 50 }]), 50_000);
+  assert.equal(expectedCash(50_000, pays, [{ method: 'upi', amountPaise: 50 }]), 51_000);
 });
 
 const view: ShiftSlipView = {
@@ -23,4 +29,13 @@ test('the shift slip fits 32 columns, shows the variance, and says when records 
   assert.ok(renderShiftSlip({ ...view, unsyncedCount: 3 }).some((l) => /3 records not yet sent/.test(l)));
   assert.ok(renderShiftSlip({ ...view, variancePaise: 0 }).some((l) => l.startsWith('Cash matches')));
   assert.ok(renderShiftSlip({ ...view, variancePaise: 100 }).some((l) => /^OVER\s+1\.00$/.test(l)));
+});
+
+test('the slip lists refunds: cash out of the drawer, UPI paid back; nothing when there are none', () => {
+  const lines = renderShiftSlip({ ...view, refunds: { count: 2, cashPaise: 600, upiPaise: 450 } });
+  assert.ok(lines.every((l) => l.length <= RECEIPT_WIDTH), lines.join('\n'));
+  assert.ok(lines.includes('Refunded (2)'));
+  assert.ok(lines.some((l) => /^ Cash, from drawer\s+-6\.00$/.test(l)), lines.join('\n'));
+  assert.ok(lines.some((l) => /^ UPI, paid back\s+4\.50$/.test(l)));
+  assert.ok(!renderShiftSlip({ ...view, refunds: { count: 0, cashPaise: 0, upiPaise: 0 } }).some((l) => /Refunded/.test(l)));
 });

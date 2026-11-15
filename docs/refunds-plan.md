@@ -2,7 +2,7 @@
 
 # Refunds — plan
 
-Status: **step 1 done 2026-11-15; steps 2 and 3 not started.** Model plan: **HIGH** (money, the cash drawer, sync,
+Status: **steps 1 and 2 done 2026-11-15; step 3 not started.** Model plan: **HIGH** (money, the cash drawer, sync,
 authorisation).
 
 ## Decided (PLAN 17 Q15, revised 2026-11-15; 7.6; invariant 4)
@@ -35,10 +35,30 @@ authorisation).
   six "whose" cases, waiter and web manager), `db/test/trading.test.mjs` (refund invariant). Mutants `refund-*` in
   `scripts/mutation-checks.mjs`.
 
-## Gaps until step 2
+## What step 2 built
 
-- `expectedCash` does not yet subtract cash refunds, so a drawer that paid a cash refund closes **short** by that
-  amount on both server and slip. No screen calls the route yet, so this cannot happen outside tests.
+- **One rule:** `expectedCash(opening, payments, refunds)` in `packages/shared/src/shift.ts` takes the refunds as a
+  required argument and subtracts their cash part. A refunded sale's payments stay in `payments` on both sides.
+- **Server:** shift close (`ingest.ts`) and force-close (`routes/dayclose.ts`) pass `refundsOf(c, shiftId)`
+  (`apps/api/src/refunds.ts`). Both lock the shift first, as the route does, so no refund lands after a close.
+- **Schema:** `refund` gained `version`/`updated_at` (`app.make_versioned`, in 0004 in place) and an index on
+  `(device_id, version)`. Pull sends a tablet its own refund rows (`type: 'refund'`, one per method).
+- **Tablet:** `LocalSale` has status `refunded` and `refunds[]`. `apps/counter/src/refund.ts`: `whyNotRefundable`
+  (the route's rule mirrored, plus "not yet sent"), `refundSale` (calls the route, stores the answer), `applyRefund`
+  (merge by method; used by the answer and by pull). The slip counts refunded sales as taken and lists `Refunded (n)`:
+  cash from drawer, UPI paid back.
+- **Tests:** `packages/shared/test/shift.test.ts`, `apps/api/test/refunds.test.ts` (force-close, pull scope, no
+  refund after close), `apps/counter/test/refund.test.ts` (slip = server on close, lost answer repaired by pull,
+  manager close, offer rule). Mutants `refund-cash-kept-in-drawer`, `refund-*-ignored`, `refund-of-any-shift`,
+  `refund-pull-any-device`, `tab-refund-*`.
+
+## Notes for step 3
+
+- The screen gets a token from `signInOnline` (`online.ts`), then calls `refundSale`; it shows `whyNotRefundable`
+  as the disabled reason. The PIN is the cashier's, typed again.
+- A slip printed while a refund's answer was lost is short by that refund until a pull; the server's figure is right.
+- Day close's drawer section: the shift row stores no refund total. Either add `refunded_cash_paise` to `shift`
+  (written at close, like `refused_cash_paise`) or sum `refund` by shift in the day-close query.
 
 ## Remaining design
 
@@ -54,13 +74,12 @@ authorisation).
    reason, a confirmation naming the amount by method ("₹6.00 cash from this drawer, ₹4.50 UPI to pay back"), then the
    PIN. Mirror the rule in the route's comment: offer it only for this tablet's open shift. Day close: refunds line
    exists; add cash refunds to the drawer section. Receipt: optional refund slip (58 mm).
-7. **Tests still owed.** Expected cash on close and force-close with a cash refund; tablet slip matches the server.
-   Browser: refund on a tablet at 1024 and 820, then close the drawer.
+7. **Tests still owed.** *(Close, force-close and slip = server: built in step 2.)* Browser: refund on a tablet at 1024 and 820, then close the drawer.
 
 ## Steps
 
 | # | Step | State |
 |---|------|-------|
 | 1 | Schema, seed, route, API and DB tests, mutants | done 2026-11-15 |
-| 2 | `expectedCash` with refunds: server close paths, tablet store and slip; tests and mutants | not started |
+| 2 | `expectedCash` with refunds: server close paths, tablet store and slip; tests and mutants | done 2026-11-15 |
 | 3 | Cashier screen, refund slip, day-close drawer line; browser check | not started |

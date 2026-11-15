@@ -174,7 +174,7 @@ const MUTANTS = [
     ['forceclose-any-outlet', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);\n    return withTenant(p.tenantId, async (c) => {\n      // Lock", "if (p.kind !== 'user') return notFound(reply);\n    return withTenant(p.tenantId, async (c) => {\n      // Lock"],
     ['forceclose-shift-of-other-outlet', 'AND outlet_id = $2 FOR UPDATE', 'AND $2::uuid IS NOT NULL FOR UPDATE'],
     ['forceclose-twice', 'if (s.closed_at) return reply.code(409).send({ error: \'already closed\' });\n      const pays', 'const pays'],
-    ['forceclose-expected-ignores-sales', 'expectedCash(s.opening, [...pays.rows, ...refused])', 'expectedCash(s.opening, [...refused])'],
+    ['forceclose-expected-ignores-sales', 'expectedCash(s.opening, [...pays.rows, ...refused],', 'expectedCash(s.opening, [...refused],'],
     ['forceclose-no-audit', "action: 'shift.force_close'", "action: 'shift.noop'"],
     ['forceclose-negative-count', 'countedCashPaise: z.number().int().min(0).max(100_000_000)', 'countedCashPaise: z.number().int().max(100_000_000)'],
   ].map(([id, from, to]) => M(id, 'apps/api/src/routes/dayclose.ts', from, to, API_TESTS('sync-push.test.ts'))),
@@ -655,9 +655,9 @@ const MUTANTS = [
   ].map(([id, from, to]) => M(id, TRADING, from, to, DB_TESTS)),
   // --- phase 12 step 7d: a payment the server refused (already_paid / sale_void) on the tablet that took it
   ...[
-    ['rf-close-ignores-refused', 'apps/api/src/ingest.ts', 'const expected = expectedCash(shift.opening, [...pays.rows, ...refused]);', 'const expected = expectedCash(shift.opening, pays.rows);'],
+    ['rf-close-ignores-refused', 'apps/api/src/ingest.ts', 'const expected = expectedCash(shift.opening, [...pays.rows, ...refused],', 'const expected = expectedCash(shift.opening, pays.rows,'],
     ['rf-close-refused-unrecorded', 'apps/api/src/ingest.ts', '[ev.shiftId, ev.at, ev.countedCashPaise, expected, cashOf(refused)]', '[ev.shiftId, ev.at, ev.countedCashPaise, expected, 0]'],
-    ['rf-force-close-ignores-refused', 'apps/api/src/routes/dayclose.ts', 'const expected = expectedCash(s.opening, [...pays.rows, ...refused]);', 'const expected = expectedCash(s.opening, pays.rows);'],
+    ['rf-force-close-ignores-refused', 'apps/api/src/routes/dayclose.ts', 'const expected = expectedCash(s.opening, [...pays.rows, ...refused],', 'const expected = expectedCash(s.opening, pays.rows,'],
     ['rf-cash-any-reason', 'apps/api/src/refused.ts', /AND e\.reason = ANY\(\$3::text\[\]\)(?=\r?\n\s+AND e\.payload->>'shiftId' = \$1)/, 'AND $3::text[] IS NOT NULL'],
     ['rf-cash-any-shift', 'apps/api/src/refused.ts', "AND e.payload->>'shiftId' = $1`", "AND $1::text IS NOT NULL`"],
     ['rf-cash-any-device', 'apps/api/src/refused.ts', "WHERE e.device_id = $2 AND e.type = 'payment.taken'", "WHERE $2::uuid IS NOT NULL AND e.type = 'payment.taken'"],
@@ -674,8 +674,8 @@ const MUTANTS = [
   ...[
     ['tab-rf-not-marked', 'apps/counter/src/sync.ts', "if (res.status === 'rejected' && res.reason) await markRefused(byId.get(res.eventId)!, res.reason);", ''],
     ['tab-rf-any-reason', 'apps/counter/src/refused.ts', " || !REFUSED_REASONS.includes(reason)) return false;", ') return false;'],
-    ['tab-rf-slip-ignores-refused', 'apps/counter/src/shift.ts', 'expectedCash(shift.openingCashPaise, [...payments, ...refusedPays])', 'expectedCash(shift.openingCashPaise, payments)'],
-    ['tab-rf-counted-as-sale', 'apps/counter/src/shift.ts', "const sales = mine.filter((s) => s.status === 'paid');", "const sales = mine.filter((s) => s.status === 'paid' || s.status === 'refused');"],
+    ['tab-rf-slip-ignores-refused', 'apps/counter/src/shift.ts', 'expectedCash(shift.openingCashPaise, [...payments, ...refusedPays], refunds)', 'expectedCash(shift.openingCashPaise, payments, refunds)'],
+    ['tab-rf-counted-as-sale', 'apps/counter/src/shift.ts', "const sales = mine.filter((s) => s.status === 'paid' || s.status === 'refunded');", "const sales = mine.filter((s) => s.status === 'paid' || s.status === 'refunded' || s.status === 'refused');"],
     ['tab-rf-ack-without-server', 'apps/counter/src/refused.ts', "if (!r.ok) throw new Error(r.status === 404", "if (false) throw new Error(r.status === 404"],
     ['tab-rf-ack-keeps-parked', 'apps/counter/src/refused.ts', '    await db.outbox.where(\'eventId\').equals(now.refused.eventId).delete();', ''],
     ['tab-rf-pull-deletes', 'apps/counter/src/order.ts', "if (local?.status !== 'open') continue;", "if (!local || local.status === 'paid' || local.status === 'void') continue;"],
@@ -701,6 +701,24 @@ const MUTANTS = [
     ['refund-schema-cash-no-drawer', "CHECK (method <> 'cash' OR (shift_id IS NOT NULL AND device_id IS NOT NULL)),", ''],
     ['refund-schema-editable', 'REVOKE UPDATE, DELETE, TRUNCATE ON refund FROM pos_app;', ''],
   ].map(([id, from, to]) => M(id, TRADING, from, to, DB_TESTS)),
+  // --- refunds step 2: expected cash less cash refunds, on both sides; the tablet store and its pull repair
+  M('refund-cash-kept-in-drawer', 'packages/shared/src/shift.ts', 'return openingCashPaise + cashIn(payments) - cashIn(refunds);', 'return openingCashPaise + cashIn(payments);',
+    { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/shift.test.ts'], noDb: true }),
+  ...[
+    ['refund-force-close-ignored', 'apps/api/src/routes/dayclose.ts', 'await refundsOf(c, ps.data.shiftId)', '[]'],
+    ['refund-of-any-shift', 'apps/api/src/refunds.ts', 'FROM refund WHERE shift_id = $1', 'FROM refund WHERE $1::uuid IS NOT NULL'],
+    ['refund-pull-any-device', 'apps/api/src/routes/sync.ts', 'FROM refund WHERE version > $1 AND device_id = $4', 'FROM refund WHERE version > $1 AND $4::uuid IS NOT NULL'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('refunds.test.ts'))),
+  ...[
+    ['refund-close-ignored', 'apps/api/src/ingest.ts', 'await refundsOf(c, ev.shiftId)', '[]'],
+    ['tab-refund-slip-ignored', 'apps/counter/src/shift.ts', '[...payments, ...refusedPays], refunds);', '[...payments, ...refusedPays], []);'],
+    ['tab-refund-sale-dropped', 'apps/counter/src/shift.ts', "const sales = mine.filter((s) => s.status === 'paid' || s.status === 'refunded');", "const sales = mine.filter((s) => s.status === 'paid');"],
+    ['tab-refund-answer-unstored', 'apps/counter/src/refund.ts', "  await db.transaction('rw', db.sales, () => applyRefund(sale.id, rows));\n", ''],
+    ['tab-refund-pull-ignored', 'apps/counter/src/sync.ts', "if (c.type === 'refund') await applyRefund(", "if (c.type === 'refund') void ("],
+    ['tab-refund-any-shift', 'apps/counter/src/refund.ts', 'if (!shift || sale.shiftId !== shift.id)', 'if (!shift)'],
+    ['tab-refund-any-cashier', 'apps/counter/src/refund.ts', 'if (shift.userId !== actor.id) return', "if (shift.userId === '') return"],
+    ['tab-refund-unsent', 'apps/counter/src/refund.ts', "(r.payload as { saleId?: string }).saleId === sale.id).count()) > 0", "(r.payload as { saleId?: string }).saleId === sale.id).count()) > 1e9"],
+  ].map(([id, file, from, to]) => M(id, file, from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/refund.test.ts'] })),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });

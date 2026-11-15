@@ -85,6 +85,12 @@ const PULL_SQL = `
          jsonb_build_object('closedAt', closed_at, 'countedCashPaise', counted_cash_paise::int,
                             'expectedCashPaise', expected_cash_paise::int, 'variancePaise', variance_paise::int)
     FROM shift WHERE version > $1 AND device_id = $4 AND closed_by IS NOT NULL
+  UNION ALL
+  -- THIS tablet's own refunds (docs/refunds-plan.md), one row per method: the route's answer may never have arrived,
+  -- and the slip's expected cash must still drop by the cash paid out.
+  SELECT 'refund', id, version, false,
+         jsonb_build_object('saleId', sale_id, 'method', method, 'amountPaise', amount_paise::int)
+    FROM refund WHERE version > $1 AND device_id = $4
   ORDER BY version
   LIMIT ${PAGE + 1}`;
 

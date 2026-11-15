@@ -25,8 +25,13 @@ export interface LocalSale {
    * (`already_paid`: another device paid the table first; `sale_void`: another device voided the order first). Not paid,
    * not void: its receipt number stays used, its cash stays in this drawer's expected figure, and `refused` says why.
    */
-  status: 'open' | 'paid' | 'void' | 'refused';
+  status: 'open' | 'paid' | 'void' | 'refused' | 'refunded';
   refused?: { reason: string; eventId: string; at: string; ackAt?: string };
+  /**
+   * 'refunded' (docs/refunds-plan.md): the server refunded this paid sale, one row per method. Written from the refund
+   * route's answer (refund.ts), or from pull when that answer was lost (sync.ts). `payments` stays as taken.
+   */
+  refunds?: { method: 'cash' | 'upi'; amountPaise: number }[];
   createdBy: string;
   createdByName: string;
   channel: 'counter';

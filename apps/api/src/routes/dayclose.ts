@@ -7,6 +7,7 @@ import { withTenant } from '../db.js';
 import { expectedCash } from '@pos/shared';
 import { audit } from '../audit.js';
 import { cashOf, REFUSED_REASONS, refusedPaymentsOf, refusedReceipts } from '../refused.js';
+import { refundsOf } from '../refunds.js';
 
 const params = z.object({ id: z.string().uuid() });
 const query = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict();
@@ -182,7 +183,7 @@ export const dayCloseRoutes: FastifyPluginAsync = async (app) => {
         `SELECT pay.method, pay.amount_paise::int AS "amountPaise" FROM payment pay JOIN sale sl ON sl.id = pay.sale_id WHERE sl.shift_id = $1`, [ps.data.shiftId]);
       // Cash taken for payments the server refused (step 7d) is in the drawer too; see refused.ts.
       const refused = await refusedPaymentsOf(c, ps.data.shiftId, s.device_id);
-      const expected = expectedCash(s.opening, [...pays.rows, ...refused]);
+      const expected = expectedCash(s.opening, [...pays.rows, ...refused], await refundsOf(c, ps.data.shiftId)); // cash refunds left the drawer
       const counted = b.data.countedCashPaise;
       await c.query(
         `UPDATE shift SET closed_at = now(), closed_by = $2, counted_cash_paise = $3::bigint, expected_cash_paise = $4::bigint, variance_paise = $3::bigint - $4::bigint,

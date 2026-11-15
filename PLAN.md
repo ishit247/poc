@@ -42,7 +42,7 @@ day close, reports). Smaller gaps per phase are in [docs/build-notes.md](docs/bu
 | 5 | Printing | browser print, 58 mm layout, reprint trail | layout tests, mutants; reprint in `browser-flow` | **nothing printed on the real ATPOS H58BT**; no WebUSB, Bluetooth, ESC/POS or drawer kick | [build-notes.md](docs/build-notes.md) |
 | 6 | Shifts, day close | yes, incl. manager force-close and the day-close void screen | API tests, mutants; `browser-flow` | days closed out of date order may mis-list late adjustments | [build-notes.md](docs/build-notes.md) |
 | 7 | Online orders (manual provider) | yes | API tests, mutants; queue 23/23 and settlements 18/18 in a browser; `browser-flow` | — | [build-notes.md](docs/build-notes.md) |
-| 8 | Reports | yes; day close's separate "online not completed" line (2026-11-15, Q16) | 5 tests, 33 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; refunds: route only, no screen yet ([plan](docs/refunds-plan.md)) | [build-notes.md](docs/build-notes.md) |
+| 8 | Reports | yes; day close's separate "online not completed" line (2026-11-15, Q16) | 5 tests, 33 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; refunds: route and expected cash, no screen yet ([plan](docs/refunds-plan.md)) | [build-notes.md](docs/build-notes.md) |
 | 9 | Aggregator adapters | **scaffold** (placeholder contract); manager Platforms tab (integration setup, item mapping) and the counter's unmapped-line note done 2026-11-15 | webhook tests; secrets sealed (phase 11 step 6); `integrations.test.ts` 3/3, 7/7 mutants, `browser-platforms.mjs` 29/29 (Edge, 1024 and 820 wide) | everything against real Zomato/Swiggy; no menu or stock push; Platforms tab not in Safari/Firefox or on a real tablet | [build-notes.md](docs/build-notes.md) |
 | 10 | Dynamic UPI | no (optional) | | | |
 | 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke and rename screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 | off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
@@ -86,7 +86,9 @@ Fixed in this pass (the 2026-11-06 findings):
    background, to a log, never two runs at once), off-site backups and PITR (Q4); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
    additive-only migrations (section 18) before the first real tenant.
 3. Refunds, three steps, HIGH: [docs/refunds-plan.md](docs/refunds-plan.md) (decisions in section 17, Q15). Step 1
-   (schema, route, tests, mutants) done 2026-11-15; next is step 2, expected cash.
+   (schema, route, tests, mutants) and step 2 (expected cash less cash refunds, both sides; tablet store and pull)
+   done 2026-11-15; next is step 3, the cashier's Refund screen (STANDARD), which `refundSale`/`whyNotRefundable` in
+   `apps/counter/src/refund.ts` are ready for.
 4. Phase 9 against real partner APIs once access is known (Q1): replace the placeholder payload and signature, the
    senders, and add menu/stock push.
 

@@ -7,6 +7,7 @@ import { syncItemImages } from './itemImages.ts';
 import { applyVisits, localSettings, type PulledVisit } from './order.ts';
 import { watchStream } from './stream.ts';
 import { markRefused } from './refused.ts';
+import { applyRefund } from './refund.ts';
 
 // The server refused this tablet's credential (401): it was revoked, or the server no longer knows it. The app registers
 // one handler that sends the user back to the set-up screen.
@@ -38,9 +39,11 @@ export async function pull(device: DeviceInfo): Promise<number> {
     checkAuth(r);
     if (!r.ok) throw new Error(`pull failed: ${r.status}`);
     const j = (await r.json()) as { cursor: number; hasMore: boolean; changes: Change[] };
-    await db.transaction('rw', db.entities, db.meta, db.shifts, async () => {
+    await db.transaction('rw', [db.entities, db.meta, db.shifts, db.sales], async () => {
       for (const c of j.changes) {
-        if (c.type === 'shift') {
+        // This tablet's own refund, in case the route's answer never arrived (refund.ts). Not kept as an entity.
+        if (c.type === 'refund') await applyRefund(c.data.saleId, [{ method: c.data.method, amountPaise: c.data.amountPaise }]);
+        else if (c.type === 'shift') {
           // A manager closed this tablet's drawer. If we still think it is open, close it with their count.
           const s = await db.shifts.get(c.id);
           if (s && !s.closedAt) {

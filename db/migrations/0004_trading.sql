@@ -238,6 +238,10 @@ CREATE TABLE refund (
   device_id    uuid,
   refunded_by  uuid NOT NULL,
   refunded_at  timestamptz NOT NULL DEFAULT now(),
+  -- Pull (routes/sync.ts) sends a tablet its own refunds, so its shift slip agrees with the server even when the
+  -- route's answer was lost. Stamped by app.add_versioning below.
+  version      bigint NOT NULL DEFAULT 0,
+  updated_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (sale_id, method),
   -- Cash leaves a particular drawer, so a cash refund always names the shift and tablet it came from.
   CHECK (method <> 'cash' OR (shift_id IS NOT NULL AND device_id IS NOT NULL)),
@@ -247,7 +251,8 @@ CREATE TABLE refund (
   FOREIGN KEY (tenant_id, refunded_by) REFERENCES app_user(tenant_id, id)
 );
 CREATE INDEX refund_shift_ix ON refund (shift_id) WHERE shift_id IS NOT NULL;
-SELECT app.enable_tenant_rls('refund');
+CREATE INDEX refund_pull_ix ON refund (device_id, version);
+SELECT app.make_versioned('refund');
 REVOKE UPDATE, DELETE, TRUNCATE ON refund FROM pos_app;
 
 -- The sync ledger: one row per event the server has DECIDED (applied or rejected), keyed by the

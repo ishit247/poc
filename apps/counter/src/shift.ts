@@ -76,18 +76,22 @@ export async function managerCloseShift(args: { device: DeviceInfo; token: strin
 /** The slip for a closed shift, from what this tablet holds. Totals are the tablet's own until its outbox is empty. */
 export async function slipFor(shift: LocalShift, device: DeviceInfo): Promise<ShiftSlipView> {
   const mine = (await db.sales.toArray()).filter((s) => s.shiftId === shift.id);
-  const sales = mine.filter((s) => s.status === 'paid');
+  // A refunded sale was a sale of this shift: its payments count as taken (as the server's do), and its refunds come out.
+  const sales = mine.filter((s) => s.status === 'paid' || s.status === 'refunded');
   const payments = sales.flatMap((s) => s.payments);
+  const refunded = mine.filter((s) => s.status === 'refunded');
+  const refunds = refunded.flatMap((s) => s.refunds ?? []);
   // Refused payments (step 7d) are not sales, but their cash went into this drawer: expected counts it, as the server does.
   const refused = mine.filter((s) => s.status === 'refused');
   const refusedPays = refused.flatMap((s) => s.payments);
-  const expected = expectedCash(shift.openingCashPaise, [...payments, ...refusedPays]);
-  const sumOf = (ps: typeof payments, m: string) => ps.filter((p) => p.method === m).reduce((a, p) => a + p.amountPaise, 0);
+  const expected = expectedCash(shift.openingCashPaise, [...payments, ...refusedPays], refunds);
+  const sumOf = (ps: readonly { method: string; amountPaise: number }[], m: string) => ps.filter((p) => p.method === m).reduce((a, p) => a + p.amountPaise, 0);
   const sum = (m: string) => sumOf(payments, m);
   return {
     outletName: device.outletName, counterCode: device.counterCode, cashier: shift.userName, openedAt: shift.openedAt, closedAt: shift.closedAt!,
     timeZone: device.timezone, openingCashPaise: shift.openingCashPaise, cashSalesPaise: sum('cash'), upiSalesPaise: sum('upi'), salesCount: sales.length,
     refused: { count: refused.length, cashPaise: sumOf(refusedPays, 'cash'), upiPaise: sumOf(refusedPays, 'upi') },
+    refunds: { count: refunded.length, cashPaise: sumOf(refunds, 'cash'), upiPaise: sumOf(refunds, 'upi') },
     countedCashPaise: shift.countedCashPaise!, variancePaise: shift.countedCashPaise! - expected,
     unsyncedCount: await db.outbox.filter((r) => !r.rejected).count(),
   };
