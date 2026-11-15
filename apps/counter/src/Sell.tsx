@@ -3,6 +3,7 @@ import { liveQuery } from 'dexie';
 import { addItem, formatRupees, paise, setQty, totals, type BillDiscount, type Cart, type MenuEntry, type Tender } from '@pos/shared';
 import { db, type DeviceInfo, type LocalSale } from './db.ts';
 import type { MenuView } from './menu.ts';
+import { useT } from './i18n.ts';
 import { createSale, discountProblem, payOrder, type Actor } from './sale.ts';
 import { addToOrder, openOrder, orderById, orderDiscount, orderDue, setLineQty, setOrderDiscount, tableMode, tableStates, voidOrder } from './order.ts';
 import { useItemImageUrl } from './itemImages.ts';
@@ -36,6 +37,7 @@ const svgProps = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', st
 interface ShownLine { key: string; name: string; qty: number; netPaise: number; more: () => void; less: () => void }
 
 export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor; menu: MenuView }) {
+  const t = useT();
   const [cart, setCart] = useState<Cart>([]);          // draft: items not yet on any order (a cafe's pay-now cart)
   const [orderId, setOrderId] = useState<string | null>(null); // the running order being edited, if any
   const [tableId, setTableId] = useState<string | null>(null); // restaurant: the table chosen (its order, or the one to open)
@@ -77,7 +79,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
 
   // The draft cart's discount applies only while it still fits the bill and the cap; otherwise it is shown as not applied.
   const draftGross = totals(cart, menu.settings);
-  const draftWhy = draftDiscount ? (cart.length ? discountProblem(draftGross.subtotal, draftDiscount, menu.settings) : 'There is nothing on this bill to discount.') : null;
+  const draftWhy = draftDiscount ? (cart.length ? discountProblem(draftGross.subtotal, draftDiscount, menu.settings) : t('There is nothing on this bill to discount.')) : null;
   const draftApplied = draftDiscount && !draftWhy ? draftDiscount : null;
   const draftT = draftApplied ? totals(cart, menu.settings, draftApplied) : draftGross;
   useEffect(() => { if (cart.length === 0) setDraftDiscount(null); }, [cart.length]);
@@ -92,13 +94,13 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
   const discountRule = inOrder ? orderDiscount(activeOrder) : draftApplied;
   const discountPaise = inOrder ? (saved && !saved.problem ? saved.discountPaise : 0) : draftT.discount;
   const discountNotApplied = inOrder ? saved?.problem ?? null : draftWhy;
-  const noDiscountWhy = actor.role !== 'cashier' ? 'Only a cashier may give a discount.'
-    : (inOrder ? activeOrder.lines.length : cart.length) === 0 ? 'Add items first.'
-    : inOrder && activeOrder.kind !== 'order' ? 'This bill cannot take a discount.'
-    : menu.settings.discountMaxBp === 0 ? 'Discounts are off. A manager can turn them on in Settings.' : undefined;
+  const noDiscountWhy = actor.role !== 'cashier' ? t('Only a cashier may give a discount.')
+    : (inOrder ? activeOrder.lines.length : cart.length) === 0 ? t('Add items first.')
+    : inOrder && activeOrder.kind !== 'order' ? t('This bill cannot take a discount.')
+    : menu.settings.discountMaxBp === 0 ? t('Discounts are off. A manager can turn them on in Settings.') : undefined;
 
   const guard = async (f: () => Promise<void> | void) => {
-    try { await f(); setMessage(''); } catch (e) { setMessage(e instanceof Error ? e.message : 'Not allowed.'); }
+    try { await f(); setMessage(''); } catch (e) { setMessage(e instanceof Error ? e.message : t('Not allowed.')); }
   };
 
   const lines: ShownLine[] = inOrder
@@ -127,7 +129,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     if (inOrder) { await addToOrder({ device, actor, settings: menu.settings, saleId: activeOrder.id, entry }); return; }
     if (mode === 'map') {
       // A restaurant table's order is a running order from its first item.
-      if (!tableId) throw new Error('Choose a table first.');
+      if (!tableId) throw new Error(t('Choose a table first.'));
       const sale = await openOrder({ device, actor, settings: menu.settings, menuVersion: menu.menuVersion, tableId, cart: addItem([], entry, 1, menu.settings) });
       setOrderId(sale.id);
       return;
@@ -192,8 +194,8 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     if (!activeOrder || voiding === null) return;
     try {
       await voidOrder({ device, actor, saleId: activeOrder.id, reason: voiding });
-      setOrderId(null); setVoiding(null); setMessage('Order voided.');
-    } catch (e) { setMessage(e instanceof Error ? e.message : 'Not allowed.'); }
+      setOrderId(null); setVoiding(null); setMessage(t('Order voided.'));
+    } catch (e) { setMessage(e instanceof Error ? e.message : t('Not allowed.')); }
   };
 
   const finish = async (tenders: Tender[], discount: BillDiscount | null) => {
@@ -264,14 +266,14 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
         <ItemPicture sha={x?.imageSha256} />
         <span className="txt">
           <span className="nm">{e.name}</span>
-          <small>{e.available ? <><b className="pr">₹{rs(e.pricePaise)}</b>{x?.code && <> <span className="code" data-testid={`code-${e.name}`}>{x.code}</span></>}</> : 'Sold out'}</small>
+          <small>{e.available ? <><b className="pr">₹{rs(e.pricePaise)}</b>{x?.code && <> <span className="code" data-testid={`code-${e.name}`}>{x.code}</span></>}</> : t('Sold out')}</small>
         </span>
       </button>
     );
   };
 
   const hint = byCode
-    ? exactEntry ? `Add ${exactEntry.name}` : exact.length === 1 ? `${exact[0]!.name} is sold out` : visible.length === 1 ? `${visible[0]!.name} is ${menu.extras[visible[0]!.itemId]?.code}` : visible.length ? `${visible.length} items start with ${q}` : 'No such code'
+    ? exactEntry ? t('Add {name}', { name: exactEntry.name }) : exact.length === 1 ? t('{name} is sold out', { name: exact[0]!.name }) : visible.length === 1 ? t('{name} is {code}', { name: visible[0]!.name, code: String(menu.extras[visible[0]!.itemId]?.code ?? '') }) : visible.length ? t('{n} items start with {q}', { n: visible.length, q }) : t('No such code')
     : '';
 
   if (done) return <Receipt sale={done} device={device} onClose={() => setDone(null)} />;
@@ -289,7 +291,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
             <div className="tables">
               {states.map(({ table, orders }) => (
                 <button key={table.id} data-testid={`table-${table.code}`} className={`tbl ${stateOf(orders)} ${table.id === shownTableId ? 'cur' : ''}`} onClick={() => void pickTable(table.id)}>
-                  <b>{table.code}</b> {orders.length ? `₹${rs(orders.reduce((s, o) => s + orderDue(o), 0))}` : 'Free'}
+                  <b>{table.code}</b> {orders.length ? `₹${rs(orders.reduce((s, o) => s + orderDue(o), 0))}` : t('Free')}
                 </button>
               ))}
             </div>
@@ -298,27 +300,27 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
         )}
         <div className="srow" data-testid="held-strip">
           {mode !== 'map' && (
-            <button data-testid="held-btn" className={`chipbtn ${heldOrders.length ? 'busy' : ''}`} aria-label={`${heldOrders.length} held orders`} title={heldOrders.length ? `${heldOrders.length} held orders` : 'Held orders'} onClick={() => setHeldOpen(true)}>{defaultTable?.code ?? '…'}</button>
+            <button data-testid="held-btn" className={`chipbtn ${heldOrders.length ? 'busy' : ''}`} aria-label={t('{n} held orders', { n: heldOrders.length })} title={heldOrders.length ? t('{n} held orders', { n: heldOrders.length }) : t('Held orders')} onClick={() => setHeldOpen(true)}>{defaultTable?.code ?? '…'}</button>
           )}
           <input ref={searchRef} className="search" data-testid="search" value={q} onChange={(e) => setQ(e.target.value.replace(/^\s+/, ''))} onKeyDown={(e) => { if (e.key === 'Enter') quickAdd(); }}
-            placeholder="Item, code, or category item (e.g. tea, 0102, bev chai)" aria-label="Search item or code" inputMode="search" autoComplete="off" />
-          <button className="primary" data-testid="add-code" disabled={!exactEntry} onClick={quickAdd} aria-label="Add" title="Add">+</button>
+            placeholder={t('Item, code, or category item (e.g. tea, 0102, bev chai)')} aria-label={t('Search item or code')} inputMode="search" autoComplete="off" />
+          <button className="primary" data-testid="add-code" disabled={!exactEntry} onClick={quickAdd} aria-label={t('Add')} title={t('Add')}>+</button>
         </div>
         {hint && <div className="muted hint" data-testid="code-hint">{hint}</div>}
         <div className="browse">
-          <nav className="side" data-testid="filter-row" aria-label="Menu filters">
+          <nav className="side" data-testid="filter-row" aria-label={t('Menu filters')}>
             {dietMarks.length > 0 && (
               <>
-                <button className={`sechead ${openSec === 'types' ? 'open' : ''}`} data-testid="types-toggle" aria-expanded={openSec === 'types'} onClick={() => setOpenSec('types')}>Type <span>{openSec === 'types' ? '▾' : '▸'}</span></button>
+                <button className={`sechead ${openSec === 'types' ? 'open' : ''}`} data-testid="types-toggle" aria-expanded={openSec === 'types'} onClick={() => setOpenSec('types')}>{t('Type')} <span>{openSec === 'types' ? '▾' : '▸'}</span></button>
                 {openSec === 'types' && (
                   <div className="seclist">
-                    {dietMarks.map((d) => <button key={d} data-testid={`filter-${d}`} className={diet === d ? 'active' : ''} aria-pressed={diet === d} onClick={() => setDiet(diet === d ? '' : d)}>{d === 'non_veg' ? 'Non-veg' : d[0]!.toUpperCase() + d.slice(1)}</button>)}
+                    {dietMarks.map((d) => <button key={d} data-testid={`filter-${d}`} className={diet === d ? 'active' : ''} aria-pressed={diet === d} onClick={() => setDiet(diet === d ? '' : d)}>{d === 'non_veg' ? t('Non-veg') : t(d[0]!.toUpperCase() + d.slice(1))}</button>)}
                   </div>
                 )}
               </>
             )}
             <>
-                <button className={`sechead ${openSec === 'cats' ? 'open' : ''}`} data-testid="cats-toggle" aria-expanded={openSec === 'cats'} onClick={() => setOpenSec('cats')}>Category <span>{openSec === 'cats' ? '▾' : '▸'}</span></button>
+                <button className={`sechead ${openSec === 'cats' ? 'open' : ''}`} data-testid="cats-toggle" aria-expanded={openSec === 'cats'} onClick={() => setOpenSec('cats')}>{t('Category')} <span>{openSec === 'cats' ? '▾' : '▸'}</span></button>
                 {openSec === 'cats' && (
                   <div className="seclist">
                     {menu.categories.map((c) => <button key={c.id} className={category === c.id ? 'active' : ''} onClick={() => gotoCategory(c.id)}>{c.name}</button>)}
@@ -327,7 +329,7 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
             </>
             {menu.tags.length > 0 && (
               <>
-                <button className={`sechead ${openSec === 'tags' ? 'open' : ''}`} data-testid="tags-toggle" aria-expanded={openSec === 'tags'} onClick={() => setOpenSec('tags')}>Tags <span>{openSec === 'tags' ? '▾' : '▸'}</span></button>
+                <button className={`sechead ${openSec === 'tags' ? 'open' : ''}`} data-testid="tags-toggle" aria-expanded={openSec === 'tags'} onClick={() => setOpenSec('tags')}>{t('Tags')} <span>{openSec === 'tags' ? '▾' : '▸'}</span></button>
                 {openSec === 'tags' && (
                   <div className="seclist">
                     {menu.tags.map((t) => <button key={t.id} data-testid={`filter-${t.name}`} className={tag === t.id ? 'active' : ''} aria-pressed={tag === t.id} onClick={() => setTag(tag === t.id ? '' : t.id)}>{t.name}</button>)}
@@ -339,32 +341,32 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           <div className="items">
             {showPopular && popularEntries.length > 0 && (
               <div data-testid="popular">
-                <div className="divider"><span>Popular</span></div>
+                <div className="divider"><span>{t('Popular')}</span></div>
                 <div className="grid pop">{popularEntries.map((e) => tile(e, 'pop-'))}</div>
               </div>
             )}
-            {visible.length === 0 && <p className="muted">{q ? 'No match.' : 'Nothing to sell here yet.'}</p>}
+            {visible.length === 0 && <p className="muted">{q ? t('No match.') : t('Nothing to sell here yet.')}</p>}
             {groups.map(({ cat, items }) => (
               <div key={cat.id} id={`cat-${cat.id}`} className="catgroup" data-testid={`group-${cat.name}`}>
                 <div className="divider"><span>{cat.name}{cat.code && ` (${cat.code})`}</span></div>
                 <div className="grid">{items.map((e) => tile(e))}</div>
               </div>
             ))}
-            {loose.length > 0 && <div className="catgroup"><div className="divider"><span>Other ({loose.length})</span></div><div className="grid">{loose.map((e) => tile(e))}</div></div>}
+            {loose.length > 0 && <div className="catgroup"><div className="divider"><span>{t('Other')} ({loose.length})</span></div><div className="grid">{loose.map((e) => tile(e))}</div></div>}
           </div>
         </div>
       </section>
       <aside className="cart">
-        {(inOrder || (mode === 'map' && tableId)) && <h2>{inOrder ? `Order · ${states.find((s) => s.table.id === activeOrder.tableId)?.table.code ?? ''}` : mode === 'map' && tableId ? `Table ${states.find((s) => s.table.id === tableId)?.table.code ?? ''}` : ''}</h2>}
+        {(inOrder || (mode === 'map' && tableId)) && <h2>{inOrder ? `${t('Order')} · ${states.find((s) => s.table.id === activeOrder.tableId)?.table.code ?? ''}` : mode === 'map' && tableId ? `${t('Table')} ${states.find((s) => s.table.id === tableId)?.table.code ?? ''}` : ''}</h2>}
         <ul data-testid="cart-lines">
-          {lines.length === 0 && <li className="muted">{mode === 'map' && !tableId ? 'Choose a table' : 'Tap an item to start'}</li>}
+          {lines.length === 0 && <li className="muted">{mode === 'map' && !tableId ? t('Choose a table') : t('Tap an item to start')}</li>}
           {lines.map((l) => (
             <li key={l.key}>
               <span className="name">{l.name}</span>
               <span className="qty">
-                <button aria-label={`less ${l.name}`} onClick={l.less}>−</button>
+                <button aria-label={`${t('less')} ${l.name}`} onClick={l.less}>−</button>
                 <b data-testid={`qty-${l.name}`}>{l.qty}</b>
-                <button aria-label={`more ${l.name}`} onClick={l.more}>+</button>
+                <button aria-label={`${t('more')} ${l.name}`} onClick={l.more}>+</button>
               </span>
               <span className="amt">₹{rs(l.netPaise)}</span>
             </li>
@@ -372,54 +374,54 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
         </ul>
         {message && <p className="error" role="alert" data-testid="sell-message">{message}</p>}
         <dl className="sums">
-          <dt>Subtotal</dt><dd data-testid="subtotal">₹{rs(subtotal)}</dd>
+          <dt>{t('Subtotal')}</dt><dd data-testid="subtotal">₹{rs(subtotal)}</dd>
           {discountRule && discountPaise > 0 && (<><dt data-testid="discount-label">Discount ({discountRule.reason})</dt><dd data-testid="discount-amount">−₹{rs(discountPaise)}</dd></>)}
           {tax > 0 && (<><dt>GST</dt><dd data-testid="tax">₹{rs(tax)}</dd></>)}
-          {roundOff !== 0 && (<><dt>Round off</dt><dd data-testid="round-off">{roundOff < 0 ? '−' : '+'}₹{rs(Math.abs(roundOff))}</dd></>)}
-          <dt className="total">Total</dt><dd className="total" data-testid="total">₹{rs(total)}</dd>
+          {roundOff !== 0 && (<><dt>{t('Round off')}</dt><dd data-testid="round-off">{roundOff < 0 ? '−' : '+'}₹{rs(Math.abs(roundOff))}</dd></>)}
+          <dt className="total">{t('Total')}</dt><dd className="total" data-testid="total">₹{rs(total)}</dd>
         </dl>
-        {discountNotApplied && <p className="warn" data-testid="discount-not-applied">Discount not applied: {discountNotApplied}</p>}
-        {otherDevice && <p className="warn" data-testid="other-device">Opened on another device. Paid here, it goes on this counter's receipt and drawer.</p>}
+        {discountNotApplied && <p className="warn" data-testid="discount-not-applied">{t('Discount not applied')}: {discountNotApplied}</p>}
+        {otherDevice && <p className="warn" data-testid="other-device">{t("Opened on another device. Paid here, it goes on this counter's receipt and drawer.")}</p>}
         {actor.role === 'cashier' && (
           <div className="payrow">
-            <button data-testid="pay-cash" className="primary" disabled={lines.length === 0} onClick={() => setPaying('cash')}>Cash ₹{rs(total)}</button>
+            <button data-testid="pay-cash" className="primary" disabled={lines.length === 0} onClick={() => setPaying('cash')}>{t('Cash')} ₹{rs(total)}</button>
             <button data-testid="pay-upi" className="primary" disabled={lines.length === 0} onClick={() => setPaying('upi')}>UPI ₹{rs(total)}</button>
           </div>
         )}
         <div className="actions">
           {/* Plain text buttons at the left, icon buttons at the right: every one is always there (disabled, with why). */}
-          <button data-testid="clear" disabled={lines.length === 0} onClick={() => void clear()}>Clear</button>
-          {mayVoid && <button data-testid="void-order" disabled={voiding !== null} title="Void this order" onClick={() => setVoiding('')}>Void</button>}
+          <button data-testid="clear" disabled={lines.length === 0} onClick={() => void clear()}>{t('Clear')}</button>
+          {mayVoid && <button data-testid="void-order" disabled={voiding !== null} title={t('Void this order')} onClick={() => setVoiding('')}>{t('Void')}</button>}
           <span className="spacer" />
-          <button data-testid="save-order" className="icon-btn" aria-label="Save order"
-            title={inOrder ? 'This order is already saved.' : mode === 'map' ? 'A table order is saved as you add items.' : 'Save order'}
-            disabled={inOrder || mode !== 'default' || cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage('Order saved.'); })}>
+          <button data-testid="save-order" className="icon-btn" aria-label={t('Save order')}
+            title={inOrder ? t('This order is already saved.') : mode === 'map' ? t('A table order is saved as you add items.') : t('Save order')}
+            disabled={inOrder || mode !== 'default' || cart.length === 0} onClick={() => void guard(async () => { await holdDraft(); setMessage(t('Order saved.')); })}>
             <svg {...svgProps}><path d="M5 3h11l3 3v15H5z" /><path d="M8 3v6h7V3" /><rect x="8" y="14" width="8" height="7" /></svg>
           </button>
-          <button data-testid="discount-btn" className={`icon-btn ${discountRule ? 'active' : ''}`} aria-label="Discount" title={noDiscountWhy ?? (discountRule ? 'Change or remove the discount' : 'Discount')}
+          <button data-testid="discount-btn" className={`icon-btn ${discountRule ? 'active' : ''}`} aria-label={t('Discount')} title={noDiscountWhy ?? (discountRule ? t('Change or remove the discount') : t('Discount'))}
             disabled={!!noDiscountWhy} onClick={() => setDiscounting(true)}>
             <svg {...svgProps}><path d="M19 5L5 19" /><circle cx="7" cy="7" r="2" /><circle cx="17" cy="17" r="2" /></svg>
           </button>
-          <button data-testid="print-bill" className="icon-btn" aria-label="Print bill" title="Print bill" disabled={lines.length === 0} onClick={showBill}>
+          <button data-testid="print-bill" className="icon-btn" aria-label={t('Print bill')} title={t('Print bill')} disabled={lines.length === 0} onClick={showBill}>
             <svg {...svgProps}><path d="M6 9V3h12v6" /><rect x="3" y="9" width="18" height="9" rx="2" /><rect x="7" y="14" width="10" height="7" /></svg>
           </button>
         </div>
         {mayVoid && voiding !== null && (
           <div className="row" data-testid="void-form">
-            <input data-testid="void-reason" value={voiding} maxLength={200} placeholder="Reason (required)" onChange={(e) => setVoiding(e.target.value)} />
-            <button data-testid="void-go" className="primary" disabled={!voiding.trim()} onClick={() => void confirmVoid()}>Void</button>
-            <button data-testid="void-cancel" onClick={() => setVoiding(null)}>Cancel</button>
+            <input data-testid="void-reason" value={voiding} maxLength={200} placeholder={t('Reason (required)')} onChange={(e) => setVoiding(e.target.value)} />
+            <button data-testid="void-go" className="primary" disabled={!voiding.trim()} onClick={() => void confirmVoid()}>{t('Void')}</button>
+            <button data-testid="void-cancel" onClick={() => setVoiding(null)}>{t('Cancel')}</button>
           </div>
         )}
       </aside>
       {mapOpen && (
-        <div className="overlay" role="dialog" aria-label="All tables">
+        <div className="overlay" role="dialog" aria-label={t('All tables')}>
           <div className="dialog wide">
-            <div className="row"><h2>All tables</h2><span className="spacer" /><button data-testid="map-close" onClick={() => setMapOpen(false)}>Close</button></div>
+            <div className="row"><h2>{t('All tables')}</h2><span className="spacer" /><button data-testid="map-close" onClick={() => setMapOpen(false)}>{t('Close')}</button></div>
             <div className="map" data-testid="table-map">
               {states.map(({ table, orders }) => (
                 <button key={table.id} data-testid={`map-${table.code}`} className={`tbl ${stateOf(orders)} ${table.id === shownTableId ? 'cur' : ''}`} onClick={() => void pickTable(table.id)}>
-                  {table.code}<small>{orders.length ? `Busy · ₹${rs(orders.reduce((s, o) => s + orderDue(o), 0))}` : 'Free'}</small>
+                  {table.code}<small>{orders.length ? `${t('Busy')} · ₹${rs(orders.reduce((s, o) => s + orderDue(o), 0))}` : t('Free')}</small>
                 </button>
               ))}
             </div>
@@ -427,11 +429,11 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
         </div>
       )}
       {heldOpen && (
-        <div className="overlay" role="dialog" aria-label="Held orders">
+        <div className="overlay" role="dialog" aria-label={t('Held orders')}>
           <div className="dialog">
-            <div className="row"><h2>Held orders</h2><span className="spacer" /><button data-testid="held-close" onClick={() => setHeldOpen(false)}>Close</button></div>
-            <button data-testid="hold" className="primary" disabled={cart.length === 0 && !inOrder} onClick={() => void hold()}>Hold current &amp; start new</button>
-            {heldOrders.length === 0 && <p className="muted">No held orders.</p>}
+            <div className="row"><h2>{t('Held orders')}</h2><span className="spacer" /><button data-testid="held-close" onClick={() => setHeldOpen(false)}>{t('Close')}</button></div>
+            <button data-testid="hold" className="primary" disabled={cart.length === 0 && !inOrder} onClick={() => void hold()}>{t('Hold current & start new')}</button>
+            {heldOrders.length === 0 && <p className="muted">{t('No held orders.')}</p>}
             {heldOrders.map((o) => (
               <button key={o.id} data-testid="held-order" className="tbl busy" onClick={() => void resume(o.id)}>
                 {o.lines.map((l) => `${l.qty} × ${l.name}`).join(', ')} · ₹{rs(orderDue(o))}

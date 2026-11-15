@@ -4,8 +4,10 @@ import { App } from './App.tsx';
 import './styles.css';
 import './manager.css';
 import { applyPrefs } from './prefs.ts';
+import { applyLang } from './i18n.ts';
 
 applyPrefs();
+applyLang();
 
 // Only in the production build: in dev the module URLs are not hashed and a cache would serve stale code.
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

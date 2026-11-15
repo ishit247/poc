@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_SETTINGS, parsePercentBp, LOGO_MAX_BYTES, LOGO_TYPES, QTY_CAP_MAX, REFUND_REASON_MAX, REFUND_REASONS_MAX, ROUND_OFF_STEPS, type TradingSettings } from '@pos/shared';
 import { api, type Me } from './api.ts';
+import { useT } from '../i18n.ts';
 
 type Outlet = Me['outlets'][number];
 
@@ -12,8 +13,9 @@ const ROUND_OFF_LABEL: Record<number, string> = { 0: 'No round-off', 10: 'Neares
 
 /** Result line shared by the three cards: saved, or what to do next. */
 function Note({ ok, error }: { ok: boolean; error: string }) {
+  const tx = useT();
   if (error) return <p className="error" role="alert" style={{ margin: 0 }}>{error}</p>;
-  return ok ? <p className="muted" role="status" style={{ margin: 0 }}>Saved.</p> : null;
+  return ok ? <p className="muted" role="status" style={{ margin: 0 }}>{tx('Saved.')}</p> : null;
 }
 
 /**
@@ -21,14 +23,15 @@ function Note({ ok, error }: { ok: boolean; error: string }) {
  * audited by the API; tablets pick the changes up at their next sync.
  */
 export function Settings({ token }: { token: string }) {
+  const tx = useT();
   const [outlets, setOutlets] = useState<Outlet[] | null>(null);
   const [error, setError] = useState('');
   const load = useCallback(async () => {
     try {
       const me = await api('/me', token);
-      if (me.status !== 200) return setError('Your session has ended. Sign in again.');
+      if (me.status !== 200) return setError(tx('Your session has ended. Sign in again.'));
       setOutlets((me.body as Me).outlets);
-    } catch { setError('Could not reach the server.'); }
+    } catch { setError(tx('Could not reach the server.')); }
   }, [token]);
   useEffect(() => { void load(); }, [load]);
 
@@ -37,7 +40,7 @@ export function Settings({ token }: { token: string }) {
       {error && <div className="m-alert bad" role="alert"><span>⚠</span><div className="grow">{error}</div></div>}
       <Trading token={token} />
       <Logo token={token} />
-      {!outlets && !error && <section className="m-card"><div className="m-row"><span className="muted">Loading…</span></div></section>}
+      {!outlets && !error && <section className="m-card"><div className="m-row"><span className="muted">{tx('Loading…')}</span></div></section>}
       {outlets?.map((o) => <OutletDetails key={o.id} o={o} token={token} many={outlets.length > 1} onSaved={load} />)}
     </main>
   );
@@ -52,6 +55,7 @@ function reasonLines(text: string): string[] {
 const listOk = (xs: readonly string[]) => xs.length <= REFUND_REASONS_MAX && xs.every((x) => x.length <= REFUND_REASON_MAX);
 
 function Trading({ token }: { token: string }) {
+  const tx = useT();
   const [saved, setSaved] = useState<TradingSettings | null>(null);
   const [s, setS] = useState<TradingSettings>(DEFAULT_SETTINGS);
   const [qty, setQty] = useState(String(DEFAULT_SETTINGS.maxLineQty));
@@ -67,8 +71,8 @@ function Trading({ token }: { token: string }) {
     setCap(String(v.discountMaxBp / 100)); setDReasons(v.discountReasons.join('\n'));
   };
   useEffect(() => {
-    void api('/settings', token).then((r) => { if (r.status === 200) adopt(r.body as TradingSettings); else setError('Could not load the settings.'); })
-      .catch(() => setError('Could not reach the server.'));
+    void api('/settings', token).then((r) => { if (r.status === 200) adopt(r.body as TradingSettings); else setError(tx('Could not load the settings.')); })
+      .catch(() => setError(tx('Could not reach the server.')));
   }, [token]);
 
   const q = Number(qty), d = Number(days);
@@ -81,56 +85,56 @@ function Trading({ token }: { token: string }) {
   const capBp = parsePercentBp(cap);
   const next: TradingSettings = { ...s, maxLineQty: q, offlineDays: d, refundReasons: list, discountMaxBp: capBp ?? 0, discountReasons: dList };
   const changed = !!saved && JSON.stringify(next) !== JSON.stringify(saved);
-  const reasonsWhy = `up to ${REFUND_REASONS_MAX}, each up to ${REFUND_REASON_MAX} letters`;
-  const why = !qtyOk ? `Quantity limit: 1 to ${QTY_CAP_MAX}` : !daysOk ? 'Offline days: 1 to 60'
-    : !reasonsOk ? `Refund reasons: ${reasonsWhy}` : capBp === null ? 'Largest discount: 0 to 100 (%)'
-    : !dReasonsOk ? `Discount reasons: ${reasonsWhy}` : !changed ? 'Nothing changed' : undefined;
+  const reasonsWhy = tx('up to {a}, each up to {b} letters', { a: REFUND_REASONS_MAX, b: REFUND_REASON_MAX });
+  const why = !qtyOk ? tx('Quantity limit: 1 to {n}', { n: QTY_CAP_MAX }) : !daysOk ? tx('Offline days: 1 to 60')
+    : !reasonsOk ? `${tx('Refund reasons')}: ${reasonsWhy}` : capBp === null ? tx('Largest discount: 0 to 100 (%)')
+    : !dReasonsOk ? `${tx('Discount reasons')}: ${reasonsWhy}` : !changed ? tx('Nothing changed') : undefined;
 
   const save = async () => {
     setBusy(true); setError(''); setDone(false);
     try {
       const r = await api('/settings', token, { method: 'PUT', body: JSON.stringify(next) });
-      if (r.status !== 200) return setError('Could not save. Check the values and try again.');
+      if (r.status !== 200) return setError(tx('Could not save. Check the values and try again.'));
       adopt(next); setDone(true);
-    } catch { setError('Could not reach the server.'); } finally { setBusy(false); }
+    } catch { setError(tx('Could not reach the server.')); } finally { setBusy(false); }
   };
 
   return (
     <section className="m-card" data-testid="set-trading">
-      <header><h2>Selling rules</h2></header>
+      <header><h2>{tx('Selling rules')}</h2></header>
       <div className="m-form">
-        <label className="m-field">Most of one item on a line
+        <label className="m-field">{tx('Most of one item on a line')}
           <input data-testid="set-qty" inputMode="numeric" value={qty} onChange={(e) => { setQty(e.target.value.replace(/\D/g, '')); setDone(false); }} />
         </label>
-        <label className="m-field">GST rounding
+        <label className="m-field">{tx('GST rounding')}
           <select data-testid="set-rounding" value={s.gstRounding} onChange={(e) => { setS({ ...s, gstRounding: e.target.value as TradingSettings['gstRounding'] }); setDone(false); }}>
-            {ROUNDING.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            {ROUNDING.map(([v, l]) => <option key={v} value={v}>{tx(l)}</option>)}
           </select>
         </label>
-        <label className="m-field">Bill round-off
+        <label className="m-field">{tx('Bill round-off')}
           <select data-testid="set-roundoff" value={s.billRoundTo} onChange={(e) => { setS({ ...s, billRoundTo: Number(e.target.value) as TradingSettings['billRoundTo'] }); setDone(false); }}>
-            {ROUND_OFF_STEPS.map((v) => <option key={v} value={v}>{ROUND_OFF_LABEL[v]}</option>)}
+            {ROUND_OFF_STEPS.map((v) => <option key={v} value={v}>{tx(ROUND_OFF_LABEL[v]!)}</option>)}
           </select>
         </label>
-        <label className="m-field">Days a tablet may stay offline
+        <label className="m-field">{tx('Days a tablet may stay offline')}
           <input data-testid="set-days" inputMode="numeric" value={days} onChange={(e) => { setDays(e.target.value.replace(/\D/g, '')); setDone(false); }} />
         </label>
-        <label className="m-field">Refund reasons, one per line (cashiers pick one or type their own)
+        <label className="m-field">{tx('Refund reasons, one per line (cashiers pick one or type their own)')}
           <textarea data-testid="set-refund-reasons" rows={5} value={reasons} onChange={(e) => { setReasons(e.target.value); setDone(false); }} />
-          {!reasonsOk && <span className="error" role="alert">Up to {REFUND_REASONS_MAX} reasons, each up to {REFUND_REASON_MAX} letters.</span>}
+          {!reasonsOk && <span className="error" role="alert">{tx('Up to {a} reasons, each up to {b} letters.', { a: REFUND_REASONS_MAX, b: REFUND_REASON_MAX })}</span>}
         </label>
-        <label className="m-field">Largest bill discount a cashier may give, % (0 turns discounts off)
+        <label className="m-field">{tx('Largest bill discount a cashier may give, % (0 turns discounts off)')}
           <input data-testid="set-discount-cap" inputMode="decimal" value={cap} onChange={(e) => { setCap(e.target.value); setDone(false); }} />
-          {capBp === null && <span className="error" role="alert">A percentage from 0 to 100, like 10 or 12.5.</span>}
+          {capBp === null && <span className="error" role="alert">{tx('A percentage from 0 to 100, like 10 or 12.5.')}</span>}
         </label>
-        <label className="m-field">Discount reasons, one per line (cashiers pick one or type their own)
+        <label className="m-field">{tx('Discount reasons, one per line (cashiers pick one or type their own)')}
           <textarea data-testid="set-discount-reasons" rows={4} value={dReasons} onChange={(e) => { setDReasons(e.target.value); setDone(false); }} />
-          {!dReasonsOk && <span className="error" role="alert">Up to {REFUND_REASONS_MAX} reasons, each up to {REFUND_REASON_MAX} letters.</span>}
+          {!dReasonsOk && <span className="error" role="alert">{tx('Up to {a} reasons, each up to {b} letters.', { a: REFUND_REASONS_MAX, b: REFUND_REASON_MAX })}</span>}
         </label>
-        <p className="muted">Tablets use new rules after their next sync. Bills already rung up keep the rules they were made under.</p>
+        <p className="muted">{tx('Tablets use new rules after their next sync. Bills already rung up keep the rules they were made under.')}</p>
         <Note ok={done} error={error} />
         <div className="m-dialog-actions">
-          <button data-testid="set-save" className="primary" disabled={busy || !!why} title={why} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+          <button data-testid="set-save" className="primary" disabled={busy || !!why} title={why} onClick={save}>{busy ? tx('Saving…') : tx('Save')}</button>
         </div>
       </div>
     </section>
@@ -138,6 +142,7 @@ function Trading({ token }: { token: string }) {
 }
 
 function Logo({ token }: { token: string }) {
+  const tx = useT();
   const [url, setUrl] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -148,47 +153,47 @@ function Logo({ token }: { token: string }) {
       const r = await fetch('/api/settings/logo', { headers: { authorization: `Bearer ${token}` } });
       const blob = r.status === 200 ? await r.blob() : null;
       setUrl((old) => { if (old) URL.revokeObjectURL(old); return blob ? URL.createObjectURL(blob) : null; });
-    } catch { setError('Could not reach the server.'); } finally { setLoaded(true); }
+    } catch { setError(tx('Could not reach the server.')); } finally { setLoaded(true); }
   }, [token]);
   useEffect(() => { void show(); }, [show]);
 
   const pick = async (f: File | undefined) => {
     if (!f) return;
     setError('');
-    if (!(LOGO_TYPES as readonly string[]).includes(f.type)) return setError('Use a PNG, JPEG or WebP picture.');
-    if (f.size > LOGO_MAX_BYTES) return setError(`The picture is too big. The limit is ${LOGO_MAX_BYTES / 1024} KB.`);
+    if (!(LOGO_TYPES as readonly string[]).includes(f.type)) return setError(tx('Use a PNG, JPEG or WebP picture.'));
+    if (f.size > LOGO_MAX_BYTES) return setError(tx('The picture is too big. The limit is {n} KB.', { n: LOGO_MAX_BYTES / 1024 }));
     setBusy(true);
     try {
       const r = await fetch('/api/settings/logo', { method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': f.type }, body: f });
-      if (r.status !== 200) return setError('That picture was not accepted. Try another PNG, JPEG or WebP.');
+      if (r.status !== 200) return setError(tx('That picture was not accepted. Try another PNG, JPEG or WebP.'));
       await show();
-    } catch { setError('Could not reach the server.'); } finally { setBusy(false); }
+    } catch { setError(tx('Could not reach the server.')); } finally { setBusy(false); }
   };
   const remove = async () => {
     setBusy(true); setError('');
     try {
       const r = await api('/settings/logo', token, { method: 'DELETE' });
-      if (r.status !== 200) return setError('Could not remove the logo. Try again.');
+      if (r.status !== 200) return setError(tx('Could not remove the logo. Try again.'));
       await show();
-    } catch { setError('Could not reach the server.'); } finally { setBusy(false); }
+    } catch { setError(tx('Could not reach the server.')); } finally { setBusy(false); }
   };
 
   return (
     <section className="m-card" data-testid="set-logo">
-      <header><h2>Logo</h2></header>
+      <header><h2>{tx('Logo')}</h2></header>
       <div className="m-row">
         <div className="main">
           <div className="m-logo">
-            {url ? <img src={url} alt="Your logo" data-testid="set-logo-img" /> : <span className="muted">{loaded ? 'No logo yet.' : 'Loading…'}</span>}
+            {url ? <img src={url} alt={tx('Your logo')} data-testid="set-logo-img" /> : <span className="muted">{loaded ? tx('No logo yet.') : tx('Loading…')}</span>}
           </div>
-          <span style={{ display: 'block' }}>Shown on sign-in screens, the counter header and receipts. PNG, JPEG or WebP, up to {LOGO_MAX_BYTES / 1024} KB.</span>
+          <span style={{ display: 'block' }}>{tx('Shown on sign-in screens, the counter header and receipts. PNG, JPEG or WebP, up to {n} KB.', { n: LOGO_MAX_BYTES / 1024 })}</span>
           {error && <span className="error" role="alert" style={{ display: 'block' }}>{error}</span>}
         </div>
         <div className="m-row-actions">
-          <button className="sm" data-testid="set-logo-pick" disabled={busy} onClick={() => fileRef.current?.click()}>{url ? 'Replace' : 'Upload'}</button>
+          <button className="sm" data-testid="set-logo-pick" disabled={busy} onClick={() => fileRef.current?.click()}>{url ? tx('Replace') : tx('Upload')}</button>
           <input ref={fileRef} data-testid="set-logo-file" type="file" accept={LOGO_TYPES.join(',')} hidden
             onChange={(e) => { void pick(e.target.files?.[0]); e.target.value = ''; }} />
-          {url && <button className="sm danger" data-testid="set-logo-remove" disabled={busy} onClick={remove}>Remove</button>}
+          {url && <button className="sm danger" data-testid="set-logo-remove" disabled={busy} onClick={remove}>{tx('Remove')}</button>}
         </div>
       </div>
     </section>
@@ -196,6 +201,7 @@ function Logo({ token }: { token: string }) {
 }
 
 function OutletDetails({ o, token, many, onSaved }: { o: Outlet; token: string; many: boolean; onSaved: () => Promise<void> }) {
+  const tx = useT();
   const [address, setAddress] = useState(o.address ?? '');
   const [fssai, setFssai] = useState(o.fssaiNo ?? '');
   const [gstOn, setGstOn] = useState(!!o.gstEnabled);
@@ -217,40 +223,40 @@ function OutletDetails({ o, token, many, onSaved }: { o: Outlet; token: string; 
       : ['gst', { enabled: gstOn, gstin: gs || null }];
     try {
       const r = await api(`/outlets/${o.id}/${path}`, token, { method: 'PUT', body: JSON.stringify(body) });
-      if (r.status !== 200) return setError((e) => ({ ...e, [what]: 'Could not save. Check the values and try again.' }));
+      if (r.status !== 200) return setError((e) => ({ ...e, [what]: tx('Could not save. Check the values and try again.') }));
       await onSaved(); setDone(what);
-    } catch { setError((e) => ({ ...e, [what]: 'Could not reach the server.' })); } finally { setBusy(''); }
+    } catch { setError((e) => ({ ...e, [what]: tx('Could not reach the server.') })); } finally { setBusy(''); }
   };
 
   return (
     <section className="m-card" data-testid="set-outlet" data-outlet-id={o.id}>
-      <header><h2>{many ? `${o.name} · receipt` : 'Receipt details'}</h2></header>
+      <header><h2>{many ? `${o.name} · ${tx('receipt')}` : tx('Receipt details')}</h2></header>
       <div className="m-form">
-        <label className="m-field">Address on the receipt
+        <label className="m-field">{tx('Address on the receipt')}
           <input data-testid="set-address" value={address} maxLength={200} autoComplete="off" onChange={(e) => { setAddress(e.target.value); setDone(''); }} />
         </label>
-        <label className="m-field">FSSAI licence number (14 digits)
+        <label className="m-field">{tx('FSSAI licence number (14 digits)')}
           <input data-testid="set-fssai" inputMode="numeric" value={fssai} maxLength={14} autoComplete="off" onChange={(e) => { setFssai(e.target.value.replace(/\D/g, '')); setDone(''); }} />
         </label>
         <Note ok={done === 'info'} error={error.info} />
         <div className="m-dialog-actions">
           <button data-testid="set-info-save" className="primary" disabled={busy !== '' || !infoOk || !infoChanged}
-            title={!infoOk ? 'FSSAI is 14 digits' : !infoChanged ? 'Nothing changed' : undefined} onClick={() => put('info')}>{busy === 'info' ? 'Saving…' : 'Save details'}</button>
+            title={!infoOk ? tx('FSSAI is 14 digits') : !infoChanged ? tx('Nothing changed') : undefined} onClick={() => put('info')}>{busy === 'info' ? tx('Saving…') : tx('Save details')}</button>
         </div>
       </div>
       <div className="m-form">
         <label className="m-field inline">
-          <input data-testid="set-gst-on" type="checkbox" checked={gstOn} onChange={(e) => { setGstOn(e.target.checked); setDone(''); }} /> Charge GST at this outlet
+          <input data-testid="set-gst-on" type="checkbox" checked={gstOn} onChange={(e) => { setGstOn(e.target.checked); setDone(''); }} /> {tx('Charge GST at this outlet')}
         </label>
-        <label className="m-field">GSTIN
-          <input data-testid="set-gstin" value={gstin} maxLength={15} autoComplete="off" placeholder="15 characters" disabled={!gstOn && !gstin}
+        <label className="m-field">{tx('GSTIN')}
+          <input data-testid="set-gstin" value={gstin} maxLength={15} autoComplete="off" placeholder={tx('15 characters')} disabled={!gstOn && !gstin}
             onChange={(e) => { setGstin(e.target.value.toUpperCase()); setDone(''); }} />
         </label>
-        <p className="muted">Switching GST off charges 0% on every item. Items keep their rates.</p>
+        <p className="muted">{tx('Switching GST off charges 0% on every item. Items keep their rates.')}</p>
         <Note ok={done === 'gst'} error={error.gst} />
         <div className="m-dialog-actions">
           <button data-testid="set-gst-save" className="primary" disabled={busy !== '' || !gstOk || !gstChanged}
-            title={!gstOk ? 'Enter a valid GSTIN to charge GST' : !gstChanged ? 'Nothing changed' : undefined} onClick={() => put('gst')}>{busy === 'gst' ? 'Saving…' : 'Save GST'}</button>
+            title={!gstOk ? tx('Enter a valid GSTIN to charge GST') : !gstChanged ? tx('Nothing changed') : undefined} onClick={() => put('gst')}>{busy === 'gst' ? tx('Saving…') : tx('Save GST')}</button>
         </div>
       </div>
     </section>

@@ -4,6 +4,7 @@ import type { DeviceInfo } from './db.ts';
 import { priced, type BillLine } from './sale.ts';
 import { useLogoUrl } from './logo.ts';
 import { outletInfo } from './receipt.ts';
+import { useT } from './i18n.ts';
 
 const svgProps = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
 
@@ -27,6 +28,7 @@ export function discountedBill(lines: readonly BillLine[], settings: TradingSett
 export function DraftBill({ lines, totals, discount = null, device, staffName, onClose }: {
   lines: DraftLine[]; totals: DraftTotals; discount?: ReceiptView['discount']; device: DeviceInfo; staffName: string; onClose: () => void;
 }) {
+  const t = useT();
   const logoUrl = useLogoUrl();
   const [text, setText] = useState<string[] | null>(null);
   const [problem, setProblem] = useState('');
@@ -44,19 +46,19 @@ export function DraftBill({ lines, totals, discount = null, device, staffName, o
 
   const print = () => {
     setProblem('');
-    try { window.print(); } catch (e) { setProblem(e instanceof Error ? e.message : 'Could not print.'); }
+    try { window.print(); } catch (e) { setProblem(e instanceof Error ? e.message : t('Could not print.')); }
   };
 
   return (
     <main className="center">
       <div className="no-print toolbar">
-        <button data-testid="draft-print" className="icon-btn" title="Print" aria-label="Print" disabled={!text} onClick={print}>
+        <button data-testid="draft-print" className="icon-btn" title={t('Print')} aria-label={t('Print')} disabled={!text} onClick={print}>
           <svg {...svgProps}><path d="M6 9V3h12v6" /><rect x="3" y="9" width="18" height="9" rx="2" /><rect x="7" y="14" width="10" height="7" /></svg>
         </button>
-        <button data-testid="draft-close" className="icon-btn primary" title="Close" aria-label="Close" onClick={onClose}>
+        <button data-testid="draft-close" className="icon-btn primary" title={t('Close')} aria-label={t('Close')} onClick={onClose}>
           <svg {...svgProps}><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
-        <span className="muted">Draft bill</span>
+        <span className="muted">{t('Draft bill')}</span>
       </div>
       {problem && <p role="alert" className="error no-print">{problem}</p>}
       <div className="receipt print-area" data-testid="draft-bill">

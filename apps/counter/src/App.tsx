@@ -17,6 +17,7 @@ import { isRefusedPayment } from './refused.ts';
 import { getFont, getTheme, setFont, setTheme, type FontSize, type Theme } from './prefs.ts';
 import { lastContact, offlineLock, type Lock } from './lock.ts';
 import { localSettings } from './order.ts';
+import { LANGS, setLang, useLang, useT } from './i18n.ts';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -28,6 +29,7 @@ function useLive<T>(query: () => Promise<T>, initial: T): T {
 }
 
 export function App() {
+  const t = useT();
   const [device, setDevice] = useState<DeviceInfo | null | undefined>(undefined);
   useEffect(() => {
     void navigator.storage?.persist?.(); // ask the browser not to evict the sales database
@@ -48,7 +50,7 @@ export function App() {
           await Promise.all([db.shifts.clear(), db.sales.clear(), db.orderEvents.clear(), db.visits.clear(), db.pinState.clear()]);
         }
       });
-      setNotice('This counter is no longer recognised by the server (it was removed, or the server was reset). Please set it up again.');
+      setNotice(t('This counter is no longer recognised by the server (it was removed, or the server was reset). Please set it up again.'));
       setDevice(null);
     })();
   }), []);
@@ -62,12 +64,13 @@ export function App() {
       setInvite('');
     }} />;
   }
-  if (device === undefined) return <main className="center">Loading…</main>;
+  if (device === undefined) return <main className="center">{t('Loading…')}</main>;
   if (!device) return <EnrolScreen onDone={(d) => { setNotice(''); setDevice(d); }} invitedEmail={invitedEmail} notice={notice} />;
   return <Counter device={device} />;
 }
 
 function EnrolScreen({ onDone, invitedEmail, notice }: { onDone: (d: DeviceInfo) => void; invitedEmail: string; notice: string }) {
+  const t = useT();
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   // Which part of the set-up is running: the code is checked and the tablet registered, then the menu and staff are loaded.
@@ -84,17 +87,17 @@ function EnrolScreen({ onDone, invitedEmail, notice }: { onDone: (d: DeviceInfo)
       await pull(d);
       onDone(d);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not enrol.');
+      setError(e instanceof Error ? e.message : t('Could not enrol.'));
       setStage('code');
       setPhase('idle');
     }
   };
   if (phase !== 'idle') {
-    const rows = [['enrol', 'Checking the code and registering this tablet'], ['pull', 'Downloading the menu and staff list']] as const;
+    const rows = [['enrol', t('Checking the code and registering this tablet')], ['pull', t('Downloading the menu and staff list')]] as const;
     return (
       <EnrolShell step={2}>
-        <h1>Setting up…</h1>
-        <p className="lead">Keep this tablet online. It only takes a moment.</p>
+        <h1>{t('Setting up…')}</h1>
+        <p className="lead">{t('Keep this tablet online. It only takes a moment.')}</p>
         <div className="en-prog" data-testid="enrol-progress" role="status">
           {rows.map(([p, label], i) => {
             const state = p === phase ? 'run' : i < rows.findIndex(([x]) => x === phase) ? 'done' : 'wait';
@@ -109,28 +112,29 @@ function EnrolScreen({ onDone, invitedEmail, notice }: { onDone: (d: DeviceInfo)
   const paste = async () => { try { setCode((await navigator.clipboard.readText()).trim()); setError(''); } catch { /* no clipboard access: the manager types it */ } };
   return (
     <EnrolShell step={1}>
-      <h1>Set up this counter</h1>
-      <p className="lead">Type the enrolment code your manager gave you. Each code works once.</p>
+      <h1>{t('Set up this counter')}</h1>
+      <p className="lead">{t('Type the enrolment code your manager gave you. Each code works once.')}</p>
       {notice && <div data-testid="enrol-notice" className="m-alert bad" role="alert"><span>⚠</span><div className="grow">{notice}</div></div>}
       <form onSubmit={(e) => { e.preventDefault(); if (code.trim()) void go(); }} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <label className="m-field">Enrolment code
+        <label className="m-field">{t('Enrolment code')}
           <span className="en-input">
-            <input data-testid="enrol-code" className={`en-code${error ? ' err' : ''}`} value={code} onChange={(e) => { setCode(e.target.value); setError(''); }} placeholder="Paste or type the code" autoCapitalize="off" autoComplete="off" spellCheck={false} autoFocus aria-invalid={!!error} />
-            <button type="button" onClick={paste}>Paste</button>
+            <input data-testid="enrol-code" className={`en-code${error ? ' err' : ''}`} value={code} onChange={(e) => { setCode(e.target.value); setError(''); }} placeholder={t('Paste or type the code')} autoCapitalize="off" autoComplete="off" spellCheck={false} autoFocus aria-invalid={!!error} />
+            <button type="button" onClick={paste}>{t('Paste')}</button>
           </span>
         </label>
         {error && <div className="en-err" role="alert"><span>⚠</span><span>{error}</span></div>}
-        <button type="submit" data-testid="enrol-go" className="primary block" disabled={!code.trim()}>Set up this counter</button>
+        <button type="submit" data-testid="enrol-go" className="primary block" disabled={!code.trim()}>{t('Set up this counter')}</button>
       </form>
-      <div className="en-or">or</div>
-      <div className="muted" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>Are you the manager?
-        <button type="button" className="ghost sm" data-testid="enrol-manager" onClick={() => setStage('login')}>Sign in to create a code</button>
+      <div className="en-or">{t('or')}</div>
+      <div className="muted" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>{t('Are you the manager?')}
+        <button type="button" className="ghost sm" data-testid="enrol-manager" onClick={() => setStage('login')}>{t('Sign in to create a code')}</button>
       </div>
     </EnrolShell>
   );
 }
 
 function Counter({ device }: { device: DeviceInfo }) {
+  const t = useT();
   const [menu, setMenu] = useState<MenuView | null>(null);
   const [actor, setActor] = useState<Actor | null>(null);
   const [tab, setTab] = useState<'sell' | 'orders' | 'shift'>('sell');
@@ -168,12 +172,12 @@ function Counter({ device }: { device: DeviceInfo }) {
       try {
         await pull(device);
         await pullOrders(device); // other devices' open orders (phase 12 step 7)
-        setSyncError(pushed ? '' : 'Sales could not be sent just now. They are safe on this tablet and will be retried.');
+        setSyncError(pushed ? '' : t('Sales could not be sent just now. They are safe on this tablet and will be retried.'));
         // Not `true`: the network can drop while this pull is in flight, and the `offline` event that came meanwhile
         // must not be overwritten by a request that had already left.
         setOnline(navigator.onLine);
       } catch {
-        setSyncError('Could not reach the server.');
+        setSyncError(t('Could not reach the server.'));
         setOnline(false);
       }
       await refresh();
@@ -204,7 +208,7 @@ function Counter({ device }: { device: DeviceInfo }) {
     return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); clearInterval(timer); };
   }, [sync, refresh]);
 
-  if (!menu) return <main className="center">Loading…</main>;
+  if (!menu) return <main className="center">{t('Loading…')}</main>;
   // A cashier with no open drawer cannot take money: send them to open one first.
   const needShift = !!actor && actor.role === 'cashier' && shift === null && tab !== 'shift';
   return (
@@ -213,15 +217,15 @@ function Counter({ device }: { device: DeviceInfo }) {
         {logoUrl && <img data-testid="logo" className="logo" src={logoUrl} alt="" />}
         <strong>{device.outletName}</strong> <span className="muted">· {device.counterCode}</span>
         <span className="spacer" />
-        <span data-testid="sync-status" className={online ? 'ok' : 'warn'} title={online ? 'Online' : 'Offline'} aria-label={online ? 'Online' : 'Offline'}>●</span>
+        <span data-testid="sync-status" className={online ? 'ok' : 'warn'} title={online ? t('Online') : t('Offline')} aria-label={online ? t('Online') : t('Offline')}>●</span>
         <span data-testid="pending" className="muted" title={`Sales waiting to reach the server${lastPush ? ` · last sent ${new Date(lastPush).toLocaleTimeString()}` : ''}`}>
           {pending}{lastPush ? ` · ${new Date(lastPush).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
         </span>
-        <button data-testid="sync-now" className="iconbtn" aria-label="Sync now" title="Sync now" onClick={sync}>⟳</button>
+        <button data-testid="sync-now" className="iconbtn" aria-label={t('Sync now')} title={t('Sync now')} onClick={sync}>⟳</button>
         {actor && !needShift && !locked && (
           <div className="seg" role="tablist">
-            <button data-testid="tab-sell" role="tab" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
-            <button data-testid="tab-orders" role="tab" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Orders{onlineWaiting > 0 && <span data-testid="online-badge" className="badge">{onlineWaiting}</span>}</button>
+            <button data-testid="tab-sell" role="tab" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>{t('Sell')}</button>
+            <button data-testid="tab-orders" role="tab" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>{t('Orders')}{onlineWaiting > 0 && <span data-testid="online-badge" className="badge">{onlineWaiting}</span>}</button>
           </div>
         )}
         <span className="spacer" />
@@ -230,11 +234,11 @@ function Counter({ device }: { device: DeviceInfo }) {
           onSignOut={actor ? () => setActor(null) : mgr ? () => { setMgr(null); setMgrName(''); } : undefined}
           onManager={!actor && mgr === null ? () => setMgr('') : undefined} />
       </header>
-      {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
-      {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
+      {parked > 0 && <div data-testid="parked" className="banner" role="alert">{t(parked === 1 ? '{n} record was not accepted by the server. Tell your manager; do not clear this tablet.' : '{n} records were not accepted by the server. Tell your manager; do not clear this tablet.', { n: parked })}</div>}
+      {syncError && <div className="banner" role="status">{syncError} {lastPull ? t('Working offline with the menu from {time}.', { time: new Date(lastPull).toLocaleString() }) : ''}</div>}
       {lock.state === 'warn' && (
         <div data-testid="lock-warn" className="banner" role="status">
-          This tablet has not reached the server for a while. It stops selling in {Math.max(1, Math.ceil(lock.leftMs / 3_600_000))} h unless it connects.
+          {t('This tablet has not reached the server for a while. It stops selling in {h} h unless it connects.', { h: Math.max(1, Math.ceil(lock.leftMs / 3_600_000)) })}
         </div>
       )}
       {mgr !== null && !actor ? (
@@ -252,8 +256,8 @@ function Counter({ device }: { device: DeviceInfo }) {
           {(tab === 'sell' || tab === 'shift') && <RefusedBanner />}
           {tab === 'orders' && actor.role === 'cashier' && (
             <div className="seg sub" role="tablist">
-              <button data-testid="orders-home" role="tab" className={ordersView === 'home' ? 'active' : ''} onClick={() => setOrdersView('home')}>Home</button>
-              <button data-testid="tab-online" role="tab" className={ordersView === 'online' ? 'active' : ''} onClick={() => setOrdersView('online')}>Online{onlineWaiting > 0 && <span className="badge">{onlineWaiting}</span>}</button>
+              <button data-testid="orders-home" role="tab" className={ordersView === 'home' ? 'active' : ''} onClick={() => setOrdersView('home')}>{t('Home')}</button>
+              <button data-testid="tab-online" role="tab" className={ordersView === 'online' ? 'active' : ''} onClick={() => setOrdersView('online')}>{t('Online')}{onlineWaiting > 0 && <span className="badge">{onlineWaiting}</span>}</button>
             </div>
           )}
           {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : tab === 'orders' ? (ordersView === 'home' || actor.role !== 'cashier' ? <Orders device={device} actor={actor} /> : null) : tab === 'shift' ? <Shift device={device} actor={actor} shift={shift ?? undefined} onSync={sync} /> : null}
@@ -266,23 +270,26 @@ function Counter({ device }: { device: DeviceInfo }) {
 
 /** Shown instead of the PIN pad and the till while the tablet is locked (lock.ts). Sync keeps running underneath. */
 function OfflineLock({ reason, days, pending, onSync }: { reason: 'never' | 'too_long' | 'clock'; days: number; pending: number; onSync: () => Promise<void> }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
-  const why = reason === 'clock' ? "This tablet's date is earlier than its last contact with the server. Check the date and time."
-    : reason === 'never' ? 'This tablet has no record of reaching the server.'
-    : `This tablet has not reached the server for more than ${days} day${days === 1 ? '' : 's'}.`;
+  const why = reason === 'clock' ? t("This tablet's date is earlier than its last contact with the server. Check the date and time.")
+    : reason === 'never' ? t('This tablet has no record of reaching the server.')
+    : t(days === 1 ? 'This tablet has not reached the server for more than {n} day.' : 'This tablet has not reached the server for more than {n} days.', { n: days });
   return (
     <main className="center" data-testid="offline-lock" data-reason={reason}>
-      <h2>Selling is paused</h2>
+      <h2>{t('Selling is paused')}</h2>
       <p>{why}</p>
-      <p className="muted">Connect it to the internet. It unlocks by itself once it reaches the server.
-        {pending > 0 ? ` The ${pending} sale${pending === 1 ? '' : 's'} not yet sent ${pending === 1 ? 'is' : 'are'} safe on this tablet.` : ''}</p>
-      <button data-testid="lock-sync" className="primary" disabled={busy} onClick={() => { setBusy(true); void onSync().finally(() => setBusy(false)); }}>{busy ? 'Trying…' : 'Try now'}</button>
+      <p className="muted">{t('Connect it to the internet. It unlocks by itself once it reaches the server.')}
+        {pending > 0 ? ' ' + t(pending === 1 ? 'The {n} sale not yet sent is safe on this tablet.' : 'The {n} sales not yet sent are safe on this tablet.', { n: pending }) : ''}</p>
+      <button data-testid="lock-sync" className="primary" disabled={busy} onClick={() => { setBusy(true); void onSync().finally(() => setBusy(false)); }}>{busy ? t('Trying…') : t('Try now')}</button>
     </main>
   );
 }
 
 /** The ⋮ menu: who is signed in (cashier or manager), text size, theme, the drawer (Shift) and, set apart in red, Sign out. Closes on any tap outside it. */
 function MoreMenu({ actor, manager, onShift, onSignOut, onManager }: { actor?: Actor; manager?: { name: string; signedIn: boolean }; onShift?: () => void; onSignOut?: () => void; onManager?: () => void }) {
+  const t = useT();
+  const lang = useLang();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const [font, setFontState] = useState<FontSize>(getFont);
@@ -293,29 +300,34 @@ function MoreMenu({ actor, manager, onShift, onSignOut, onManager }: { actor?: A
     document.addEventListener('pointerdown', away);
     return () => document.removeEventListener('pointerdown', away);
   }, [open]);
-  const who = actor ? { name: actor.name, role: actor.role } : manager?.signedIn ? { name: manager.name || 'Manager', role: 'manager' } : null;
+  const who = actor ? { name: actor.name, role: actor.role } : manager?.signedIn ? { name: manager.name || t('Manager'), role: 'manager' } : null;
   return (
     <div className="more" ref={ref}>
-      <button data-testid="more-menu" className="iconbtn" aria-label="More" aria-expanded={open} onClick={() => setOpen(!open)}>⋮</button>
+      <button data-testid="more-menu" className="iconbtn" aria-label={t('More')} aria-expanded={open} onClick={() => setOpen(!open)}>⋮</button>
       {open && (
         <div className="popmenu" role="menu">
-          {who && <div className="profile" data-testid="who"><span className="avatar">{who.name.charAt(0).toUpperCase()}</span><span style={{ display: 'flex', flexDirection: 'column' }}><b>{who.name}</b><small>{who.role}</small></span></div>}
+          {who && <div className="profile" data-testid="who"><span className="avatar">{who.name.charAt(0).toUpperCase()}</span><span style={{ display: 'flex', flexDirection: 'column' }}><b>{who.name}</b><small>{t(who.role)}</small></span></div>}
           {who && <hr className="sep" />}
-          <div className="prefrow"><span>Text</span>
+          <div className="prefrow"><span>{t('Text')}</span>
             <div className="seg">
               {(['s', 'm', 'l'] as const).map((f) => <button key={f} data-testid={`font-${f}`} className={font === f ? 'active' : ''} aria-pressed={font === f} onClick={() => { setFont(f); setFontState(f); }}>{f.toUpperCase()}</button>)}
             </div>
           </div>
-          <div className="prefrow"><span>Theme</span>
+          <div className="prefrow"><span>{t('Theme')}</span>
             <div className="seg">
-              {([['dark', 'D'], ['light', 'L']] as const).map(([t, label]) => <button key={t} data-testid={`theme-${t}`} className={theme === t ? 'active' : ''} aria-pressed={theme === t} aria-label={`${t} theme`} onClick={() => { setTheme(t); setThemeState(t); }}>{label}</button>)}
+              {([['dark', 'D'], ['light', 'L']] as const).map(([th, label]) => <button key={th} data-testid={`theme-${th}`} className={theme === th ? 'active' : ''} aria-pressed={theme === th} aria-label={t(`${th} theme`)} onClick={() => { setTheme(th); setThemeState(th); }}>{label}</button>)}
+            </div>
+          </div>
+          <div className="prefrow"><span>{t('Language')}</span>
+            <div className="seg">
+              {LANGS.map((l) => <button key={l.code} data-testid={`lang-${l.code}`} lang={l.code} className={lang === l.code ? 'active' : ''} aria-pressed={lang === l.code} onClick={() => setLang(l.code)}>{l.label}</button>)}
             </div>
           </div>
           {(onShift || onManager) && <hr className="sep" />}
-          {onShift && <button role="menuitem" data-testid="tab-shift" onClick={() => { setOpen(false); onShift(); }}>Shift</button>}
-          {onManager && <button role="menuitem" data-testid="mgr-open" onClick={() => { setOpen(false); onManager(); }}>Manager tools</button>}
+          {onShift && <button role="menuitem" data-testid="tab-shift" onClick={() => { setOpen(false); onShift(); }}>{t('Shift')}</button>}
+          {onManager && <button role="menuitem" data-testid="mgr-open" onClick={() => { setOpen(false); onManager(); }}>{t('Manager tools')}</button>}
           {onSignOut && <hr className="sep" />}
-          {onSignOut && <button role="menuitem" className="danger" data-testid={manager ? 'mgr-exit' : 'sign-out'} onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>}
+          {onSignOut && <button role="menuitem" className="danger" data-testid={manager ? 'mgr-exit' : 'sign-out'} onClick={() => { setOpen(false); onSignOut(); }}>{t('Sign out')}</button>}
         </div>
       )}
     </div>

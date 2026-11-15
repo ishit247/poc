@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, type Me } from './api.ts';
 import { Modal } from './Modal.tsx';
 import type { MenuPayload } from './menuDraft.ts';
+import { t as tr, tn, useT } from '../i18n.ts';
 
 // Phase 9 setup, per outlet and platform: which of our items each platform item id is, and how the platform's
 // webhook reaches this outlet. Routes: apps/api/src/routes/integrations.ts.
@@ -16,8 +17,8 @@ interface Setup {
 }
 
 const NAME: Record<Channel, string> = { zomato: 'Zomato', swiggy: 'Swiggy' };
-const when = (s: string | null) => (s ? new Date(s).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'never');
-const ERRORS: Record<string, string> = {
+const when = (s: string | null) => (s ? new Date(s).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : tr('never'));
+const ERRORS: Record<string, string> = { // shown through t()
   'store id already in use': 'Another outlet already uses that store id. Check it against the platform dashboard.',
   'webhook secret required': 'Enter the webhook secret the platform gave you.',
   'tablet not at this outlet': 'Pick a tablet at this outlet.',
@@ -25,6 +26,7 @@ const ERRORS: Record<string, string> = {
 };
 
 export function Platforms({ token }: { token: string }) {
+  const tx = useT();
   const [me, setMe] = useState<Me | null>(null);
   const [outletId, setOutletId] = useState('');
   const [channel, setChannel] = useState<Channel>('zomato');
@@ -38,13 +40,13 @@ export function Platforms({ token }: { token: string }) {
 
   useEffect(() => {
     void Promise.all([api('/me', token), api('/menu', token)]).then(([m, mn]) => {
-      if (m.status !== 200) return setError('Your session has ended. Sign in again.');
+      if (m.status !== 200) return setError(tx('Your session has ended. Sign in again.'));
       const mine = m.body as Me;
       setMe(mine);
       const first = mine.outlets[0];
       if (first) setOutletId(first.id);
       if (mn.status === 200) setMenu(mn.body as MenuPayload);
-    }).catch(() => setError('Could not reach the server.'));
+    }).catch(() => setError(tx('Could not reach the server.')));
   }, [token]);
 
   const load = useCallback(async () => {
@@ -53,8 +55,8 @@ export function Platforms({ token }: { token: string }) {
       const [m, s] = await Promise.all([api(`/outlets/${outletId}/item-maps?channel=${channel}`, token), api(`/outlets/${outletId}/integrations`, token)]);
       if (m.status === 200) { setMaps(m.body.maps); setUnmapped(m.body.unmapped); }
       if (s.status === 200) setSetup(s.body as Setup);
-      if (m.status !== 200 || s.status !== 200) setError('Could not load this outlet.');
-    } catch { setError('Could not reach the server.'); }
+      if (m.status !== 200 || s.status !== 200) setError(tx('Could not load this outlet.'));
+    } catch { setError(tx('Could not reach the server.')); }
   }, [outletId, channel, token]);
   useEffect(() => { setError(''); void load(); }, [load]);
 
@@ -69,15 +71,15 @@ export function Platforms({ token }: { token: string }) {
     setBusy(true); setError('');
     try {
       const r = await api(`/outlets/${outletId}/item-maps`, token, { method: 'PUT', body: JSON.stringify({ channel, externalItemId, itemId }) });
-      if (r.status === 200) await load(); else setError('Could not save that mapping. Check the platform id has no spaces.');
-    } catch { setError('Could not reach the server.'); } finally { setBusy(false); }
+      if (r.status === 200) await load(); else setError(tx('Could not save that mapping. Check the platform id has no spaces.'));
+    } catch { setError(tx('Could not reach the server.')); } finally { setBusy(false); }
   };
   const remove = async (m: Map) => {
     setBusy(true); setError('');
     try {
       const r = await api(`/outlets/${outletId}/item-maps/${m.id}`, token, { method: 'DELETE' });
-      if (r.status === 200 || r.status === 404) { setRemoving(null); await load(); } else setError('Could not remove that mapping.');
-    } catch { setError('Could not reach the server.'); } finally { setBusy(false); }
+      if (r.status === 200 || r.status === 404) { setRemoving(null); await load(); } else setError(tx('Could not remove that mapping.'));
+    } catch { setError(tx('Could not reach the server.')); } finally { setBusy(false); }
   };
 
   const integration = setup?.integrations.find((i) => i.channel === channel) ?? null;
@@ -86,16 +88,16 @@ export function Platforms({ token }: { token: string }) {
   return (
     <main className="mgr">
       <div className="m-head">
-        <h1>Online platforms</h1>
+        <h1>{tx('Online platforms')}</h1>
         <div className="m-filters" style={{ padding: 0 }}>
           {me && me.outlets.length > 1 && (
-            <label>Outlet
+            <label>{tx('Outlet')}
               <select data-testid="plat-outlet" value={outletId} onChange={(e) => setOutletId(e.target.value)}>
                 {me.outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
             </label>
           )}
-          <div className="seg" role="radiogroup" aria-label="Platform">
+          <div className="seg" role="radiogroup" aria-label={tx('Platform')}>
             {(['zomato', 'swiggy'] as const).map((c) => (
               <button key={c} data-testid={`plat-${c}`} role="radio" aria-checked={channel === c} className={channel === c ? 'active' : ''} onClick={() => setChannel(c)}>{NAME[c]}</button>
             ))}
@@ -103,28 +105,28 @@ export function Platforms({ token }: { token: string }) {
         </div>
       </div>
       {error && <p role="alert" className="error" data-testid="plat-error">{error}</p>}
-      {me && me.outlets.length === 0 && <p className="error">No outlet is assigned to you.</p>}
+      {me && me.outlets.length === 0 && <p className="error">{tx('No outlet is assigned to you.')}</p>}
 
       {unmapped.length > 0 && (
         <section className="m-card" data-testid="plat-unmapped">
-          <header><h2>Needs an item ({unmapped.length})</h2></header>
-          <div className="m-row"><div className="main muted">These came on {NAME[channel]} orders but match none of our items, so they were left off the bill. Pick the item each one is.</div></div>
+          <header><h2>{tx('Needs an item')} ({unmapped.length})</h2></header>
+          <div className="m-row"><div className="main muted">{tx('These came on {platform} orders but match none of our items, so they were left off the bill. Pick the item each one is.', { platform: NAME[channel] })}</div></div>
           {unmapped.map((u) => <UnmappedRow key={u.externalItemId} u={u} items={items} channel={channel} busy={busy} onMap={mapOne} />)}
         </section>
       )}
 
       <section className="m-card" data-testid="plat-maps">
-        <header><h2>{NAME[channel]} items</h2></header>
+        <header><h2>{tx('{platform} items', { platform: NAME[channel] })}</h2></header>
         <AddMap items={items} channel={channel} busy={busy} onMap={mapOne} />
-        {maps.length === 0 && <div className="m-row"><div className="main muted">No {NAME[channel]} items mapped at this outlet yet.</div></div>}
+        {maps.length === 0 && <div className="m-row"><div className="main muted">{tx('No {platform} items mapped at this outlet yet.', { platform: NAME[channel] })}</div></div>}
         {maps.map((m) => (
           <div key={m.id} className="m-row" data-testid="plat-map">
             <div className="main">
               <b>{m.itemName}</b>
               <span>{NAME[channel]} id {m.externalItemId}</span>
-              {!m.priced && <span className="warn" data-testid="plat-unpriced"> · No {NAME[channel]} price: orders with it are refused. Add one in Menu.</span>}
+              {!m.priced && <span className="warn" data-testid="plat-unpriced"> · {tx('No {platform} price: orders with it are refused. Add one in Menu.', { platform: NAME[channel] })}</span>}
             </div>
-            <div className="m-row-actions"><button data-testid="plat-remove" disabled={busy} onClick={() => setRemoving(m)}>Remove</button></div>
+            <div className="m-row-actions"><button data-testid="plat-remove" disabled={busy} onClick={() => setRemoving(m)}>{tx('Remove')}</button></div>
           </div>
         ))}
       </section>
@@ -132,21 +134,21 @@ export function Platforms({ token }: { token: string }) {
       {setup && <Connection key={`${outletId}-${channel}`} token={token} outletId={outletId} channel={channel} setup={setup} integration={integration} onSaved={load} />}
 
       <section className="m-card" data-testid="plat-events">
-        <header><h2>Recent calls from {NAME[channel]}</h2></header>
-        {events.length === 0 && <div className="m-row"><div className="main muted">Nothing received yet.</div></div>}
+        <header><h2>{tx('Recent calls from {platform}', { platform: NAME[channel] })}</h2></header>
+        {events.length === 0 && <div className="m-row"><div className="main muted">{tx('Nothing received yet.')}</div></div>}
         {events.map((e, i) => (
           <div key={i} className="m-row">
-            <div className="main"><b className={e.result === 'rejected' ? 'warn' : ''}>{e.result === 'created' ? 'Order received' : e.result === 'duplicate' ? 'Sent again (ignored)' : 'Refused'}</b>
+            <div className="main"><b className={e.result === 'rejected' ? 'warn' : ''}>{e.result === 'created' ? tx('Order received') : e.result === 'duplicate' ? tx('Sent again (ignored)') : tx('Refused')}</b>
               <span>{when(e.receivedAt)}{e.detail ? ` · ${e.detail}` : ''}</span></div>
           </div>
         ))}
       </section>
 
       {removing && (
-        <Modal title="Remove this mapping?" onClose={() => setRemoving(null)}>
-          <p>{NAME[channel]} id {removing.externalItemId} will no longer be {removing.itemName}. New orders with it will be flagged for the kitchen and left off the bill.</p>
-          <div className="actions"><button onClick={() => setRemoving(null)}>Keep it</button>
-            <button className="danger" data-testid="plat-remove-confirm" disabled={busy} onClick={() => void remove(removing)}>Remove</button></div>
+        <Modal title={tx('Remove this mapping?')} onClose={() => setRemoving(null)}>
+          <p>{tx('{platform} id {id} will no longer be {item}. New orders with it will be flagged for the kitchen and left off the bill.', { platform: NAME[channel], id: removing.externalItemId, item: removing.itemName })}</p>
+          <div className="actions"><button onClick={() => setRemoving(null)}>{tx('Keep it')}</button>
+            <button className="danger" data-testid="plat-remove-confirm" disabled={busy} onClick={() => void remove(removing)}>{tx('Remove')}</button></div>
         </Modal>
       )}
     </main>
@@ -157,39 +159,42 @@ type ItemOpt = { id: string; name: string; priced: boolean };
 type OnMap = (externalItemId: string, itemId: string) => Promise<void>;
 
 function ItemSelect({ items, channel, value, onChange, testid }: { items: ItemOpt[]; channel: Channel; value: string; onChange: (v: string) => void; testid: string }) {
+  const tx = useT();
   return (
     <select data-testid={testid} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">Choose an item…</option>
-      {items.map((i) => <option key={i.id} value={i.id} disabled={!i.priced}>{i.name}{i.priced ? '' : ` (no ${NAME[channel]} price)`}</option>)}
+      <option value="">{tx('Choose an item…')}</option>
+      {items.map((i) => <option key={i.id} value={i.id} disabled={!i.priced}>{i.name}{i.priced ? '' : ` (${tx('no {platform} price', { platform: NAME[channel] })})`}</option>)}
     </select>
   );
 }
 
 function UnmappedRow({ u, items, channel, busy, onMap }: { u: Unmapped; items: ItemOpt[]; channel: Channel; busy: boolean; onMap: OnMap }) {
+  const tx = useT();
   // Start on the item of the same name, if there is a sellable one.
   const [itemId, setItemId] = useState(() => items.find((i) => i.priced && i.name.toLowerCase() === u.name.toLowerCase())?.id ?? '');
   return (
     <div className="m-row" data-testid="plat-unmapped-row">
-      <div className="main"><b>{u.name}</b><span>{NAME[channel]} id {u.externalItemId} · on {u.orders} order{u.orders === 1 ? '' : 's'}, last {when(u.lastSeen)}</span></div>
+      <div className="main"><b>{u.name}</b><span>{NAME[channel]} id {u.externalItemId} · {tn(u.orders, 'on {n} order', 'on {n} orders')}, {tx('last')} {when(u.lastSeen)}</span></div>
       <div className="m-row-actions">
         <ItemSelect items={items} channel={channel} value={itemId} onChange={setItemId} testid="plat-unmapped-item" />
-        <button className="primary" data-testid="plat-unmapped-save" disabled={!itemId || busy} title={itemId ? '' : 'Choose an item first'} onClick={() => void onMap(u.externalItemId, itemId)}>Map</button>
+        <button className="primary" data-testid="plat-unmapped-save" disabled={!itemId || busy} title={itemId ? '' : tx('Choose an item first')} onClick={() => void onMap(u.externalItemId, itemId)}>{tx('Map')}</button>
       </div>
     </div>
   );
 }
 
 function AddMap({ items, channel, busy, onMap }: { items: ItemOpt[]; channel: Channel; busy: boolean; onMap: OnMap }) {
+  const tx = useT();
   const [ext, setExt] = useState('');
   const [itemId, setItemId] = useState('');
   const valid = /^[\x21-\x7e]{1,64}$/.test(ext.trim());
   return (
     <div className="m-row">
-      <div className="main"><input data-testid="plat-add-ext" placeholder={`${NAME[channel]} item id`} value={ext} maxLength={64} onChange={(e) => setExt(e.target.value)} /></div>
+      <div className="main"><input data-testid="plat-add-ext" placeholder={tx('{platform} item id', { platform: NAME[channel] })} value={ext} maxLength={64} onChange={(e) => setExt(e.target.value)} /></div>
       <div className="m-row-actions">
         <ItemSelect items={items} channel={channel} value={itemId} onChange={setItemId} testid="plat-add-item" />
-        <button data-testid="plat-add-save" disabled={!valid || !itemId || busy} title={!valid ? 'Type the platform id (no spaces)' : !itemId ? 'Choose an item' : ''}
-          onClick={() => void onMap(ext.trim(), itemId).then(() => { setExt(''); setItemId(''); })}>Add</button>
+        <button data-testid="plat-add-save" disabled={!valid || !itemId || busy} title={!valid ? tx('Type the platform id (no spaces)') : !itemId ? tx('Choose an item') : ''}
+          onClick={() => void onMap(ext.trim(), itemId).then(() => { setExt(''); setItemId(''); })}>{tx('Add')}</button>
       </div>
     </div>
   );
@@ -198,6 +203,7 @@ function AddMap({ items, channel, busy, onMap }: { items: ItemOpt[]; channel: Ch
 function Connection({ token, outletId, channel, setup, integration, onSaved }: {
   token: string; outletId: string; channel: Channel; setup: Setup; integration: Integration | null; onSaved: () => Promise<void>;
 }) {
+  const tx = useT();
   const [storeId, setStoreId] = useState(integration?.externalStoreId ?? '');
   const [secret, setSecret] = useState('');
   const [userId, setUserId] = useState(integration?.serviceUserId ?? setup.users.find((u) => u.role === 'manager')?.id ?? '');
@@ -207,45 +213,45 @@ function Connection({ token, outletId, channel, setup, integration, onSaved }: {
   const [busy, setBusy] = useState(false);
 
   const secretOk = secret === '' ? !!integration : /^[\x21-\x7e]{16,200}$/.test(secret);
-  const why = !/^[\x21-\x7e]{1,64}$/.test(storeId.trim()) ? 'Enter the store id (no spaces)'
-    : !secretOk ? (secret === '' ? 'Enter the webhook secret' : 'The secret is at least 16 characters, no spaces')
-    : !userId ? 'Choose who orders are booked to' : !deviceId ? 'Choose the tablet that receives orders' : '';
+  const why = !/^[\x21-\x7e]{1,64}$/.test(storeId.trim()) ? tx('Enter the store id (no spaces)')
+    : !secretOk ? (secret === '' ? tx('Enter the webhook secret') : tx('The secret is at least 16 characters, no spaces'))
+    : !userId ? tx('Choose who orders are booked to') : !deviceId ? tx('Choose the tablet that receives orders') : '';
 
   const save = async () => {
     setBusy(true); setMsg(null);
     try {
       const body = { externalStoreId: storeId.trim(), serviceUserId: userId, deviceId, enabled, ...(secret ? { webhookSecret: secret } : {}) };
       const r = await api(`/outlets/${outletId}/integrations/${channel}`, token, { method: 'PUT', body: JSON.stringify(body) });
-      if (r.status === 200) { setSecret(''); setMsg({ ok: true, text: 'Saved.' }); await onSaved(); }
-      else setMsg({ ok: false, text: ERRORS[r.body.error as string] ?? 'Could not save. Check each field.' });
-    } catch { setMsg({ ok: false, text: 'Could not reach the server.' }); } finally { setBusy(false); }
+      if (r.status === 200) { setSecret(''); setMsg({ ok: true, text: tx('Saved.') }); await onSaved(); }
+      else setMsg({ ok: false, text: tx(ERRORS[r.body.error as string] ?? 'Could not save. Check each field.') });
+    } catch { setMsg({ ok: false, text: tx('Could not reach the server.') }); } finally { setBusy(false); }
   };
 
   return (
     <section className="m-card" data-testid="plat-connection">
-      <header><h2>Connection</h2>
-        <span className="muted" data-testid="plat-status">{!integration ? 'Not set up' : !integration.enabled ? 'Turned off' : `On · last order call ${when(integration.lastEventAt)}`}</span>
+      <header><h2>{tx('Connection')}</h2>
+        <span className="muted" data-testid="plat-status">{!integration ? tx('Not set up') : !integration.enabled ? tx('Turned off') : tx('On · last order call {time}', { time: when(integration.lastEventAt) })}</span>
       </header>
       <div className="m-form">
-        <label className="m-field">Store id (from the {NAME[channel]} partner dashboard)
+        <label className="m-field">{tx('Store id (from the {platform} partner dashboard)', { platform: NAME[channel] })}
           <input data-testid="plat-store" value={storeId} maxLength={64} onChange={(e) => setStoreId(e.target.value)} /></label>
-        <label className="m-field">Webhook secret
+        <label className="m-field">{tx('Webhook secret')}
           <input data-testid="plat-secret" type="password" autoComplete="off" value={secret} maxLength={200}
-            placeholder={integration ? 'Saved. Type a new one only to replace it' : 'At least 16 characters'} onChange={(e) => setSecret(e.target.value)} /></label>
-        <label className="m-field">Orders arrive on tablet
+            placeholder={integration ? tx('Saved. Type a new one only to replace it') : tx('At least 16 characters')} onChange={(e) => setSecret(e.target.value)} /></label>
+        <label className="m-field">{tx('Orders arrive on tablet')}
           <select data-testid="plat-device" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
-            {setup.devices.length === 0 && <option value="">No tablet at this outlet</option>}
+            {setup.devices.length === 0 && <option value="">{tx('No tablet at this outlet')}</option>}
             {setup.devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select></label>
-        <label className="m-field">Orders are booked to
+        <label className="m-field">{tx('Orders are booked to')}
           <select data-testid="plat-user" value={userId} onChange={(e) => setUserId(e.target.value)}>
-            <option value="">Choose a person…</option>
-            {setup.users.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
+            <option value="">{tx('Choose a person…')}</option>
+            {setup.users.map((u) => <option key={u.id} value={u.id}>{u.name} ({tx(u.role)})</option>)}
           </select></label>
-        <label className="m-field inline"><input data-testid="plat-enabled" type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Take orders from {NAME[channel]}</label>
+        <label className="m-field inline"><input data-testid="plat-enabled" type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> {tx('Take orders from {platform}', { platform: NAME[channel] })}</label>
         {msg && <p role={msg.ok ? 'status' : 'alert'} className={msg.ok ? 'muted' : 'error'} data-testid="plat-save-msg">{msg.text}</p>}
         <div className="m-dialog-actions">
-          <button className="primary" data-testid="plat-save" disabled={!!why || busy} title={why} onClick={() => void save()}>{busy ? 'Saving…' : 'Save'}</button>
+          <button className="primary" data-testid="plat-save" disabled={!!why || busy} title={why} onClick={() => void save()}>{busy ? tx('Saving…') : tx('Save')}</button>
         </div>
       </div>
     </section>

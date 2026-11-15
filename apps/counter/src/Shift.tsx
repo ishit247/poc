@@ -4,9 +4,10 @@ import { db, type DeviceInfo, type LocalShift } from './db.ts';
 import type { Actor } from './sale.ts';
 import { closeShift, managerCloseShift, openShift, slipFor } from './shift.ts';
 import { ManagerLogin } from './manager/index.ts';
+import { t, useT } from './i18n.ts';
 
 const money = (text: string, what: string): number => {
-  try { return parseRupees(text); } catch { throw new RangeError(`Enter ${what} as rupees, like 500 or 500.50.`); }
+  try { return parseRupees(text); } catch { throw new RangeError(t('Enter {what} as rupees, like 500 or 500.50.', { what: t(what) })); }
 };
 
 /**
@@ -14,6 +15,7 @@ const money = (text: string, what: string): number => {
  * screen. After closing, the slip shows what the drawer should have held; it is the cashier's copy.
  */
 export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; actor: Actor; shift: LocalShift | undefined; onSync: () => Promise<void> }) {
+  const t = useT();
   const [cash, setCash] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -29,17 +31,17 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
   const run = async (go: () => Promise<void>) => {
     setError('');
     setBusy(true);
-    try { await go(); } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); } finally { setBusy(false); }
+    try { await go(); } catch (e) { setError(e instanceof Error ? e.message : t('Something went wrong.')); } finally { setBusy(false); }
   };
 
   if (slip) {
     return (
       <main className="center">
-        <p className="no-print">Shift closed. Keep this slip with the cash.</p>
+        <p className="no-print">{t('Shift closed. Keep this slip with the cash.')}</p>
         <div className="receipt print-area" data-testid="shift-slip"><pre data-testid="shift-slip-text">{renderShiftSlip(slip).join('\n')}</pre></div>
         <div className="no-print">
-          <button data-testid="print" onClick={() => window.print()}>Print</button>{' '}
-          <button data-testid="slip-done" className="primary" onClick={() => setSlip(null)}>Done</button>
+          <button data-testid="print" onClick={() => window.print()}>{t('Print')}</button>{' '}
+          <button data-testid="slip-done" className="primary" onClick={() => setSlip(null)}>{t('Done')}</button>
         </div>
       </main>
     );
@@ -48,16 +50,16 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
   if (!shift) {
     return (
       <main className="center">
-        <h2>Open shift</h2>
+        <h2>{t('Open shift')}</h2>
         {forced?.closedByManager && (
           <p data-testid="forced-notice" className="warn">
             A manager closed {forced.userName}'s drawer at {new Date(forced.closedAt!).toLocaleTimeString()}: they counted ₹{formatRupees(paise(forced.countedCashPaise!))}, expected ₹{formatRupees(paise(forced.closedByManager.expectedCashPaise))}.
           </p>
         )}
-        <p>Count the cash in the drawer and enter it as the opening float.</p>
-        <input data-testid="opening-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="Opening cash ₹" />
+        <p>{t('Count the cash in the drawer and enter it as the opening float.')}</p>
+        <input data-testid="opening-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder={t('Opening cash ₹')} />
         <button data-testid="open-shift" className="primary" disabled={busy || !cash.trim()}
-          onClick={() => run(async () => { await openShift({ actor, openingCashPaise: money(cash, 'the opening cash') }); setCash(''); void onSync(); })}>Open shift</button>
+          onClick={() => run(async () => { await openShift({ actor, openingCashPaise: money(cash, 'the opening cash') }); setCash(''); void onSync(); })}>{t('Open shift')}</button>
         {error && <p className="error" role="alert">{error}</p>}
       </main>
     );
@@ -67,14 +69,14 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
     if (mgr === '') return <ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} />;
     return (
       <main className="center">
-        <h2>Shift open</h2>
-        <p data-testid="shift-other">The shift is open under <b>{shift.userName}</b> since {new Date(shift.openedAt).toLocaleTimeString()}. They need to close it before you can take payment.</p>
+        <h2>{t('Shift open')}</h2>
+        <p data-testid="shift-other">{t('The shift is open under {name} since {time}. They need to close it before you can take payment.', { name: shift.userName, time: new Date(shift.openedAt).toLocaleTimeString() })}</p>
         {mgr === null ? (
-          <p><button data-testid="mgr-close-other" onClick={() => { setError(''); setMgr(''); }}>{shift.userName} is not here? A manager can close it</button></p>
+          <p><button data-testid="mgr-close-other" onClick={() => { setError(''); setMgr(''); }}>{t('{name} is not here? A manager can close it', { name: shift.userName })}</button></p>
         ) : (
           <>
-            <p>Manager: count all the cash in the drawer, including the float, and enter it. The server works out the difference.</p>
-            <input data-testid="mgr-close-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="Counted cash ₹" />
+            <p>{t('Manager: count all the cash in the drawer, including the float, and enter it. The server works out the difference.')}</p>
+            <input data-testid="mgr-close-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder={t('Counted cash ₹')} />
             <button data-testid="mgr-close-go" className="primary" disabled={busy || !cash.trim()}
               onClick={() => run(async () => {
                 const counted = money(cash, 'the counted cash');
@@ -83,8 +85,8 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
                 setCash('');
                 setMgr(null);
                 await onSync().catch(() => {}); // brings the server's figures (and a closure by someone else, on a 409)
-              })}>{busy ? 'Closing…' : 'Close drawer'}</button>{' '}
-            <button onClick={() => { setMgr(null); setCash(''); setError(''); }}>Cancel</button>
+              })}>{busy ? t('Closing…') : t('Close drawer')}</button>{' '}
+            <button onClick={() => { setMgr(null); setCash(''); setError(''); }}>{t('Cancel')}</button>
           </>
         )}
         {error && <p className="error" role="alert">{error}</p>}
@@ -94,10 +96,10 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
 
   return (
     <main className="center">
-      <h2>Close shift</h2>
-      <p data-testid="shift-info">Open since {new Date(shift.openedAt).toLocaleTimeString()} · opening float ₹{formatRupees(paise(shift.openingCashPaise))}</p>
-      <p>Count all the cash in the drawer, including the float, and enter it. The expected amount is shown on the slip afterwards.</p>
-      <input data-testid="counted-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="Counted cash ₹" />
+      <h2>{t('Close shift')}</h2>
+      <p data-testid="shift-info">{t('Open since {time} · opening float ₹{amt}', { time: new Date(shift.openedAt).toLocaleTimeString(), amt: formatRupees(paise(shift.openingCashPaise)) })}</p>
+      <p>{t('Count all the cash in the drawer, including the float, and enter it. The expected amount is shown on the slip afterwards.')}</p>
+      <input data-testid="counted-cash" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} placeholder={t('Counted cash ₹')} />
       <button data-testid="close-shift" className="primary" disabled={busy || !cash.trim()}
         onClick={() => run(async () => {
           const view = await closeShift({ device, actor, countedCashPaise: money(cash, 'the counted cash') });
@@ -106,7 +108,7 @@ export function Shift({ device, actor, shift, onSync }: { device: DeviceInfo; ac
           // Worked out again after the sync: a payment refused in it (step 7d) moves from sales to its own line.
           const closed = await db.shifts.get(shift.id);
           setSlip(closed ? await slipFor(closed, device) : view);
-        })}>Close shift</button>
+        })}>{t('Close shift')}</button>
       {error && <p className="error" role="alert">{error}</p>}
     </main>
   );

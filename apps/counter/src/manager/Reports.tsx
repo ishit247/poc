@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, rs, type Me } from './api.ts';
+import { useT } from '../i18n.ts';
 
 interface Col { key: string; label: string; kind: 'text' | 'int' | 'paise' }
 interface Result { provisional: boolean; columns: Col[]; rows: Record<string, string | number | null>[]; totals: Record<string, number> | null }
 
-const KINDS = [
+const KINDS = [ // names are shown through t()
   { id: 'sales', name: 'Sales', by: [['day', 'by day'], ['outlet', 'by outlet'], ['counter', 'by counter'], ['cashier', 'by person'], ['channel', 'by channel']] },
   { id: 'items', name: 'Items', by: [['item', 'by item'], ['category', 'by category']] },
   { id: 'hourly', name: 'Busy hours', by: [] },
@@ -22,6 +23,7 @@ const niceStep = (x: number) => { const p = 10 ** Math.floor(Math.log10(x || 1))
 const chartPref = () => { try { return localStorage.getItem('mgr.chart') !== 'off'; } catch { return true; } };
 
 export function Reports({ token }: { token: string }) {
+  const tx = useT();
   const [me, setMe] = useState<Me | null>(null);
   const [outletId, setOutletId] = useState(''); // '' = every outlet of mine
   const [kind, setKind] = useState<(typeof KINDS)[number]['id']>('sales');
@@ -40,12 +42,12 @@ export function Reports({ token }: { token: string }) {
 
   useEffect(() => {
     void api('/me', token).then((r) => {
-      if (r.status !== 200) return setError('Your session has ended. Sign in again.');
+      if (r.status !== 200) return setError(tx('Your session has ended. Sign in again.'));
       const m = r.body as Me;
       setMe(m);
       const t = m.outlets.map((o) => o.today).sort()[0];
       if (t) { setToday(t); setTo(t); setFrom(shift(t, -6)); }
-    }).catch(() => setError('Could not reach the server.'));
+    }).catch(() => setError(tx('Could not reach the server.')));
   }, [token]);
 
   const path = useCallback((format: 'json' | 'csv') => {
@@ -64,8 +66,8 @@ export function Reports({ token }: { token: string }) {
     api(path('json'), token).then((r) => {
       if (stale) return;
       if (r.status === 200) setResult(r.body as Result);
-      else { setResult(null); setError(r.status === 400 ? (r.body.error === 'invalid request' ? 'Check the dates.' : String(r.body.error)) : 'Could not load the report.'); }
-    }).catch(() => { if (!stale) setError('Could not reach the server.'); }).finally(() => { if (!stale) setBusy(false); });
+      else { setResult(null); setError(r.status === 400 ? (r.body.error === 'invalid request' ? tx('Check the dates.') : String(r.body.error)) : tx('Could not load the report.')); }
+    }).catch(() => { if (!stale) setError(tx('Could not reach the server.')); }).finally(() => { if (!stale) setBusy(false); });
     return () => { stale = true; };
   }, [ready, path, token]);
 
@@ -74,12 +76,12 @@ export function Reports({ token }: { token: string }) {
     setError('');
     try {
       const r = await fetch(`/api${path('csv')}`, { headers: { authorization: `Bearer ${token}` } });
-      if (!r.ok) return setError('Could not download the file.');
+      if (!r.ok) return setError(tx('Could not download the file.'));
       const url = URL.createObjectURL(await r.blob());
       const a = document.createElement('a');
       a.href = url; a.download = `report-${kind}-${from}_${to}.csv`; a.click();
       URL.revokeObjectURL(url);
-    } catch { setError('Could not reach the server.'); }
+    } catch { setError(tx('Could not reach the server.')); }
   };
 
   const range = (days: number) => { if (today) { setTo(today); setFrom(shift(today, -(days - 1))); } };
@@ -116,7 +118,7 @@ export function Reports({ token }: { token: string }) {
   const showChart = chart && !!metric && series.length > 0;
   const fmt = (v: number) => (metric?.kind === 'paise' ? rs(v) : String(v));
   const onPage = new Set(slice.map((_, k) => (cur - 1) * size + k));
-  const readout = picked !== null && series[picked] ? `${series[picked]!.label} · ${metric!.label}: ${fmt(series[picked]!.v)}` : '';
+  const readout = picked !== null && series[picked] ? `${series[picked]!.label} · ${tx(metric!.label)}: ${fmt(series[picked]!.v)}` : '';
 
   const svg = () => {
     const W = 340, H = 200, L = 46, R = 8, T = 10, B = 24, iw = W - L - R, ih = H - T - B;
@@ -127,7 +129,7 @@ export function Reports({ token }: { token: string }) {
     const slot = iw / series.length, bw = Math.max(2, slot * 0.7);
     const ticks: number[] = []; for (let g = 0; g <= top; g += step) ticks.push(g);
     return (
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${metric!.label} by day`}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${tx(metric!.label)} ${tx('by day')}`}>
         {ticks.map((g) => { const y = T + ih - (g / top) * ih; return <g key={g}><line x1={L} x2={W - R} y1={y} y2={y} stroke="var(--line)" /><text x={L - 6} y={y + 4} textAnchor="end" fontSize="10" fill="var(--muted)">{axis(g)}</text></g>; })}
         {series.map((p, k) => {
           const h = (p.v / top) * ih, x = L + k * slot + (slot - bw) / 2;
@@ -148,82 +150,82 @@ export function Reports({ token }: { token: string }) {
   return (
     <main className="mgr">
       <div className="m-head">
-        <h1>Reports</h1>
+        <h1>{tx('Reports')}</h1>
         <span className="spacer" />
-        <label className="m-switch"><input data-testid="rep-chart-toggle" type="checkbox" checked={chart} onChange={(e) => toggleChart(e.target.checked)} /><span className="trk" />Chart</label>
-        <button data-testid="rep-csv" disabled={!ready || busy || !result} onClick={download}>⬇ Download CSV</button>
+        <label className="m-switch"><input data-testid="rep-chart-toggle" type="checkbox" checked={chart} onChange={(e) => toggleChart(e.target.checked)} /><span className="trk" />{tx('Chart')}</label>
+        <button data-testid="rep-csv" disabled={!ready || busy || !result} onClick={download}>{tx('⬇ Download CSV')}</button>
       </div>
-      {me && me.outlets.length === 0 && <p className="error">No outlet is assigned to you.</p>}
+      {me && me.outlets.length === 0 && <p className="error">{tx('No outlet is assigned to you.')}</p>}
       {me && me.outlets.length > 0 && (
         <section className="m-card">
           <div className="m-filters">
             {me.outlets.length > 1 && (
-              <label>Outlet
+              <label>{tx('Outlet')}
                 <select data-testid="rep-outlet" value={outletId} onChange={(e) => setOutletId(e.target.value)}>
-                  <option value="">All my outlets</option>
+                  <option value="">{tx('All my outlets')}</option>
                   {me.outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </select>
               </label>
             )}
-            <label>Report
+            <label>{tx('Report')}
               <select data-testid="rep-kind" value={kind} onChange={(e) => { const k = e.target.value as typeof kind; setKind(k); setBy(KINDS.find((x) => x.id === k)!.by[0]?.[0] ?? ''); setMetricKey(''); }}>
-                {KINDS.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
+                {KINDS.map((k) => <option key={k.id} value={k.id}>{tx(k.name)}</option>)}
               </select>
             </label>
             {byOptions.length > 0 && (
-              <label>Group by
+              <label>{tx('Group by')}
                 <select data-testid="rep-by" value={by} onChange={(e) => { setBy(e.target.value); setMetricKey(''); }}>
-                  {byOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                  {byOptions.map(([id, name]) => <option key={id} value={id}>{tx(name)}</option>)}
                 </select>
               </label>
             )}
-            <label>From <input data-testid="rep-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-            <label>To <input data-testid="rep-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-            <div className="m-chips" role="group" aria-label="Quick range">
-              {[[1, 'Today'], [7, '7 days'], [30, '30 days']].map(([d, name]) => <button key={d} className={activeDays === d ? 'active' : ''} aria-pressed={activeDays === d} onClick={() => range(d as number)}>{name}</button>)}
+            <label>{tx('From')} <input data-testid="rep-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+            <label>{tx('To')} <input data-testid="rep-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+            <div className="m-chips" role="group" aria-label={tx('Quick range')}>
+              {[[1, 'Today'], [7, '7 days'], [30, '30 days']].map(([d, name]) => <button key={d} className={activeDays === d ? 'active' : ''} aria-pressed={activeDays === d} onClick={() => range(d as number)}>{tx(name as string)}</button>)}
             </div>
           </div>
-          {result?.provisional && <div className="m-alert" data-testid="rep-provisional" style={{ margin: '0 14px 12px' }}><span>⚠</span><div className="grow">Includes today, so these figures are provisional until the day is closed.</div></div>}
+          {result?.provisional && <div className="m-alert" data-testid="rep-provisional" style={{ margin: '0 14px 12px' }}><span>⚠</span><div className="grow">{tx('Includes today, so these figures are provisional until the day is closed.')}</div></div>}
           {error && <div className="m-alert bad" role="alert" data-testid="rep-error" style={{ margin: '0 14px 12px' }}><span>⚠</span><div className="grow">{error}</div></div>}
         </section>
       )}
-      {busy && !result && <p className="muted">Loading…</p>}
+      {busy && !result && <p className="muted">{tx('Loading…')}</p>}
       {result && (
         <div className={`m-repgrid${showChart ? ' chart' : ''}`}>
           <section className="m-card">
             <div className="m-scroll">
               <table className="m-table" data-testid="rep-table">
-                <thead><tr>{result.columns.map((c, i) => <th key={c.key} className={`${c.kind === 'text' ? '' : 'num'}${showChart && i > 0 && result.columns.length > 6 && i >= result.columns.length - 2 ? ' hide-chart' : ''}`}>{c.label}</th>)}</tr></thead>
+                <thead><tr>{result.columns.map((c, i) => <th key={c.key} className={`${c.kind === 'text' ? '' : 'num'}${showChart && i > 0 && result.columns.length > 6 && i >= result.columns.length - 2 ? ' hide-chart' : ''}`}>{tx(c.label)}</th>)}</tr></thead>
                 <tbody>
-                  {rows.length === 0 && <tr><td colSpan={result.columns.length} className="muted" style={{ padding: 28, textAlign: 'center' }}>Nothing in these dates.</td></tr>}
+                  {rows.length === 0 && <tr><td colSpan={result.columns.length} className="muted" style={{ padding: 28, textAlign: 'center' }}>{tx('Nothing in these dates.')}</td></tr>}
                   {slice.map((r, k) => (
                     <tr key={(cur - 1) * size + k}>{result.columns.map((c, i) => <td key={c.key} className={`${c.kind === 'text' ? '' : 'num'}${showChart && i > 0 && result.columns.length > 6 && i >= result.columns.length - 2 ? ' hide-chart' : ''}`}>{cell(c, r[c.key] ?? null)}</td>)}</tr>
                   ))}
                 </tbody>
                 {result.totals && (
                   <tfoot>
-                    <tr data-testid="rep-total"><th>Total</th>{result.columns.slice(1).map((c, j) => <th key={c.key} className={`num${showChart && result.columns.length > 6 && j + 1 >= result.columns.length - 2 ? ' hide-chart' : ''}`}>{result.totals![c.key] === undefined ? '' : cell(c, result.totals![c.key]!)}</th>)}</tr>
+                    <tr data-testid="rep-total"><th>{tx('Total')}</th>{result.columns.slice(1).map((c, j) => <th key={c.key} className={`num${showChart && result.columns.length > 6 && j + 1 >= result.columns.length - 2 ? ' hide-chart' : ''}`}>{result.totals![c.key] === undefined ? '' : cell(c, result.totals![c.key]!)}</th>)}</tr>
                   </tfoot>
                 )}
               </table>
             </div>
             {rows.length > 0 && (
               <div className="m-pager">
-                <span className="muted">{(cur - 1) * size + 1}–{Math.min(cur * size, rows.length)} of {rows.length}</span>
+                <span className="muted">{(cur - 1) * size + 1}–{Math.min(cur * size, rows.length)} {tx('of')} {rows.length}</span>
                 <span className="spacer" />
-                <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>Rows
+                <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>{tx('Rows')}
                   <select data-testid="rep-size" value={size} onChange={(e) => { setSize(Number(e.target.value)); setPage(1); }}>{[10, 25, 50].map((n) => <option key={n}>{n}</option>)}</select>
                 </label>
                 {pages > 1 && (
                   <div className="btns">
-                    <button aria-label="Previous page" disabled={cur === 1} onClick={() => setPage(cur - 1)}>‹</button>
+                    <button aria-label={tx('Previous page')} disabled={cur === 1} onClick={() => setPage(cur - 1)}>‹</button>
                     {Array.from({ length: pages }, (_, p) => p + 1).filter((p) => pages <= 7 || p === 1 || p === pages || Math.abs(p - cur) <= 1).map((p, i, all) => (
                       <span key={p} style={{ display: 'contents' }}>
                         {i > 0 && p - all[i - 1]! > 1 && <span className="muted" style={{ alignSelf: 'center' }}>…</span>}
-                        <button aria-label={`Page ${p}`} aria-current={p === cur ? 'page' : undefined} onClick={() => setPage(p)}>{p}</button>
+                        <button aria-label={`${tx('Page')} ${p}`} aria-current={p === cur ? 'page' : undefined} onClick={() => setPage(p)}>{p}</button>
                       </span>
                     ))}
-                    <button aria-label="Next page" disabled={cur === pages} onClick={() => setPage(cur + 1)}>›</button>
+                    <button aria-label={tx('Next page')} disabled={cur === pages} onClick={() => setPage(cur + 1)}>›</button>
                   </div>
                 )}
               </div>
@@ -232,10 +234,10 @@ export function Reports({ token }: { token: string }) {
 
           {showChart && metric && (
             <section className="m-card" data-testid="rep-chart">
-              <header><h2>{metric.label}{dayChart ? ' by day' : ': top 10'}</h2><span className="spacer" />
+              <header><h2>{tx(metric.label)}{dayChart ? ` ${tx('by day')}` : `: ${tx('top 10')}`}</h2><span className="spacer" />
                 {numeric.length > 1 && (
-                  <select aria-label="Chart measure" value={metric.key} onChange={(e) => setMetricKey(e.target.value)} style={{ minHeight: 36, borderRadius: 8, fontSize: 14 }}>
-                    {numeric.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  <select aria-label={tx('Chart measure')} value={metric.key} onChange={(e) => setMetricKey(e.target.value)} style={{ minHeight: 36, borderRadius: 8, fontSize: 14 }}>
+                    {numeric.map((c) => <option key={c.key} value={c.key}>{tx(c.label)}</option>)}
                   </select>
                 )}
               </header>
@@ -243,7 +245,7 @@ export function Reports({ token }: { token: string }) {
                 {dayChart ? svg() : series.map((p) => (
                   <div key={p.label} className="m-hbar"><span className="lab" title={p.label}>{p.label}</span><span className="trk"><i style={{ width: `${(p.v / Math.max(1, series[0]!.v)) * 100}%` }} /></span><span className="val">{fmt(p.v)}</span></div>
                 ))}
-                {dayChart && <div className="m-readout">{readout || 'Hover or tap a bar. Bars for the rows on this page are highlighted.'}</div>}
+                {dayChart && <div className="m-readout">{readout || tx('Hover or tap a bar. Bars for the rows on this page are highlighted.')}</div>}
               </div>
             </section>
           )}

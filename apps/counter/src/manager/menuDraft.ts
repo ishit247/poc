@@ -1,6 +1,7 @@
 // The manager menu editor's data handling, free of React so it can be tested (docs/manager-menu-editor-plan.md).
 // The grid edits a local draft of the live menu; `buildApply` turns the difference from what the server last sent into
 // the body of POST /menu/apply (one transaction, see apps/api/src/routes/menu.ts).
+import { t as tr } from '../i18n.ts';
 import { ITEM_DESCRIPTION_MAX, csvFile, csvText, parseCsv, parseGstBp, parsePaise } from '@pos/shared';
 
 export type Channel = 'counter' | 'zomato' | 'swiggy';
@@ -62,24 +63,24 @@ export type RowIssues = Partial<Record<Field, string>>;
 /** Existing rows always have a code; a new one may leave it empty and be given the next free one. */
 export function rowIssues(r: DRow, d: Draft): RowIssues {
   const e: RowIssues = {};
-  if (!r.name.trim()) e.name = 'Name is required';
-  else if (r.name.trim().length > 100) e.name = 'Name is at most 100 characters';
+  if (!r.name.trim()) e.name = tr('Name is required');
+  else if (r.name.trim().length > 100) e.name = tr('Name is at most 100 characters');
   const code = r.code.trim();
-  if (code ? !/^[0-9]{2}$/.test(code) : !isNew(r.key)) e.code = 'Code is two digits';
-  else if (code && d.rows.some((o) => o !== r && o.categoryKey === r.categoryKey && o.code.trim() === code)) e.code = 'Code is used in this category';
-  if (r.hsn.trim() && !/^[0-9]{4,8}$/.test(r.hsn.trim())) e.hsn = 'HSN/SAC must be 4 to 8 digits';
-  if (parseGstBp(r.gst) === null) e.gst = 'GST must be 0 to 40, up to 2 decimals';
-  for (const ch of CHANNELS) if (r[ch].trim() && parsePaise(r[ch]) === null) e[ch] = 'Price in rupees, up to 2 decimals';
-  if (r.desc.trim().length > ITEM_DESCRIPTION_MAX) e.desc = `Description is at most ${ITEM_DESCRIPTION_MAX} characters`;
+  if (code ? !/^[0-9]{2}$/.test(code) : !isNew(r.key)) e.code = tr('Code is two digits');
+  else if (code && d.rows.some((o) => o !== r && o.categoryKey === r.categoryKey && o.code.trim() === code)) e.code = tr('Code is used in this category');
+  if (r.hsn.trim() && !/^[0-9]{4,8}$/.test(r.hsn.trim())) e.hsn = tr('HSN/SAC must be 4 to 8 digits');
+  if (parseGstBp(r.gst) === null) e.gst = tr('GST must be 0 to 40, up to 2 decimals');
+  for (const ch of CHANNELS) if (r[ch].trim() && parsePaise(r[ch]) === null) e[ch] = tr('Price in rupees, up to 2 decimals');
+  if (r.desc.trim().length > ITEM_DESCRIPTION_MAX) e.desc = tr('Description is at most {n} characters', { n: ITEM_DESCRIPTION_MAX });
   return e;
 }
 export function catIssues(c: DCat, d: Draft): Partial<Record<'name' | 'code', string>> {
   const e: Partial<Record<'name' | 'code', string>> = {};
-  if (!c.name.trim()) e.name = 'Name is required';
-  else if (c.name.trim().length > 100) e.name = 'Name is at most 100 characters';
+  if (!c.name.trim()) e.name = tr('Name is required');
+  else if (c.name.trim().length > 100) e.name = tr('Name is at most 100 characters');
   const code = c.code.trim();
-  if (code ? !/^[0-9]{2}$/.test(code) : !isNew(c.key)) e.code = 'Code is two digits';
-  else if (code && d.cats.some((o) => o !== c && o.code.trim() === code)) e.code = 'Code is used by another category';
+  if (code ? !/^[0-9]{2}$/.test(code) : !isNew(c.key)) e.code = tr('Code is two digits');
+  else if (code && d.cats.some((o) => o !== c && o.code.trim() === code)) e.code = tr('Code is used by another category');
   return e;
 }
 const hasKeys = (o: object) => Object.keys(o).length > 0;
@@ -346,10 +347,10 @@ export function importCsv(cur: Draft, text: string): CsvImport {
   const absent = CSV_COLS.filter((c) => !at.has(c));
   const out: CsvImport = { draft: cur, changed: 0, added: 0, unchanged: 0, bad: 0, newCats: 0, newTags: 0, problems: [], absent, ignored };
   if (!at.has('name') || !(at.has('id') || at.has('category'))) {
-    out.problems.push('The first row must name the columns: at least name, and category or id. Export the menu to see the layout.');
+    out.problems.push(tr('The first row must name the columns: at least name, and category or id. Export the menu to see the layout.'));
     return out;
   }
-  if (table.length < 2) { out.problems.push('The file has no items.'); return out; }
+  if (table.length < 2) { out.problems.push(tr('The file has no items.')); return out; }
 
   let d = cur;
   const live = new Map(cur.rows.map((r) => [r.key, r]));
@@ -365,26 +366,26 @@ export function importCsv(cur: Draft, text: string): CsvImport {
     const name = get('name') ?? '';
     const catName = get('category') ?? '';
     const id = get('id') ?? '';
-    const say = (why: string) => out.problems.push(`Row ${line}${name ? ` (${name})` : ''}: ${why}`);
-    if (!name) return say('no name.');
+    const say = (why: string) => out.problems.push(`${tr('Row')} ${line}${name ? ` (${name})` : ''}: ${why}`);
+    if (!name) return say(tr('no name.'));
     const catKey = catName ? catBy.get(catName.toLowerCase()) : undefined;
     const target = id && live.has(id) ? id : catKey ? rowBy.get(`${catKey}/${name.toLowerCase()}`) : undefined;
-    if (!target && !catName) return say('no category. A new item needs one.');
+    if (!target && !catName) return say(tr('no category. A new item needs one.'));
     const claim = target ?? `new/${catName.toLowerCase()}/${name.toLowerCase()}`;
     const twin = claimed.get(claim);
-    if (twin) return say(`the same item as row ${twin}. Keep one of the two rows.`);
+    if (twin) return say(tr('the same item as row {n}. Keep one of the two rows.', { n: String(twin) }));
     claimed.set(claim, line);
 
     const patch: Partial<DRow> = { name };
     const diet = get('diet');
     if (diet !== undefined) {
       const v = DIET_IN[diet.toLowerCase()];
-      if (v === undefined) return say('diet must be veg, egg, non_veg or empty.');
+      if (v === undefined) return say(tr('diet must be veg, egg, non_veg or empty.'));
       patch.diet = v;
     }
     const tagNames = get('tags')?.split(TAG_SEP).map((t) => t.trim()).filter(Boolean);
     const longTag = tagNames?.find((t) => t.length > TAG_NAME_MAX);
-    if (longTag) return say(`the tag "${longTag}" is longer than ${TAG_NAME_MAX} characters.`);
+    if (longTag) return say(tr('the tag "{tag}" is longer than {n} characters.', { tag: longTag, n: TAG_NAME_MAX }));
     if (out.problems.length) return; // no point building a draft that will not be used
 
     const code = get('code'); if (code !== undefined) patch.code = padCode(code);

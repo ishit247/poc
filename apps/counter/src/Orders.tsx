@@ -9,6 +9,7 @@ import { Receipt } from './Receipt.tsx';
 import { DraftBill, discountedBill, type DraftLine, type DraftTotals } from './DraftBill.tsx';
 import { RefundDialog, RefundSlip } from './RefundDialog.tsx';
 import { whyNotRefundableEach } from './refund.ts';
+import { useT } from './i18n.ts';
 
 const rs = (n: number) => formatRupees(paise(n));
 /** 08:51:41 PM: two-digit hours, so the rows of a list line up. */
@@ -20,6 +21,7 @@ const PrintIcon = () => (
 );
 
 export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) {
+  const t = useT();
   const [orders, setOrders] = useState<LocalSale[]>([]);
   const [paying, setPaying] = useState<LocalSale | null>(null);
   const [done, setDone] = useState<LocalSale | null>(null);
@@ -66,8 +68,8 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
   }
   return (
     <main className="orders">
-      <h2>{actor.role === 'cashier' ? 'Open orders' : 'Your open orders'}</h2>
-      {orders.length === 0 && <p className="muted" data-testid="no-orders">No open orders.</p>}
+      <h2>{actor.role === 'cashier' ? t('Open orders') : t('Your open orders')}</h2>
+      {orders.length === 0 && <p className="muted" data-testid="no-orders">{t('No open orders.')}</p>}
       <ul>
         {orders.map((o) => (
           <li key={o.id} data-testid="order">
@@ -77,15 +79,15 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
             </div>
             <span className="row">
               <b className="amt">₹{rs(orderDue(o))}</b>
-              {actor.role === 'cashier' && <button data-testid="pay-order" className="pay-btn" onClick={() => setPaying(o)}>Pay</button>}
-              <button data-testid="print-order" className="icon-btn" title="Print bill" aria-label="Print bill" onClick={() => void showBill(o)}><PrintIcon /></button>
+              {actor.role === 'cashier' && <button data-testid="pay-order" className="pay-btn" onClick={() => setPaying(o)}>{t('Pay')}</button>}
+              <button data-testid="print-order" className="icon-btn" title={t('Print bill')} aria-label={t('Print bill')} onClick={() => void showBill(o)}><PrintIcon /></button>
             </span>
           </li>
         ))}
       </ul>
       {actor.role === 'cashier' && recent.length > 0 && (
         <>
-          <h2>Recent receipts</h2>
+          <h2>{t('Recent receipts')}</h2>
           <ul>
             {recent.map(({ sale: s, whyNot }) => {
               const isRefunded = s.status === 'refunded';
@@ -93,14 +95,14 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
                 <li key={s.id} data-testid="recent-receipt" data-status={s.status}>
                   <div className="what">
                     <span className="muted"><span className="when">{when(s.createdAt)}</span> ·</span> {s.receiptNo}
-                    {isRefunded && <span className="warn" data-testid="refunded-tag"> · Refunded</span>}
+                    {isRefunded && <span className="warn" data-testid="refunded-tag"> · {t('Refunded')}</span>}
                   </div>
                   <span className="row">
                     <b className="amt">₹{rs(s.totalPaise)}</b>
                     {/* One slot: Refund on a paid bill, the same button disabled (with why) on any other. */}
-                    <button data-testid="refund" className="refund-btn" disabled={whyNot !== null} title={whyNot ?? 'Refund the whole bill'}
-                      onClick={() => setRefunding(s)}>Refund</button>
-                    <button data-testid="reprint" className="icon-btn" disabled={isRefunded} title={isRefunded ? 'Refunded: no copy of the receipt' : 'Reprint'} aria-label="Reprint" onClick={() => setCopy(s)}><PrintIcon /></button>
+                    <button data-testid="refund" className="refund-btn" disabled={whyNot !== null} title={whyNot ?? t('Refund the whole bill')}
+                      onClick={() => setRefunding(s)}>{t('Refund')}</button>
+                    <button data-testid="reprint" className="icon-btn" disabled={isRefunded} title={isRefunded ? t('Refunded: no copy of the receipt') : t('Reprint')} aria-label={t('Reprint')} onClick={() => setCopy(s)}><PrintIcon /></button>
                   </span>
                 </li>
               );

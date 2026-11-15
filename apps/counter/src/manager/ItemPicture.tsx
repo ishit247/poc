@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t as tr } from '../i18n.ts';
 
 // Pictures in the menu editor. A saved picture is fetched once per hash with the manager's session (the route needs it) and
 // kept as an object URL; a picture chosen but not yet saved is shown from the blob itself.
@@ -58,6 +59,6 @@ export async function savePicture(token: string, itemId: string, blob: Blob | nu
       : { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
     if (r.ok) return '';
     const why = (await r.json().catch(() => ({}))) as { error?: string };
-    return why.error === 'picture limit reached' ? 'Picture limit reached. Remove one first.' : r.status === 404 ? 'Item no longer exists.' : 'Could not save the picture.';
-  } catch { return 'Could not reach the server.'; }
+    return why.error === 'picture limit reached' ? tr('Picture limit reached. Remove one first.') : r.status === 404 ? tr('Item no longer exists.') : tr('Could not save the picture.');
+  } catch { return tr('Could not reach the server.'); }
 }

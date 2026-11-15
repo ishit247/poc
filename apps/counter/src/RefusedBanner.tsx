@@ -3,6 +3,7 @@ import { liveQuery } from 'dexie';
 import { formatRupees, paise } from '@pos/shared';
 import { db, type LocalSale } from './db.ts';
 import { acknowledgeRefused, refusedWhy, unacknowledgedRefused } from './refused.ts';
+import { t, useT } from './i18n.ts';
 
 interface Shown { sale: LocalSale; table: string | null }
 
@@ -21,21 +22,22 @@ function useRefused(): Shown[] {
   return v;
 }
 
-const amount = (s: LocalSale) => s.payments.map((p) => `₹${formatRupees(paise(p.amountPaise))} ${p.method === 'cash' ? 'cash' : 'UPI'}`).join(' + ');
+const amount = (s: LocalSale) => s.payments.map((p) => `₹${formatRupees(paise(p.amountPaise))} ${p.method === 'cash' ? t('Cash') : 'UPI'}`).join(' + ');
 
 /**
  * Step 7d: a payment this tablet took was refused by the server. Shown on Sell and Shift until a manager acknowledges it
  * (Manager tools, on this tablet). It does not block selling or closing the shift.
  */
 export function RefusedBanner() {
+  useT();
   const rows = useRefused();
   if (!rows.length) return null;
   return (
     <div data-testid="refused-banner" className="banner refused" role="alert">
       {rows.map(({ sale, table }) => (
         <p key={sale.id} data-testid="refused-row">
-          <b>Receipt {sale.receiptNo}</b>{table ? ` (table ${table})` : ''}, {amount(sale)}: refused by the server, {refusedWhy(sale.refused?.reason)}.
-          {' '}The customer paid: refund them or hand the money to a manager. A manager clears this under Manager tools.
+          <b>{t('Receipt')} {sale.receiptNo}</b>{table ? ` (${t('table')} ${table})` : ''}, {amount(sale)}: {t('refused by the server')}, {refusedWhy(sale.refused?.reason)}.
+          {' '}{t('The customer paid: refund them or hand the money to a manager. A manager clears this under Manager tools.')}
         </p>
       ))}
     </div>
@@ -44,6 +46,7 @@ export function RefusedBanner() {
 
 /** In Manager tools: the refused payments this tablet holds, each acknowledged online by the signed-in manager. */
 export function RefusedAck({ token, outletId }: { token: string; outletId: string }) {
+  const t = useT();
   const rows = useRefused();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
@@ -51,15 +54,15 @@ export function RefusedAck({ token, outletId }: { token: string; outletId: strin
   const ack = async (saleId: string) => {
     setError('');
     setBusy(saleId);
-    try { await acknowledgeRefused({ token, outletId, saleId }); } catch (e) { setError(e instanceof Error ? e.message : 'Could not record it.'); } finally { setBusy(''); }
+    try { await acknowledgeRefused({ token, outletId, saleId }); } catch (e) { setError(e instanceof Error ? e.message : t('Could not record it.')); } finally { setBusy(''); }
   };
   return (
     <section data-testid="mgr-refused">
-      <h3>Payments the server refused on this tablet</h3>
+      <h3>{t('Payments the server refused on this tablet')}</h3>
       {rows.map(({ sale, table }) => (
         <p key={sale.id}>
-          Receipt {sale.receiptNo}{table ? ` (table ${table})` : ''}, {amount(sale)}, {refusedWhy(sale.refused?.reason)}.{' '}
-          <button data-testid="mgr-refused-ack" disabled={!!busy} onClick={() => ack(sale.id)}>{busy === sale.id ? 'Recording…' : 'I have dealt with it'}</button>
+          {t('Receipt')} {sale.receiptNo}{table ? ` (${t('table')} ${table})` : ''}, {amount(sale)}, {refusedWhy(sale.refused?.reason)}.{' '}
+          <button data-testid="mgr-refused-ack" disabled={!!busy} onClick={() => ack(sale.id)}>{busy === sale.id ? t('Recording…') : t('I have dealt with it')}</button>
         </p>
       ))}
       {error && <p className="error" role="alert">{error}</p>}

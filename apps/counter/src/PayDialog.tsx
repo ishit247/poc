@@ -3,6 +3,7 @@ import { formatRupees, paise, parseRupees, type BillDiscount, type Paise, type T
 import { DiscountFields, useDiscountForm } from './DiscountFields.tsx';
 import { localSettings } from './order.ts';
 import type { BillLine } from './sale.ts';
+import { t, useT } from './i18n.ts';
 
 type Mode = 'cash' | 'upi' | 'split';
 const rs = (n: number) => formatRupees(paise(n));
@@ -10,12 +11,12 @@ const rs = (n: number) => formatRupees(paise(n));
 /** Builds the tenders from what was typed. Throws a RangeError with a message fit to show. */
 function build(mode: Mode, total: Paise, cashIn: string, splitCash: string, ref: string): Tender[] {
   const money = (s: string, what: string): Paise => {
-    try { return parseRupees(s); } catch { throw new RangeError(`Enter ${what} as rupees, like 150 or 150.50.`); }
+    try { return parseRupees(s); } catch { throw new RangeError(t('Enter {what} as rupees, like 150 or 150.50.', { what: t(what) })); }
   };
   if (mode === 'upi') return [{ method: 'upi', amountPaise: total, upiRef: ref }];
   if (mode === 'cash') return [{ method: 'cash', amountPaise: total, tenderedPaise: cashIn.trim() ? money(cashIn, 'the cash received') : total }];
   const c = money(splitCash, 'the cash part');
-  if (c <= 0 || c >= total) throw new RangeError('The cash part must be more than 0 and less than the total.');
+  if (c <= 0 || c >= total) throw new RangeError(t('The cash part must be more than 0 and less than the total.'));
   return [
     { method: 'cash', amountPaise: c, tenderedPaise: cashIn.trim() ? money(cashIn, 'the cash received') : c },
     { method: 'upi', amountPaise: paise(total - c), upiRef: ref },
@@ -35,6 +36,7 @@ export function PayDialog({ lines, total, discountable = true, initialDiscount =
   initialDiscount?: BillDiscount | null;
   onConfirm: (t: Tender[], discount: BillDiscount | null) => Promise<void>; onCancel: () => void;
 }) {
+  const t = useT();
   const [mode, setMode] = useState<Mode>(initialMode);
   const [cashIn, setCashIn] = useState('');
   const [splitCash, setSplitCash] = useState('');
@@ -46,9 +48,9 @@ export function PayDialog({ lines, total, discountable = true, initialDiscount =
   useEffect(() => { void localSettings().then(setSettings); }, []);
 
   const cap = settings?.discountMaxBp ?? 0;
-  const offWhy = !discountable ? 'This bill cannot take a discount.'
-    : !settings ? 'Loading…'
-    : cap === 0 ? 'Discounts are off. A manager can turn them on in Settings.' : undefined;
+  const offWhy = !discountable ? t('This bill cannot take a discount.')
+    : !settings ? t('Loading…')
+    : cap === 0 ? t('Discounts are off. A manager can turn them on in Settings.') : undefined;
 
   // What the discount comes to, and why it cannot be given yet. Priced by the same function the store uses.
   const d = useDiscountForm(lines, settings, initialDiscount, giving);
@@ -67,48 +69,48 @@ export function PayDialog({ lines, total, discountable = true, initialDiscount =
     try {
       await onConfirm(build(mode, due, cashIn, splitCash, ref), giving ? d.bill!.discount : null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Payment failed.');
+      setError(e instanceof Error ? e.message : t('Payment failed.'));
       setBusy(false);
     }
   };
   const clearDiscount = () => { setGiving(false); d.reset(); setError(''); };
 
   return (
-    <div className="overlay" role="dialog" aria-label="Take payment">
+    <div className="overlay" role="dialog" aria-label={t('Take payment')}>
       <div className="dialog pay">
-        <h2>Take payment · ₹<span data-testid="pay-due">{rs(due)}</span></h2>
+        <h2>{t('Take payment')} · ₹<span data-testid="pay-due">{rs(due)}</span></h2>
         {giving && d.bill && (
           <p className="muted discount-summary" data-testid="discount-summary">
-            Bill ₹{rs(total)}, discount −₹{rs(d.bill.discountPaise)} before GST, GST ₹{rs(d.bill.taxPaise)}
+            {t('Bill ₹{bill}, discount −₹{disc} before GST, GST ₹{gst}', { bill: rs(total), disc: rs(d.bill.discountPaise), gst: rs(d.bill.taxPaise) })}
           </p>
         )}
         <div className="modes">
-          {(['cash', 'upi', 'split'] as const).map((m) => <button key={m} data-testid={`mode-${m}`} className={mode === m ? 'active' : ''} onClick={() => { setMode(m); setError(''); }}>{m === 'upi' ? 'UPI' : m[0]!.toUpperCase() + m.slice(1)}</button>)}
+          {(['cash', 'upi', 'split'] as const).map((m) => <button key={m} data-testid={`mode-${m}`} className={mode === m ? 'active' : ''} onClick={() => { setMode(m); setError(''); }}>{m === 'upi' ? 'UPI' : t(m === 'cash' ? 'Cash' : 'Split')}</button>)}
         </div>
-        {mode === 'split' && <label>Cash part (₹)<input data-testid="split-cash" inputMode="decimal" value={splitCash} onChange={(e) => setSplitCash(e.target.value)} /></label>}
+        {mode === 'split' && <label>{t('Cash part (₹)')}<input data-testid="split-cash" inputMode="decimal" value={splitCash} onChange={(e) => setSplitCash(e.target.value)} /></label>}
         {mode !== 'upi' && (
-          <label>Cash received (₹)
+          <label>{t('Cash received (₹)')}
             <input data-testid="cash-in" inputMode="decimal" value={cashIn} onChange={(e) => setCashIn(e.target.value)} placeholder={mode === 'cash' ? rs(due) : ''} />
           </label>
         )}
-        {mode !== 'cash' && <label>UPI reference (optional)<input data-testid="upi-ref" value={ref} onChange={(e) => setRef(e.target.value)} /></label>}
+        {mode !== 'cash' && <label>{t('UPI reference (optional)')}<input data-testid="upi-ref" value={ref} onChange={(e) => setRef(e.target.value)} /></label>}
         {mode === 'cash' && (
           <div className="quick" data-testid="quick-cash">
-            <button data-testid="cash-exact" className={cashIn === '' ? 'active' : ''} onClick={() => setCashIn('')}>Exact</button>
+            <button data-testid="cash-exact" className={cashIn === '' ? 'active' : ''} onClick={() => setCashIn('')}>{t('Exact')}</button>
             {QUICK_CASH_RUPEES.filter((v) => v * 100 >= due).map((v) => <button key={v} data-testid={`cash-${v}`} onClick={() => setCashIn(String(v))}>₹{v}</button>)}
           </div>
         )}
-        {mode !== 'upi' && <p data-testid="change" className="change">Change to give: ₹{rs(change)}</p>}
+        {mode !== 'upi' && <p data-testid="change" className="change">{t('Change to give: ₹{amt}', { amt: rs(change) })}</p>}
         {giving && <DiscountFields form={d} settings={settings} onEdit={() => setError('')} />}
         {error && <p className="error" role="alert">{error}</p>}
         <div className="actions">
           {/* One slot: Discount opens the fields, No discount closes and clears them. Plain, never the primary. */}
           {giving
-            ? <button data-testid="discount-clear" onClick={clearDiscount} disabled={busy}>No discount</button>
-            : <button data-testid="discount-open" onClick={() => setGiving(true)} disabled={busy || !!offWhy} title={offWhy}>Discount</button>}
+            ? <button data-testid="discount-clear" onClick={clearDiscount} disabled={busy}>{t('No discount')}</button>
+            : <button data-testid="discount-open" onClick={() => setGiving(true)} disabled={busy || !!offWhy} title={offWhy}>{t('Discount')}</button>}
           <span className="spacer" />
-          <button onClick={onCancel} disabled={busy}>Cancel</button>
-          <button data-testid="confirm-pay" className="primary" onClick={confirm} disabled={busy || !ready} title={!ready ? d.why : undefined}>Confirm payment</button>
+          <button onClick={onCancel} disabled={busy}>{t('Cancel')}</button>
+          <button data-testid="confirm-pay" className="primary" onClick={confirm} disabled={busy || !ready} title={!ready ? d.why : undefined}>{t('Confirm payment')}</button>
         </div>
       </div>
     </div>
