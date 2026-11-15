@@ -223,6 +223,33 @@ CREATE TABLE payment (
 SELECT app.enable_tenant_rls('payment');
 REVOKE UPDATE, DELETE, TRUNCATE ON payment FROM pos_app;
 
+-- A refund of a whole paid counter sale (PLAN 17 Q15, docs/refunds-plan.md): one row per payment method, paying back
+-- exactly what that method took (checked with the payments below). The sale itself is never edited (invariant 4);
+-- only its status moves to 'refunded'. Cash comes out of the drawer of shift_id, which the route takes from the
+-- refunding cashier's own open shift, never from the request.
+CREATE TABLE refund (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id    uuid NOT NULL REFERENCES tenant(id),
+  sale_id      uuid NOT NULL,
+  method       text NOT NULL CHECK (method IN ('cash', 'upi')),
+  amount_paise bigint NOT NULL CHECK (amount_paise > 0),
+  reason       text NOT NULL CHECK (length(reason) BETWEEN 1 AND 200),
+  shift_id     uuid,
+  device_id    uuid,
+  refunded_by  uuid NOT NULL,
+  refunded_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (sale_id, method),
+  -- Cash leaves a particular drawer, so a cash refund always names the shift and tablet it came from.
+  CHECK (method <> 'cash' OR (shift_id IS NOT NULL AND device_id IS NOT NULL)),
+  FOREIGN KEY (tenant_id, sale_id)     REFERENCES sale(tenant_id, id),
+  FOREIGN KEY (tenant_id, shift_id)    REFERENCES shift(tenant_id, id),
+  FOREIGN KEY (tenant_id, device_id)   REFERENCES device(tenant_id, id),
+  FOREIGN KEY (tenant_id, refunded_by) REFERENCES app_user(tenant_id, id)
+);
+CREATE INDEX refund_shift_ix ON refund (shift_id) WHERE shift_id IS NOT NULL;
+SELECT app.enable_tenant_rls('refund');
+REVOKE UPDATE, DELETE, TRUNCATE ON refund FROM pos_app;
+
 -- The sync ledger: one row per event the server has DECIDED (applied or rejected), keyed by the
 -- client's event id so a retry finds its earlier answer. (tenant_id, id) rather than id alone: an id
 -- another tenant used must not look like "already seen" through RLS. A deferred event (its sale has not
@@ -278,17 +305,28 @@ CREATE TRIGGER sale_guard BEFORE UPDATE ON sale FOR EACH ROW EXECUTE FUNCTION ap
 
 -- Invariant 3: a paid sale's payments sum to its total. A payment's amount is the part of the
 -- total it covers; cash tendered above that is recorded as change (see the payment CHECKs).
--- Deferred to commit so the sale and its payments can be written in any order within one transaction.
+-- A refunded sale is refunded whole: each method gets back exactly what it paid, and only a refunded sale has refunds.
+-- Deferred to commit so the sale, its payments and its refunds can be written in any order within one transaction.
 CREATE FUNCTION app.assert_sale_payments(sid uuid) RETURNS void
 LANGUAGE plpgsql AS
 $$
 DECLARE s record; paid bigint;
 BEGIN
   SELECT id, status, total_paise INTO s FROM sale WHERE id = sid;
-  IF s.id IS NULL OR s.status NOT IN ('paid', 'refunded') THEN RETURN; END IF;
+  IF s.id IS NULL THEN RETURN; END IF;
+  IF s.status <> 'refunded' AND EXISTS (SELECT 1 FROM refund WHERE sale_id = s.id) THEN
+    RAISE EXCEPTION 'sale % is % but has refunds', s.id, s.status;
+  END IF;
+  IF s.status NOT IN ('paid', 'refunded') THEN RETURN; END IF;
   SELECT COALESCE(sum(amount_paise), 0) INTO paid FROM payment WHERE sale_id = s.id;
   IF paid <> s.total_paise THEN
     RAISE EXCEPTION 'sale % payments (%) do not equal its total (%)', s.id, paid, s.total_paise;
+  END IF;
+  IF s.status = 'refunded' AND EXISTS (
+       SELECT 1 FROM (SELECT method, sum(amount_paise) AS a FROM payment WHERE sale_id = s.id GROUP BY method) p
+       FULL JOIN (SELECT method, amount_paise AS a FROM refund WHERE sale_id = s.id) r USING (method)
+       WHERE p.a IS DISTINCT FROM r.a) THEN
+    RAISE EXCEPTION 'sale % refunds do not match its payments method by method', s.id;
   END IF;
 END
 $$;
@@ -299,6 +337,8 @@ $$ BEGIN PERFORM app.assert_sale_payments(NEW.sale_id); RETURN NULL; END $$;
 CREATE CONSTRAINT TRIGGER sale_payments_ck AFTER INSERT OR UPDATE ON sale
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.sale_payments_ck();
 CREATE CONSTRAINT TRIGGER payment_sale_ck AFTER INSERT ON payment
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.payment_sale_ck();
+CREATE CONSTRAINT TRIGGER refund_sale_ck AFTER INSERT ON refund
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.payment_sale_ck();
 
 -- A running order's money is a cache of its live lines (phase 12): subtotal and tax are their sums, open or paid.

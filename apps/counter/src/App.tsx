@@ -15,6 +15,8 @@ import { EnrolCodeMaker, InviteScreen, ManagerLogin, ManagerTools } from './mana
 import { RefusedBanner } from './RefusedBanner.tsx';
 import { isRefusedPayment } from './refused.ts';
 import { getFont, getTheme, setFont, setTheme, type FontSize, type Theme } from './prefs.ts';
+import { lastContact, offlineLock, type Lock } from './lock.ts';
+import { localSettings } from './order.ts';
 
 function useLive<T>(query: () => Promise<T>, initial: T): T {
   const [v, setV] = useState(initial);
@@ -146,6 +148,14 @@ function Counter({ device }: { device: DeviceInfo }) {
   const lastPush = useLive(async () => (await getMeta('lastPush')) ?? '', '');
   const logoUrl = useLogoUrl();
   const lastPull = useLive(async () => (await getMeta('lastPull')) ?? '', '');
+  // The offline lock (lock.ts). null = not read yet; the clock is re-read every minute, and a sync that reaches the
+  // server writes a new contact time, which unlocks at once.
+  const contact = useLive(lastContact, null as string | undefined | null);
+  const offlineDays = useLive(async () => (await localSettings()).offlineDays, null as number | null);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(t); }, []);
+  const lock: Lock = contact === null || offlineDays === null ? { state: 'ok' } : offlineLock(contact, now, offlineDays);
+  const locked = lock.state === 'locked';
 
   const refresh = useCallback(async () => setMenu(await loadMenu()), []);
   const running = useRef<Promise<void> | null>(null);
@@ -208,7 +218,7 @@ function Counter({ device }: { device: DeviceInfo }) {
           {pending}{lastPush ? ` · ${new Date(lastPush).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
         </span>
         <button data-testid="sync-now" className="iconbtn" aria-label="Sync now" title="Sync now" onClick={sync}>⟳</button>
-        {actor && !needShift && (
+        {actor && !needShift && !locked && (
           <div className="seg" role="tablist">
             <button data-testid="tab-sell" role="tab" className={tab === 'sell' ? 'active' : ''} onClick={() => setTab('sell')}>Sell</button>
             <button data-testid="tab-orders" role="tab" className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Orders{onlineWaiting > 0 && <span data-testid="online-badge" className="badge">{onlineWaiting}</span>}</button>
@@ -222,8 +232,15 @@ function Counter({ device }: { device: DeviceInfo }) {
       </header>
       {parked > 0 && <div data-testid="parked" className="banner" role="alert">{parked} record{parked === 1 ? ' was' : 's were'} not accepted by the server. Tell your manager; do not clear this tablet.</div>}
       {syncError && <div className="banner" role="status">{syncError} {lastPull ? 'Working offline with the menu from ' + new Date(lastPull).toLocaleString() + '.' : ''}</div>}
+      {lock.state === 'warn' && (
+        <div data-testid="lock-warn" className="banner" role="status">
+          This tablet has not reached the server for a while. It stops selling in {Math.max(1, Math.ceil(lock.leftMs / 3_600_000))} h unless it connects.
+        </div>
+      )}
       {mgr !== null && !actor ? (
         mgr ? <ManagerTools token={mgr} outletId={device.outletId} deviceId={device.deviceId} onProfile={setMgrName} /> : <main className="center"><ManagerLogin onToken={setMgr} onCancel={() => setMgr(null)} /></main>
+      ) : lock.state === 'locked' ? (
+        <OfflineLock reason={lock.reason} days={offlineDays ?? 0} pending={pending} onSync={sync} />
       ) : !actor ? (
         <>
           <PinScreen staff={menu.staff} onSignedIn={(a) => { setActor(a); setTab('sell'); }} />
@@ -240,10 +257,27 @@ function Counter({ device }: { device: DeviceInfo }) {
             </div>
           )}
           {tab === 'sell' ? <Sell device={device} actor={actor} menu={menu} /> : tab === 'orders' ? (ordersView === 'home' || actor.role !== 'cashier' ? <Orders device={device} actor={actor} /> : null) : tab === 'shift' ? <Shift device={device} actor={actor} shift={shift ?? undefined} onSync={sync} /> : null}
-          {actor.role === 'cashier' && <OnlineQueue device={device} actor={actor} menu={menu} hidden={!(tab === 'orders' && ordersView === 'online')} onCount={setOnlineWaiting} />}
+          {actor.role === 'cashier' && !locked && <OnlineQueue device={device} actor={actor} menu={menu} hidden={!(tab === 'orders' && ordersView === 'online')} onCount={setOnlineWaiting} />}
         </>
       )}
     </div>
+  );
+}
+
+/** Shown instead of the PIN pad and the till while the tablet is locked (lock.ts). Sync keeps running underneath. */
+function OfflineLock({ reason, days, pending, onSync }: { reason: 'never' | 'too_long' | 'clock'; days: number; pending: number; onSync: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const why = reason === 'clock' ? "This tablet's date is earlier than its last contact with the server. Check the date and time."
+    : reason === 'never' ? 'This tablet has no record of reaching the server.'
+    : `This tablet has not reached the server for more than ${days} day${days === 1 ? '' : 's'}.`;
+  return (
+    <main className="center" data-testid="offline-lock" data-reason={reason}>
+      <h2>Selling is paused</h2>
+      <p>{why}</p>
+      <p className="muted">Connect it to the internet. It unlocks by itself once it reaches the server.
+        {pending > 0 ? ` The ${pending} sale${pending === 1 ? '' : 's'} not yet sent ${pending === 1 ? 'is' : 'are'} safe on this tablet.` : ''}</p>
+      <button data-testid="lock-sync" className="primary" disabled={busy} onClick={() => { setBusy(true); void onSync().finally(() => setBusy(false)); }}>{busy ? 'Trying…' : 'Try now'}</button>
+    </main>
   );
 }
 

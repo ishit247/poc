@@ -73,8 +73,16 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
        JOIN outlet o ON o.id = s.outlet_id
       WHERE s.outlet_id = $1 AND (s.opened_at AT TIME ZONE o.timezone)::date = $2 AND s.closed_at IS NOT NULL
       ORDER BY ct.code, s.opened_at`, [outletId, date]);
+  // Online orders that never completed (PLAN 17 Q16): their sale is void with no business_day_id, so the void count
+  // above cannot see them, by design. Dated by the sale's business_date, which is the outlet's local date the order
+  // arrived (routes/online.ts). A separate line, never in `voids`.
+  const online = (await c.query(
+    `SELECT count(*)::int AS n, COALESCE(sum(s.total_paise), 0)::bigint AS total
+       FROM sale s JOIN online_order oo ON oo.sale_id = s.id
+      WHERE s.outlet_id = $1 AND s.business_date = $2::date AND oo.status IN ('rejected', 'cancelled', 'expired')`, [outletId, date])).rows[0];
   const s = sales.rows[0];
   return {
+    onlineNotCompleted: online.n, onlineNotCompletedPaise: Number(online.total),
     paidSales: s.paid, grossPaise: Number(s.gross), taxPaise: Number(s.tax),
     cashPaise: by.cash ?? 0, upiPaise: by.upi ?? 0, onlineGrossPaise: by.aggregator ?? 0,
     voids: s.voids, voidTotalPaise: Number(s.voidTotal), refunds: s.refunds, refundTotalPaise: Number(s.refundTotal),

@@ -133,11 +133,68 @@ test('a paid sale cannot be edited, deleted or have its lines/payments changed (
     await fails(c, 'TRUNCATE sale_line', [], /permission denied/);
     await fails(c, 'UPDATE payment SET amount_paise = 1 WHERE sale_id = $1', [s], /permission denied/);
     await fails(c, 'DELETE FROM payment WHERE sale_id = $1', [s], /permission denied/);
-    // The allowed moves: paid -> refunded, and open -> void.
+    // The allowed moves: paid -> refunded (with its refund, see the refund test), and open -> void.
+    await c.query('SET CONSTRAINTS ALL DEFERRED');
+    await c.query("INSERT INTO refund (tenant_id, sale_id, method, amount_paise, reason, shift_id, device_id, refunded_by) SELECT $1, $2, 'cash', 1050, 'x', shift_id, $3, $4 FROM sale WHERE receipt_no = 'C1-20260101-0001' LIMIT 1", [A, s, x.device, x.cashier]);
     await c.query("UPDATE sale SET status = 'refunded' WHERE id = $1", [s]);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE');
     const o = await newSale(c, x);
     await c.query("UPDATE sale SET status = 'void', void_reason = 'cancelled' WHERE id = $1", [o]);
     await fails(c, "UPDATE sale SET status = 'paid' WHERE id = $1", [o], /cannot go from void to paid/);
+  });
+});
+
+test('a refund pays back each method exactly, only on a refunded sale, and is append-only', async () => {
+  const refund = (c, x, sale, method, amount, shift = null) =>
+    c.query(`INSERT INTO refund (tenant_id, sale_id, method, amount_paise, reason, shift_id, device_id, refunded_by)
+             VALUES ($1,$2,$3,$4,'wrong item',$5,$6,$7)`, [A, sale, method, amount, shift, shift ? x.device : null, x.cashier]);
+  const splitSale = async (c, x, seq) => {
+    const s = await newSale(c, x, { status: 'paid', seq, no: `C1-20260301-00${seq}` });
+    await pay(c, s, 500, { method: 'upi' });
+    await pay(c, s, 550, { tendered: 600, change: 50 });
+    return s;
+  };
+  const seedShift = (c) => c.query("SELECT shift_id FROM sale WHERE receipt_no = 'C1-20260101-0001' LIMIT 1").then((r) => r.rows[0].shift_id);
+
+  await inTx(async (c, x) => {
+    const s = await splitSale(c, x, 30);
+    const sh = await seedShift(c);
+    await refund(c, x, s, 'upi', 500);
+    await refund(c, x, s, 'cash', 550, sh);
+    await c.query("UPDATE sale SET status = 'refunded' WHERE id = $1", [s]);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE'); // whole, method by method: accepted
+    await fails(c, 'UPDATE refund SET amount_paise = 1 WHERE sale_id = $1', [s], /permission denied/);
+    await fails(c, 'DELETE FROM refund WHERE sale_id = $1', [s], /permission denied/);
+    await fails(c, 'TRUNCATE refund', [], /permission denied/);
+    await fails(c, "INSERT INTO refund (tenant_id, sale_id, method, amount_paise, reason, refunded_by) VALUES ($1,$2,'upi',1,'x',$3)", [A, s, x.cashier], /refund_sale_id_method_key/);
+  });
+  await inTx(async (c, x) => {
+    // Cash refunded without naming the drawer it left.
+    const s = await splitSale(c, x, 31);
+    await fails(c, "INSERT INTO refund (tenant_id, sale_id, method, amount_paise, reason, refunded_by) VALUES ($1,$2,'cash',550,'x',$3)", [A, s, x.cashier], /check constraint/);
+  });
+  await inTx(async (c, x) => {
+    // Only part of the money back: the UPI half alone.
+    const s = await splitSale(c, x, 32);
+    await refund(c, x, s, 'upi', 500);
+    await c.query("UPDATE sale SET status = 'refunded' WHERE id = $1", [s]);
+    await assert.rejects(c.query('SET CONSTRAINTS ALL IMMEDIATE'), /do not match its payments/, 'partial refund');
+  });
+  await inTx(async (c, x) => {
+    // The right total, but the methods swapped round (cash paid back as UPI).
+    const s = await splitSale(c, x, 33);
+    await refund(c, x, s, 'upi', 550);
+    await refund(c, x, s, 'cash', 500, await seedShift(c));
+    await c.query("UPDATE sale SET status = 'refunded' WHERE id = $1", [s]);
+    await assert.rejects(c.query('SET CONSTRAINTS ALL IMMEDIATE'), /do not match its payments/, 'methods swapped');
+  });
+  await inTx(async (c, x) => {
+    // A refund row on a sale still marked paid.
+    const s = await splitSale(c, x, 34);
+    await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+    await c.query('SET CONSTRAINTS ALL DEFERRED');
+    await refund(c, x, s, 'upi', 500);
+    await assert.rejects(c.query('SET CONSTRAINTS ALL IMMEDIATE'), /is paid but has refunds/, 'refund without the status');
   });
 });
 

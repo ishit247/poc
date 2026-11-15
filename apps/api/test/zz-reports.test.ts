@@ -126,7 +126,19 @@ test('reports: figures match hand-worked numbers for one outlet and one day', as
 
   const voids = await run('voids');
   assert.deepEqual(voids.rows.map((r) => [r.channel, r.status, r.total, r.reason]), [
-    ['counter', 'void', 1000, '=HYPERLINK("http://x")'], ['zomato', 'void', 2000, 'out of stock']]);
+    ['counter', 'void', 1000, '=HYPERLINK("http://x")'], ['zomato', 'online rejected', 2000, 'out of stock']]);
+
+  // Day close: the online order that never completed is its own line on the day it was received, not a void.
+  // Ingest ties counter sales to the business day; online voids never get one (routes/online.ts).
+  await withTenant(A, async (c) => {
+    const day = (await c.query('INSERT INTO business_day (tenant_id, outlet_id, date) VALUES ($1, $2, $3) RETURNING id', [A, w.outletId, D])).rows[0].id;
+    await c.query("UPDATE sale SET business_day_id = $1 WHERE outlet_id = $2 AND channel = 'counter'", [day, w.outletId]);
+    await c.query("INSERT INTO business_day (tenant_id, outlet_id, date) VALUES ($1, $2, '2026-03-09')", [A, w.outletId]); // so its totals exist
+  });
+  const dc = (await app.inject({ method: 'GET', url: `/outlets/${w.outletId}/day-close?date=${D}`, headers: bearer(mgr) })).json();
+  assert.deepEqual([dc.totals.voids, dc.totals.voidTotalPaise, dc.totals.onlineNotCompleted, dc.totals.onlineNotCompletedPaise], [1, 1000, 1, 2000]);
+  const before = (await app.inject({ method: 'GET', url: `/outlets/${w.outletId}/day-close?date=2026-03-09`, headers: bearer(mgr) })).json();
+  assert.equal(before.totals.onlineNotCompleted, 0, 'dated by the day it was received, not the day before');
 
   const v = await run('variance');
   assert.deepEqual(v.rows.map((r) => [r.cashier, r.shifts, r.short, r.expected, r.counted, r.variance]), [[w.cashier, 1, 1, 20000, 19950, -50]]);

@@ -292,6 +292,16 @@ const MUTANTS = [
     ['webhook-rejection-not-recorded', 'apps/api/src/routes/webhooks.ts', 'await c.query(`INSERT INTO inbound_event', 'await c.query(`SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::text -- INSERT INTO inbound_event'],
     ['webhook-sender-pretends-success', 'apps/api/src/jobs/outbox.ts', "async () => { throw new Error(`${provider}: partner API not configured`); }", 'async () => {}'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('webhooks.test.ts'))),
+  // --- online orders not completed (PLAN 17 Q16): a separate day-close line
+  M('dc-online-not-completed-any-status', 'apps/api/src/routes/dayclose.ts', "AND oo.status IN ('rejected', 'cancelled', 'expired')`, [outletId, date])", '`, [outletId, date])', API_TESTS('zz-reports.test.ts')),
+  M('dc-online-not-completed-any-day', 'apps/api/src/routes/dayclose.ts', 'WHERE s.outlet_id = $1 AND s.business_date = $2::date AND oo.status', 'WHERE s.outlet_id = $1 AND $2::date IS NOT NULL AND oo.status', API_TESTS('zz-reports.test.ts')),
+  // --- offline lock (PLAN 7.2, apps/counter/src/lock.ts)
+  ...[
+    ['lock-never-locks', "if (leftMs <= 0) return { state: 'locked', reason: 'too_long' };", ''],
+    ['lock-clock-unchecked', "if (nowMs < at - CLOCK_SLACK_MS) return { state: 'locked', reason: 'clock' };", ''],
+    ['lock-no-contact-open', "if (Number.isNaN(at)) return { state: 'locked', reason: 'never' };", "if (Number.isNaN(at)) return { state: 'ok' };"],
+    ['lock-contact-earliest', 'Date.parse(b) - Date.parse(a))[0]', 'Date.parse(a) - Date.parse(b))[0]'],
+  ].map(([id, from, to]) => M(id, 'apps/counter/src/lock.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', 'test/lock.test.ts'], noDb: true })),
   // --- phase 9 UI: manager integration and item-map routes (routes/integrations.ts)
   M('integ-any-outlet', 'apps/api/src/routes/integrations.ts', "if (p.kind !== 'user' || !p.outletIds.includes(ps.data.id)) return notFound(reply);",
     "if (p.kind !== 'user') return notFound(reply);", API_TESTS('integrations.test.ts'), true),
@@ -671,6 +681,26 @@ const MUTANTS = [
     ['tab-rf-pull-deletes', 'apps/counter/src/order.ts', "if (local?.status !== 'open') continue;", "if (!local || local.status === 'paid' || local.status === 'void') continue;"],
   ].map(([id, file, from, to]) => M(id, file, from, to, TABLET_REFUSED)),
   M('vis-shift-keeps-root-events', 'apps/counter/src/shift.ts', "await db.orderEvents.where('saleId').equals(s.rootId ?? s.id).delete();", "await db.orderEvents.where('saleId').equals(s.id).delete();", TABLET_VISITS),
+  // --- refunds step 1 (docs/refunds-plan.md): the cashier of the open shift, re-PIN, audited (apps/api/test/refunds.test.ts)
+  ...[
+    ['refund-any-device', 'sh.device_id = $2 AND sh.user_id = $3', '$2::uuid IS NOT NULL AND sh.user_id = $3'],
+    ['refund-any-cashier', 'sh.device_id = $2 AND sh.user_id = $3', 'sh.device_id = $2 AND $3::uuid IS NOT NULL'],
+    ['refund-closed-shift', 'AND sh.user_id = $3 AND sh.closed_at IS NULL', 'AND sh.user_id = $3'],
+    ['refund-web-session', "if (p.kind !== 'user' || !p.deviceId)", "if (p.kind !== 'user')"],
+    ['refund-pin-skipped', 'if (!ok) {', 'if (false) {'],
+    ['refund-pin-lock-ignored', "if (state.locked) return { kind: 'locked' as const, until: state.lockedUntil };", ''],
+    ['refund-pin-uncounted', "const lock = await recordFailure(c, p.userId, 'pin', state, PIN_MAX_FAILED, PIN_LOCK_MINUTES);", 'const lock = false;'],
+    ['refund-not-paid', "if (sale.status !== 'paid') return { kind: 'conflict' as const, error: 'only a paid sale can be refunded' };", ''],
+    ['refund-twice', "if (sale.status === 'refunded') return { kind: 'conflict' as const, error: 'already refunded' };", ''],
+    ['refund-unaudited', "action: 'sale.refund'", "action: 'sale.refunded_untracked'"],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/routes/refunds.ts', from, to, API_TESTS('refunds.test.ts'))),
+  ...[
+    ['refund-schema-partial', 'WHERE p.a IS DISTINCT FROM r.a) THEN', 'WHERE false) THEN'],
+    ['refund-schema-without-status', "IF s.status <> 'refunded' AND EXISTS (SELECT 1 FROM refund WHERE sale_id = s.id) THEN", 'IF false THEN'],
+    ['refund-schema-trigger-missing', 'CREATE CONSTRAINT TRIGGER refund_sale_ck AFTER INSERT ON refund', 'CREATE CONSTRAINT TRIGGER refund_sale_ck AFTER DELETE ON refund'],
+    ['refund-schema-cash-no-drawer', "CHECK (method <> 'cash' OR (shift_id IS NOT NULL AND device_id IS NOT NULL)),", ''],
+    ['refund-schema-editable', 'REVOKE UPDATE, DELETE, TRUNCATE ON refund FROM pos_app;', ''],
+  ].map(([id, from, to]) => M(id, TRADING, from, to, DB_TESTS)),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
@@ -718,7 +748,8 @@ for (const m of todo) {
   console.log(results.at(-1).join(' | '));
 }
 // Leave the database matching the restored source.
-if (todo.some((m) => !m.tests.noDb)) run(['node', 'scripts/up-fresh.mjs']);
+// Not under --check: it ran nothing, and a rebuild here would wipe the database under any suite running beside it.
+if (!checkOnly && todo.some((m) => !m.tests.noDb)) run(['node', 'scripts/up-fresh.mjs']);
 console.log('\n' + results.map((r) => r.join(' | ')).join('\n'));
 const bad = results.filter((r) => r[1] !== 'caught');
 console.log(`\n${results.length - bad.length}/${results.length} caught`);

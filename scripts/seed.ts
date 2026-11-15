@@ -209,6 +209,21 @@ for (const t of Object.values(SEED)) {
     await client.query(
       `INSERT INTO payment (tenant_id, sale_id, method, amount_paise, tendered_paise, change_paise)
        VALUES ($1, $2, 'cash', 3150, 3500, 350)`, [t.id, sale.rows[0].id]);
+    // A UPI sale of the same shift, refunded by its cashier (docs/refunds-plan.md). UPI, so the drawer is untouched.
+    const refunded = await client.query(
+      `INSERT INTO sale (id, tenant_id, outlet_id, business_day_id, business_date, shift_id, device_id, created_by, status,
+                         receipt_no, receipt_seq, device_seq, menu_version, subtotal_paise, tax_paise, total_paise, created_at_device)
+       VALUES (gen_random_uuid(), $1, $2, $3, '2026-01-01', $4, $5, $6, 'refunded', 'C1-20260101-0002', 2, 4, 1, 1000, 50, 1050, '2026-01-01T09:30:00Z')
+       RETURNING id`,
+      [t.id, outletId, day.rows[0].id, shift.rows[0].id, deviceIds[n], cashierIds[n]]);
+    await client.query(
+      `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
+       VALUES ($1, $2, $3, 'Tea', 1000, 500, 1, 1000, 50)`, [t.id, refunded.rows[0].id, itemIds['Tea']]);
+    await client.query("INSERT INTO payment (tenant_id, sale_id, method, amount_paise) VALUES ($1, $2, 'upi', 1050)", [t.id, refunded.rows[0].id]);
+    await client.query(
+      `INSERT INTO refund (tenant_id, sale_id, method, amount_paise, reason, shift_id, device_id, refunded_by, refunded_at)
+       VALUES ($1, $2, 'upi', 1050, 'wrong item', $3, $4, $5, '2026-01-01T09:40:00Z')`,
+      [t.id, refunded.rows[0].id, shift.rows[0].id, deviceIds[n], cashierIds[n]]);
     const open = await client.query(
       `INSERT INTO sale (id, tenant_id, outlet_id, business_date, device_id, created_by, status, menu_version,
                          subtotal_paise, tax_paise, total_paise, created_at_device)

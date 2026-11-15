@@ -37,12 +37,12 @@ day close, reports). Smaller gaps per phase are in [docs/build-notes.md](docs/bu
 |---|-------|-------|----------|---------------------|--------|
 | 1 | Foundation, tenant isolation, devices | yes | RLS and route-scope tests on real Postgres; mutants | n/a | [build-notes.md](docs/build-notes.md) |
 | 2 | Menu admin, onboarding, versioned pull | yes, incl. catalog templates and pictures, and the manager menu editor (done 2026-11-14) | `menu-apply.test.ts` 7/7 on real Postgres; 11/11 menu mutants; counter 86/86; `browser-menu.mjs` 47/47 (Edge, 1024 and 820 wide) | menu editor and WebP pictures not checked in Safari/Firefox or on a real tablet; two items cannot swap quick codes in one save | [catalog-templates.md](docs/catalog-templates.md), [manager-menu-editor-plan.md](docs/manager-menu-editor-plan.md) |
-| 3 | Offline counter sale | yes | tablet unit tests; `browser-flow` | storage durability and `storage.persist()` on a real tablet; offline-days lockout not enforced | [build-notes.md](docs/build-notes.md) |
+| 3 | Offline counter sale | yes, incl. the offline lock (2026-11-15) | tablet unit tests; `browser-flow`; lock: 4/4 tests, 4/4 mutants, `browser-lock` 19/19 | storage durability and `storage.persist()` on a real tablet; the lock trusts the tablet's clock (see build-notes) | [build-notes.md](docs/build-notes.md) |
 | 4 | Sync engine | yes; N-1 exercised by v1 + v2 events (phase 12) | ingest and push tests, mutants; `browser-flow` | nothing beyond phase 3's hardware gap | [build-notes.md](docs/build-notes.md) |
 | 5 | Printing | browser print, 58 mm layout, reprint trail | layout tests, mutants; reprint in `browser-flow` | **nothing printed on the real ATPOS H58BT**; no WebUSB, Bluetooth, ESC/POS or drawer kick | [build-notes.md](docs/build-notes.md) |
 | 6 | Shifts, day close | yes, incl. manager force-close and the day-close void screen | API tests, mutants; `browser-flow` | days closed out of date order may mis-list late adjustments | [build-notes.md](docs/build-notes.md) |
 | 7 | Online orders (manual provider) | yes | API tests, mutants; queue 23/23 and settlements 18/18 in a browser; `browser-flow` | — | [build-notes.md](docs/build-notes.md) |
-| 8 | Reports | yes | 5 tests, 31 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; no refund route yet | [build-notes.md](docs/build-notes.md) |
+| 8 | Reports | yes; day close's separate "online not completed" line (2026-11-15, Q16) | 5 tests, 33 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; refunds: route only, no screen yet ([plan](docs/refunds-plan.md)) | [build-notes.md](docs/build-notes.md) |
 | 9 | Aggregator adapters | **scaffold** (placeholder contract); manager Platforms tab (integration setup, item mapping) and the counter's unmapped-line note done 2026-11-15 | webhook tests; secrets sealed (phase 11 step 6); `integrations.test.ts` 3/3, 7/7 mutants, `browser-platforms.mjs` 29/29 (Edge, 1024 and 820 wide) | everything against real Zomato/Swiggy; no menu or stock push; Platforms tab not in Safari/Firefox or on a real tablet | [build-notes.md](docs/build-notes.md) |
 | 10 | Dynamic UPI | no (optional) | | | |
 | 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke and rename screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 | off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
@@ -85,7 +85,9 @@ Fixed in this pass (the 2026-11-06 findings):
 2. Finish phase 11 step 6: (the full mutation run is done, 2026-11-15; rerun it before a phase is called done, in the
    background, to a log, never two runs at once), off-site backups and PITR (Q4); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
    additive-only migrations (section 18) before the first real tenant.
-3. Phase 9 against real partner APIs once access is known (Q1): replace the placeholder payload and signature, the
+3. Refunds, three steps, HIGH: [docs/refunds-plan.md](docs/refunds-plan.md) (decisions in section 17, Q15). Step 1
+   (schema, route, tests, mutants) done 2026-11-15; next is step 2, expected cash.
+4. Phase 9 against real partner APIs once access is known (Q1): replace the placeholder payload and signature, the
    senders, and add menu/stock push.
 
 Done and struck from this list (detail in the phase files): the phase 9 UI (2026-11-15: manager Platforms tab for
@@ -225,7 +227,8 @@ platform
 | Take payment, print receipt | **no** | yes | yes | no |
 | Reprint receipt (marked DUPLICATE) | no | yes | yes | no |
 | Void an *open* sale | own open orders | yes | yes | no |
-| Void a *paid* sale / refund | no | no | yes, with reason | no |
+| Refund a paid sale of their own open shift (re-PIN, reason; Q15) | no | yes | yes, if it is their shift | no |
+| Void a *paid* sale | no | no | yes, with reason | no |
 | Accept / reject / ready online order | no | yes | yes | no |
 | Edit menu, prices | no | stock toggle only | yes | no |
 | All reports for the outlet, close day | no | no | yes | no |
@@ -347,7 +350,7 @@ refuse to apply later ones out of order for the same entity.
 | Item deactivated/out of stock in cloud, device sold it offline | Sale accepted. It's flagged in the report ("sold while unavailable") — never rejected, because the food was already handed over and paid for. |
 | Two devices offline both sell the last portion | Both accepted; stock is only a toggle in v1, not a count. |
 | Cashier voids an *open* sale offline | Local event; applied on sync. |
-| Manager voids/refunds a *paid, already-synced* sale | **Online only.** Requires the cloud's current state; offline refunds are not offered. |
+| Manager voids a *paid, already-synced* sale; cashier refunds one (Q15) | **Online only.** Requires the cloud's current state; offline refunds are not offered. |
 | Manager voids a paid sale that is *not yet synced* | Allowed on the same device; the pair of events syncs in order. |
 | Events arrive after the business day was closed | Accepted into a **late-arrival adjustment** attributed to the original day, flagged, and surfaced on the next day's close screen. The closed day's frozen totals are not edited. |
 | Device clock is wrong | Server stores `received_at` and the device's claimed time; skew over 5 minutes is flagged. Ordering within a day uses device sequence, not wall-clock. |
@@ -425,7 +428,7 @@ below has `tenant_id` with RLS unless noted.
 
 ## 9. Order and payment lifecycles
 
-**Counter sale:** `open → paid → (manager) refunded | void`, and `open → void`. The receipt number is assigned at payment, so abandoned carts leave no gaps. Abandoned open sales are auto-voided at shift close.
+**Counter sale:** `open → paid → refunded (cashier of the shift, Q15) | void (manager)`, and `open → void`. The receipt number is assigned at payment, so abandoned carts leave no gaps. Abandoned open sales are auto-voided at shift close.
 
 **Online order:** `received → accepted → preparing → ready → handed_over`, with `rejected`, `cancelled`, and `expired` (unaccepted by `accept_by`). Each adapter maps our states to the provider's.
 
@@ -577,12 +580,19 @@ mismatches, sync health. CSV export. Today's figures are labelled provisional.
 6. *Resolved (phase 5):* receipts are English only for now; Hindi would need a code page or bitmap printing.
 7. Counter hardware: Android tablets, Windows PCs, or mixed? Existing printers?
 8. Do tenants pay you (subscription), and when must billing exist?
-9. *Resolved (phase 3):* 7 days by default, a per-tenant setting (`offlineDays`); stored, not yet enforced on the tablet.
+9. *Resolved (phase 3):* 7 days by default, a per-tenant setting (`offlineDays`); enforced on the tablet since 2026-11-15 (`apps/counter/src/lock.ts`).
 10. *Resolved:* menus are **not** date-specific. Menu and pricing are set **per outlet** (the user's "cashier-specific" means outlet), with optional narrowing and a price override per counter (section 8). **Aggregator prices differ** from counter prices, per channel and per outlet. Pricing is **tax-exclusive** (GST added on top, rounded once per line); the GST rate stays with the item.
 11. Is an accountant/read-only role needed?
 12. (D13) Which segment is the first paying customer: counter-service or dine-in?
 13. (D13) Does a restaurant need kitchen tickets (KOT) in the first pilot?
 14. (D13) GST and service-charge rules for restaurants (extends Q3).
+15. *Resolved (2026-11-15, revised the same day):* **refunds** are of a whole paid counter sale only (`paid → refunded`),
+    online, with a reason, audited. **The cashier** refunds a sale of **their own open shift**, on the tablet of that
+    shift, after **typing their PIN again** (the sign-in lockout counts those attempts). So cash goes back out of the
+    drawer it went into (that drawer's expected cash drops); UPI is recorded as paid back outside the app. Sales of
+    other or closed shifts are not refundable yet; a manager path for them is a later decision.
+16. *Resolved (2026-11-15):* online orders that end `rejected`, `cancelled` or `expired` are reported as a separate
+    "online not completed" line on the outlet's local date they were received, beside the cashier void count, not in it.
 
 ## 18. Operations
 

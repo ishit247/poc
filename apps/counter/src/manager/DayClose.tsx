@@ -224,6 +224,11 @@ export function DayClose({ token, onBlockers }: { token: string; onBlockers?: (n
                   <tbody>
                     <tr><td>Voids</td><td className="num">{t.voids} · ₹{rs(t.voidTotalPaise)}</td></tr>
                     <tr><td>Refunds</td><td className="num">{t.refunds} · ₹{rs(t.refundTotalPaise)}</td></tr>
+                    {/* Days closed before 2026-11-15 froze totals without this line. */}
+                    {t.onlineNotCompleted !== undefined && (
+                      <tr><td title="Rejected, cancelled or expired platform orders received this day. Not in Voids.">Online not completed</td>
+                        <td className="num" data-testid="dc-online-not-completed">{t.onlineNotCompleted} · ₹{rs(t.onlineNotCompletedPaise ?? 0)}</td></tr>
+                    )}
                     <tr><td>Drawer variance</td><td className={`num${t.varianceTotalPaise === 0 ? '' : ' warn'}`}>₹{rs(t.varianceTotalPaise)}</td></tr>
                   </tbody>
                 </table>

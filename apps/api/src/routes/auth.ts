@@ -9,8 +9,9 @@ import { parseInvite } from '../invite.js';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_MINUTES = 15;
-const PIN_MAX_FAILED = 5; // PLAN section 10: 5 failures, 5-minute lock
-const PIN_LOCK_MINUTES = 5;
+// PLAN section 10: 5 failures, 5-minute lock. Shared with the refund re-PIN (routes/refunds.ts): one counter per user.
+export const PIN_MAX_FAILED = 5;
+export const PIN_LOCK_MINUTES = 5;
 const SESSION_HOURS = 12;
 const ENROLMENT_MINUTES = 15;
 

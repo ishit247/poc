@@ -77,6 +77,13 @@ still open, and a trap that cost time once. Active phases keep their own file (p
   later loses its price is flagged. The counter's order card lists unmapped lines ("Not on this bill, check the
   platform app").
 
+**Offline lock (PLAN 7.2)**
+- Contact = the later of `lastPull` and `lastPush`, written only after the server answered. Locked when more than
+  `offlineDays` have passed, when there is no contact on record, or when the clock is more than a day before the last
+  contact. The lock replaces the PIN pad, the till and the online queue; sync keeps running, and the first successful
+  sync unlocks. A banner warns in the last 24 hours. Manager tools stay reachable (they need the server anyway).
+  Evidence: `lock.test.ts` 4/4, 4/4 mutants, `browser-lock.mjs` 19/19 (Edge, 1024 and 820 wide, twice).
+
 **Catalog pictures**
 - Bytes live in Garage (S3-compatible); Postgres keeps an index. Uploads are shrunk in the browser to a 320 px WebP of
   at most 64 KB; the API checks the real bytes, the cap and 500 pictures per tenant. Pull carries only the hash.
@@ -86,15 +93,15 @@ still open, and a trap that cost time once. Active phases keep their own file (p
 | Area | Gap |
 |---|---|
 | Tablet | `navigator.storage.persist()` is never called, and storage durability is unchecked on a real tablet |
-| Tablet | The offline-days lockout (`offlineDays`) is stored but not enforced |
+| Tablet | Offline lock (done 2026-11-15, `apps/counter/src/lock.ts`) trusts the tablet's clock; a clock set back is caught only if it goes before the last contact (by more than a day). While locked, a cashier cannot close their drawer on the tablet either (a manager can force-close it) |
 | Manager UI | Done 2026-11-15: manager Settings tab (`apps/counter/src/manager/Settings.tsx`) for selling rules, logo, and per-outlet address/FSSAI/GST. Checked in Edge at 1024 and 820 wide only (`browser-settings.mjs` 25/25); not on a real tablet or Safari/Firefox. Logo is uploaded as picked (PNG/JPEG/WebP, 256 KB), not resized. Added `GET /settings/logo` (manager's own tenant) and address/FSSAI/GST fields on `/me` |
 | Printing | Nothing printed on the real H58BT; no WebUSB, Bluetooth, ESC/POS or drawer kick. Non-ASCII item names would need a code page or bitmap printing |
 | Receipt | The printed time is when the order was rung up, not when it was paid |
 | Day close | Late adjustments key on arrival time; closing days out of date order may list or miss some |
-| Online | Online voids are not in the day's void count (they carry no business day) |
+| Online | Done 2026-11-15 (Q16): online orders rejected, cancelled or expired are a separate day-close line, "Online not completed" (count and amount, by the sale's `business_date`, the outlet's local date the order arrived), not in Voids; the voids report labels them `online <status>`. Days closed earlier froze totals without the line (the screen hides it). Checked by `zz-reports.test.ts` and 2/2 mutants; the day-close row was type-checked, not looked at in a browser |
 | Online | Only Samosa has a Zomato price in the seed and no item has a Swiggy price; other items return `422 unknown_item` |
-| Reports | No refund route, so the refund half of the voids report is empty; no `EXPLAIN` on a year of data; multi-outlet view only API-tested |
-| Phase 9 | No menu or stock push to platforms. The Platforms tab was checked only in Edge at 1024 and 820 wide; the "needs an item" list has no paging (capped at 100) and is not grouped by name |
+| Reports | Refunds have a route but no screen yet ([refunds-plan.md](refunds-plan.md)); the voids report lists them with the refund's reason (the seed has one per outlet); no `EXPLAIN` on a year of data; multi-outlet view only API-tested |
+| Phase 9 | No menu or stock push to platforms. The Platforms tab was checked only in Edge at 1024 and 820 wide; the "needs an item" list has no paging (capped at 100). Not grouped by name on purpose: each platform id needs its own mapping |
 | Pictures | No sweep for orphan objects in the bucket; WebP encoding checked only in Edge (Safari/Firefox may need a JPEG fallback in `shrinkImage`); the console picture browser check is not in the repo |
 | Scale | A 50K-item catalogue is a different product (one button per item, the whole menu in memory, no barcode). Give it its own phase if it becomes real |
 
@@ -110,6 +117,8 @@ still open, and a trap that cost time once. Active phases keep their own file (p
 - Bash heredocs containing backticks broke once; use the Edit or Write tool for files. Files under `scripts/` and some
   migrations are CRLF, so mutant `from` patterns over several lines should be regexes.
 - The machine is short of memory: run validation stages one after another.
+- From Git Bash, `validate.mjs unit-api` can report "✔ 0 ok" in 1 s: its pnpm filter matched no project ("No projects
+  matched the filters" in `.validation/unit-api.log`). Treat 0 ok as not run; run `pnpm run test` in `apps/api` instead.
 - Console sign-in codes are one per 30 seconds per operator; two scripted sign-ins in one step time out.
 
 **Tests and shared state**

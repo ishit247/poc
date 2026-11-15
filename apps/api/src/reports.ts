@@ -76,13 +76,18 @@ async function hourly(c: pg.PoolClient, a: Args): Promise<ReportResult> {
   return shape([OUTLET, int('hour', 'Hour (0-23)', false), int('sales', 'Sales'), money('gross', 'Gross')], r.rows);
 }
 
+// Online orders that never completed are listed here too (their sale is void, dated the day the order arrived), with
+// the platform status, so they read apart from cashier voids (PLAN 17 Q16).
 async function voids(c: pg.PoolClient, a: Args): Promise<ReportResult> {
   const r = await c.query(
-    `SELECT o.name AS outlet, s.business_date::text AS date, s.channel, s.status,
+    `SELECT o.name AS outlet, s.business_date::text AS date, s.channel,
+            CASE WHEN oo.id IS NULL THEN s.status ELSE 'online ' || oo.status END AS status,
             COALESCE(s.receipt_no, oo.external_order_id, '') AS ref, s.total_paise::bigint AS total,
-            COALESCE(s.void_reason, oo.reason, '') AS reason, u.name AS "by"
+            COALESCE(s.void_reason, oo.reason, rf.reason, '') AS reason, u.name AS "by"
        FROM sale s JOIN outlet o ON o.id = s.outlet_id JOIN app_user u ON u.id = s.created_by
        LEFT JOIN online_order oo ON oo.sale_id = s.id
+       -- A refund's reason is on its rows (one per method, the same reason): docs/refunds-plan.md.
+       LEFT JOIN LATERAL (SELECT reason FROM refund WHERE sale_id = s.id LIMIT 1) rf ON true
       WHERE s.outlet_id = ANY($1::uuid[]) AND s.business_date BETWEEN $2::date AND $3::date AND s.status IN ('void', 'refunded')
       ORDER BY s.business_date, o.name, ref`, [a.outletIds, a.from, a.to]);
   return shape([OUTLET, text('date', 'Day'), text('channel', 'Channel'), text('status', 'Status'), text('ref', 'Receipt / order'),

@@ -14,6 +14,7 @@ import { onlineRoutes } from './routes/online.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { integrationRoutes } from './routes/integrations.js';
 import { orderRoutes } from './routes/orders.js';
+import { refundRoutes } from './routes/refunds.js';
 import { outletRoutes } from './routes/outlets.js';
 import { settingsRoutes } from './routes/settings.js';
 import { settlementRoutes } from './routes/settlement.js';
@@ -61,6 +62,7 @@ export function buildApp() {
   app.register(menuRoutes);
   app.register(counterRoutes);
   app.register(orderRoutes);
+  app.register(refundRoutes);
   app.register(onlineRoutes);
   app.register(webhookRoutes);
   app.register(integrationRoutes);
