@@ -44,20 +44,20 @@ async function world() {
       [randomUUID(), A, o, dev, u, `${D}T18:00:00+05:30`]);
 
     let seq = 0;
-    const sale = async (at: string, o2: { channel?: string; status?: string; sub: number; tax: number; reason?: string; flags?: string[]; item: number; name: string; qty: number; pay?: [string, number][] }) => {
+    const sale = async (at: string, o2: { channel?: string; status?: string; sub: number; tax: number; reason?: string; flags?: string[]; item: number; name: string; qty: number; pay?: [string, number][]; disc?: number }) => {
       const id = randomUUID();
       const counter = (o2.channel ?? 'counter') === 'counter';
       const paid = (o2.status ?? 'paid') === 'paid';
       if (counter && paid) seq += 1;
       await c.query(
         `INSERT INTO sale (id, tenant_id, outlet_id, business_date, shift_id, device_id, created_by, channel, status, receipt_no, receipt_seq, menu_version,
-                           subtotal_paise, tax_paise, total_paise, created_at_device, void_reason, flags)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $13, $14, $15, $16, $17)`,
+                           subtotal_paise, tax_paise, total_paise, created_at_device, void_reason, flags, discount_paise, discount_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $13, $14, $15, $16, $17, $18, $19)`,
         [id, A, o, D, counter ? sh : null, dev, u, o2.channel ?? 'counter', o2.status ?? 'paid', counter && paid ? `C1-${seq}` : null, counter && paid ? seq : null,
-          o2.sub, o2.tax, o2.sub + o2.tax, at, o2.reason ?? null, o2.flags ?? []]);
+          o2.sub, o2.tax, o2.sub - (o2.disc ?? 0) + o2.tax, at, o2.reason ?? null, o2.flags ?? [], o2.disc ?? 0, o2.disc ? 'Staff meal' : null]);
       await c.query(
-        `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise)
-         VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8)`, [A, id, items[o2.item], o2.name, o2.sub / o2.qty, o2.qty, o2.sub, o2.tax]);
+        `INSERT INTO sale_line (tenant_id, sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise, tax_paise, discount_paise)
+         VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9)`, [A, id, items[o2.item], o2.name, o2.sub / o2.qty, o2.qty, o2.sub, o2.tax, o2.disc ?? 0]);
       for (const [method, amount] of o2.pay ?? []) {
         await c.query('INSERT INTO payment (tenant_id, sale_id, method, amount_paise) VALUES ($1, $2, $3, $4)', [A, id, method, amount]);
       }
@@ -66,6 +66,10 @@ async function world() {
     await sale(`${D}T10:15:00+05:30`, { sub: 10000, tax: 500, item: 0, name: 'Alpha', qty: 2, pay: [['cash', 10500]] });
     await sale(`${D}T10:40:00+05:30`, { sub: 3000, tax: 0, item: 1, name: 'Beta', qty: 1, pay: [['upi', 3000]], flags: ['late_arrival'] });
     await sale(`${D}T14:05:00+05:30`, { sub: 5000, tax: 250, item: 0, name: 'Alpha', qty: 1, pay: [['cash', 2000], ['upi', 3250]], flags: ['sold_unavailable'] });
+    // A discounted bill: Beta 20.00 less 2.00 = 18.00 paid in cash. Gross is after the discount; items net is too.
+    await sale(`${D}T16:20:00+05:30`, { sub: 2000, tax: 0, item: 1, name: 'Beta', qty: 1, pay: [['cash', 1800]], disc: 200 });
+    // A voided discounted bill: its discount is not a discount given, so no total counts it.
+    await sale(`${D}T15:30:00+05:30`, { status: 'void', sub: 1000, tax: 0, item: 1, name: 'Beta', qty: 1, reason: 'wrong bill', disc: 100 });
     await sale(`${D}T15:00:00+05:30`, { status: 'void', sub: 1000, tax: 0, item: 1, name: 'Beta', qty: 1, reason: '=HYPERLINK("http://x")' });
     const z1 = await sale(`${D}T12:30:00+05:30`, { channel: 'zomato', sub: 4000, tax: 0, item: 1, name: 'Beta', qty: 1, pay: [['aggregator', 4000]] });
     const z2 = await sale(`${D}T13:30:00+05:30`, { channel: 'zomato', status: 'void', sub: 2000, tax: 0, item: 1, name: 'Beta', qty: 1, reason: 'out of stock' });
@@ -104,29 +108,30 @@ test('reports: figures match hand-worked numbers for one outlet and one day', as
 
   const day = await run('sales');
   assert.equal(day.provisional, false, 'a past day is not provisional');
-  assert.deepEqual(day.rows.map((r) => [r.label, r.sales, r.gross, r.tax, r.cash, r.upi, r.online]), [[D, 4, 22750, 750, 12500, 6250, 4000]]);
-  assert.equal(day.totals!.gross, 22750);
+  assert.deepEqual(day.rows.map((r) => [r.label, r.sales, r.gross, r.tax, r.cash, r.upi, r.online]), [[D, 5, 24550, 750, 14300, 6250, 4000]]);
+  assert.equal(day.totals!.gross, 24550, 'gross is after the bill discount');
+  assert.deepEqual(day.rows.map((r) => [r.discount, r.discounted]), [[200, 1]]);
 
   const ch = await run('sales', { by: 'channel' });
-  assert.deepEqual(ch.rows.map((r) => [r.label, r.sales, r.gross]), [['counter', 3, 18750], ['zomato', 1, 4000]]);
+  assert.deepEqual(ch.rows.map((r) => [r.label, r.sales, r.gross, r.discount]), [['counter', 4, 20550, 200], ['zomato', 1, 4000, 0]]);
   const cashier = await run('sales', { by: 'cashier' });
-  assert.deepEqual(cashier.rows.map((r) => [r.label, r.sales, r.gross]), [[w.cashier, 4, 22750]]);
+  assert.deepEqual(cashier.rows.map((r) => [r.label, r.sales, r.gross, r.discount, r.discounted]), [[w.cashier, 5, 24550, 200, 1]]);
   const counter = await run('sales', { by: 'counter' });
-  assert.deepEqual(counter.rows.map((r) => [r.label, r.gross]), [['C1', 22750]]);
+  assert.deepEqual(counter.rows.map((r) => [r.label, r.gross]), [['C1', 24550]]);
   const outlet = await run('sales', { by: 'outlet' });
-  assert.deepEqual(outlet.rows.map((r) => [r.label, r.gross]), [[w.name, 22750]]);
+  assert.deepEqual(outlet.rows.map((r) => [r.label, r.gross]), [[w.name, 24550]]);
 
   const items = await run('items');
-  assert.deepEqual(items.rows.map((r) => [r.label, r.qty, r.net, r.tax]), [['Alpha', 3, 15000, 750], ['Beta', 2, 7000, 0]]);
+  assert.deepEqual(items.rows.map((r) => [r.label, r.qty, r.net, r.discount, r.tax]), [['Alpha', 3, 15000, 0, 750], ['Beta', 3, 8800, 200, 0]]);
   const cats = await run('items', { by: 'category' });
-  assert.equal(cats.totals!.net, 22000, 'categories add up to the lines');
+  assert.equal(cats.totals!.net, 23800, 'categories add up to the lines, after discount');
 
   const hours = await run('hourly');
-  assert.deepEqual(hours.rows.map((r) => [r.hour, r.sales, r.gross]), [[10, 2, 13500], [12, 1, 4000], [14, 1, 5250]]);
+  assert.deepEqual(hours.rows.map((r) => [r.hour, r.sales, r.gross]), [[10, 2, 13500], [12, 1, 4000], [14, 1, 5250], [16, 1, 1800]]);
 
   const voids = await run('voids');
-  assert.deepEqual(voids.rows.map((r) => [r.channel, r.status, r.total, r.reason]), [
-    ['counter', 'void', 1000, '=HYPERLINK("http://x")'], ['zomato', 'online rejected', 2000, 'out of stock']]);
+  assert.deepEqual(voids.rows.map((r) => [r.channel, r.status, r.total, r.reason]).sort((a, b) => String(a[3]).localeCompare(String(b[3]))), [
+    ['counter', 'void', 1000, '=HYPERLINK("http://x")'], ['zomato', 'online rejected', 2000, 'out of stock'], ['counter', 'void', 900, 'wrong bill']]);
 
   // Day close: the online order that never completed is its own line on the day it was received, not a void.
   // Ingest ties counter sales to the business day; online voids never get one (routes/online.ts).
@@ -136,7 +141,8 @@ test('reports: figures match hand-worked numbers for one outlet and one day', as
     await c.query("INSERT INTO business_day (tenant_id, outlet_id, date) VALUES ($1, $2, '2026-03-09')", [A, w.outletId]); // so its totals exist
   });
   const dc = (await app.inject({ method: 'GET', url: `/outlets/${w.outletId}/day-close?date=${D}`, headers: bearer(mgr) })).json();
-  assert.deepEqual([dc.totals.voids, dc.totals.voidTotalPaise, dc.totals.onlineNotCompleted, dc.totals.onlineNotCompletedPaise], [1, 1000, 1, 2000]);
+  assert.deepEqual([dc.totals.voids, dc.totals.voidTotalPaise, dc.totals.onlineNotCompleted, dc.totals.onlineNotCompletedPaise], [2, 1900, 1, 2000]);
+  assert.deepEqual([dc.totals.grossPaise, dc.totals.discountPaise, dc.totals.discountedSales], [20550, 200, 1], 'day close: gross after discount, discount on its own line');
   const before = (await app.inject({ method: 'GET', url: `/outlets/${w.outletId}/day-close?date=2026-03-09`, headers: bearer(mgr) })).json();
   assert.equal(before.totals.onlineNotCompleted, 0, 'dated by the day it was received, not the day before');
 
@@ -216,7 +222,7 @@ test('reports: a manager sees only their own outlets; others, cashiers and anony
   }
   // The manager who is assigned sees it in the consolidated view, and the total equals the outlet on its own.
   const all = (await get(app, a1, 'sales', { by: 'outlet' })).json().rows as Rows;
-  assert.equal(all.find((r) => r.label === w.name)!.gross, 22750);
+  assert.equal(all.find((r) => r.label === w.name)!.gross, 24550);
 
   assert.equal((await app.inject({ method: 'GET', url: `/reports/sales?from=${D}&to=${D}` })).statusCode, 401);
   const code = (await app.inject({ method: 'POST', url: '/enrolment-codes', headers: bearer(a1), payload: { outletId: w.outletId, counterId: (await withTenant(A, async (c) => (await c.query('SELECT id FROM counter WHERE outlet_id = $1', [w.outletId])).rows[0].id as string)) } })).json().code;
@@ -236,9 +242,9 @@ test('reports CSV: rupees by integer arithmetic, a total row, and formulas are d
   assert.match(String(r.headers['content-type']), /^text\/csv/);
   assert.match(String(r.headers['content-disposition']), /attachment; filename="report-sales-2026-03-10_2026-03-10\.csv"/);
   const lines = r.body.replace(/^﻿/, '').trim().split('\r\n');
-  assert.equal(lines[0], 'Outlet,Day,Sales,Gross,Tax,Cash,UPI,Online');
-  assert.equal(lines[1], `${w.name},2026-03-10,4,227.50,7.50,125.00,62.50,40.00`);
-  assert.equal(lines[2], 'Total,,4,227.50,7.50,125.00,62.50,40.00');
+  assert.equal(lines[0], 'Outlet,Day,Sales,Gross,Tax,Discounts,Discounted bills,Cash,UPI,Online');
+  assert.equal(lines[1], `${w.name},2026-03-10,5,245.50,7.50,2.00,1,143.00,62.50,40.00`);
+  assert.equal(lines[2], 'Total,,5,245.50,7.50,2.00,1,143.00,62.50,40.00');
 
   const v = await get(app, mgr, 'voids', { outletId: w.outletId, format: 'csv' });
   assert.ok(v.body.includes(`"'=HYPERLINK(""http://x"")"`), v.body);

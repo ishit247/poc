@@ -213,6 +213,53 @@ test('an order payment over the cap is accepted and flagged', async () => {
   assert.ok((await saleRow(s)).flags.includes('over_discount_cap'));
 });
 
+test('a saved discount on an order (step 4): a cashier\'s is stored as its event and pulled; the money waits for the payment', async () => {
+  const app = buildApp();
+  const t = await Tab.enrol(app);
+  const tableId = await withTenant(A, async (c) => (await c.query(
+    'INSERT INTO dining_table (tenant_id, outlet_id, code) VALUES ($1, $2, $3) RETURNING id', [A, t.outletId, `D${Math.random().toString(36).slice(2, 8)}`])).rows[0].id);
+  const waiterId = await withTenant(A, async (c) => (await c.query("SELECT id FROM app_user WHERE name = 'School 1 Canteen waiter'")).rows[0].id as string);
+  const [s, l1, l2] = Array.from({ length: 3 }, () => crypto.randomUUID()) as [string, string, string];
+  const at = () => new Date().toISOString();
+  const d: Discount = { kind: 'percent', value: 1000, reason: 'Staff meal' };
+  const set = (discount: Discount | null, o: { onSaleId?: string; by?: string } = {}) => t.ev({
+    type: 'order.discount_set', schemaVersion: 2, saleId: s, onSaleId: o.onSaleId ?? s, discount, by: o.by ?? t.cashierId, at: at() });
+  const add = (lineId: string) => t.ev({ type: 'order.line_added', schemaVersion: 2, saleId: s, lineId, itemId: t.teaId, name: 'Tea', unitPaise: 2000, gstRateBp: 500, qty: 1, by: t.cashierId, at: at() });
+
+  // Before its order has arrived it waits, like a line event.
+  const early = set(d);
+  assert.deepEqual(statuses(await t.push([early])), ['deferred:sale_not_yet_received']);
+  const opened = t.ev({ type: 'order.opened', schemaVersion: 2, saleId: s, tableId, createdBy: t.cashierId, businessDate: DATE, createdAtDevice: at(), menuVersion: 1 });
+  assert.deepEqual(statuses(await t.push([opened, add(l1)])), ['applied', 'applied']);
+  assert.deepEqual(statuses(await t.push([early])), ['applied'], 'retried once its order is there');
+  const open = await saleRow(s);
+  assert.deepEqual([open.status, open.discount, open.reason, open.total], ['open', 0, null, 2100], 'the open sale\'s money is before the saved discount');
+
+  // A waiter cannot give one; a malformed one does not parse.
+  assert.deepEqual(statuses(await t.push([set(null, { by: waiterId })])), ['rejected:not_a_cashier']);
+  assert.deepEqual(statuses(await t.push([set({ ...d, reason: ' ' })])), ['rejected:invalid_payload']);
+
+  // Other tablets pull it with the visit's events.
+  let visit: any;
+  for (let cursor = 0, more = true; more && !visit;) {
+    const page = (await app.inject({ method: 'GET', url: `/sync/orders?cursor=${cursor}&fresh=1`, headers: { authorization: `Device ${t.cred}` } })).json();
+    visit = page.visits.find((v: { rootId: string }) => v.rootId === s);
+    cursor = page.cursor; more = page.hasMore;
+  }
+  assert.deepEqual(visit.open.events.filter((e: any) => e.payload.type === 'order.discount_set').map((e: any) => e.payload.discount), [d]);
+
+  // The payment fixes it: paid without the saved discount (the cashier cleared it at Pay) is paid without.
+  assert.deepEqual(statuses(await t.push([add(l2)])), ['applied']);
+  const full = totals([{ itemId: t.teaId, name: 'Tea', unitPaise: paise(2000), gstRateBp: 500, qty: 1 }], await rules());
+  assert.deepEqual(statuses(await t.push([t.pay(s, [{ lineId: l1, qty: 1 }], full.total, null)])), ['applied']);
+  assert.deepEqual([(await saleRow(s)).discount, (await saleRow(s)).total], [0, full.total]);
+
+  // Set on the paid sale after the payment: refused. The split (l2, which came after) takes its own.
+  assert.deepEqual(statuses(await t.push([set(d)])), ['rejected:not_open']);
+  const split = await withTenant(A, async (c) => (await c.query(`SELECT id FROM sale WHERE order_root_id = $1 AND status = 'open'`, [s])).rows[0].id as string);
+  assert.deepEqual(statuses(await t.push([set(d, { onSaleId: split })])), ['applied']);
+});
+
 test('a refund of a discounted sale pays back what was paid, after the discount', async () => {
   const app = buildApp();
   const t = await Tab.enrol(app);

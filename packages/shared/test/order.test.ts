@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  foldOrder, orderTotals, checkPayment, liveLines, openLines, exclusiveLine, OutboxEvent, OrderEvent as OrderEventSchema,
-  type OrderEnvelope, type OrderEvent, type FoldedLine,
+  foldOrder, orderTotals, checkPayment, liveLines, openLines, exclusiveLine, savedDiscount, OutboxEvent, OrderEvent as OrderEventSchema,
+  type OrderEnvelope, type OrderEvent, type OrderFold, type FoldedLine,
 } from '../src/index.ts';
 
 // --- fixtures
@@ -208,24 +208,48 @@ function history(seed: number, skewed: boolean): OrderEnvelope[] {
       emit(d, { ...V, type: 'order.line_added', lineId, itemId: uid(200 + r.int(5)), name: 'x', unitPaise: 1 + r.int(50_000), gstRateBp: r.pick([0, 500, 1200, 1800]), qty: 1 + r.int(5), by, at: tick(d) });
     } else if (roll < 0.7) emit(d, { ...V, type: 'order.line_changed', lineId: r.pick(lines), qty: 1 + r.int(9), by, at: tick(d) });
     else if (roll < 0.9) emit(d, { ...V, type: 'order.line_removed', lineId: r.pick(lines), by, at: tick(d) });
-    else emit(d, { ...V, type: 'order.moved', tableId: uid(50 + r.int(4)), by, at: tick(d) });
+    else if (roll < 0.95) emit(d, { ...V, type: 'order.moved', tableId: uid(50 + r.int(4)), by, at: tick(d) });
+    else {
+      // A saved discount (docs/discounts-plan.md step 4): set, changed or cleared; latest wins like a move.
+      const k = r.int(3);
+      const discount = k === 0 ? null : k === 1 ? { kind: 'percent' as const, value: 1 + r.int(2000), reason: 'Staff meal' } : { kind: 'amount' as const, value: 1 + r.int(500), reason: 'Regular' };
+      emit(d, { ...V, type: 'order.discount_set', onSaleId: SALE, discount, by, at: tick(d) });
+    }
   }
   return out;
 }
 
 /** The obvious fold: apply events one by one in the order they happened. Only valid when that order is unambiguous. */
-function replay(events: OrderEnvelope[]): { tableId: string | null; lines: FoldedLine[] } {
+function replay(events: OrderEnvelope[]): { tableId: string | null; lines: FoldedLine[]; discount: OrderFold['discount'] } {
   let tableId: string | null = null;
+  let discount: OrderFold['discount'] = null;
   const lines = new Map<string, FoldedLine>();
   for (const { payload: p } of events) {
     if (p.type === 'order.opened') tableId = p.tableId;
     else if (p.type === 'order.moved') tableId = p.tableId;
+    else if (p.type === 'order.discount_set') discount = { rule: p.discount, onSaleId: p.onSaleId, by: p.by, at: p.at };
     else if (p.type === 'order.line_added') lines.set(p.lineId, { lineId: p.lineId, itemId: p.itemId, name: p.name, unitPaise: p.unitPaise as FoldedLine['unitPaise'], gstRateBp: p.gstRateBp, qty: p.qty, addedBy: p.by, addedAt: p.at, removedBy: null, removedAt: null });
     else if (p.type === 'order.line_changed') lines.get(p.lineId)!.qty = p.qty;
     else { const l = lines.get(p.lineId)!; if (!l.removedAt) { l.removedAt = p.at; l.removedBy = p.by; } }
   }
-  return { tableId, lines: [...lines.values()] };
+  return { tableId, lines: [...lines.values()], discount };
 }
+
+test('saved discount: latest wins, null clears, and a split after a payment does not inherit it', () => {
+  const ten = { kind: 'percent' as const, value: 1000, reason: 'Staff meal' };
+  const at = (s: number) => new Date(Date.UTC(2026, 10, 6, 10, 0, s)).toISOString();
+  const set = (seq: number, s: number, discount: typeof ten | null, onSaleId = SALE): OrderEnvelope =>
+    ({ deviceId: 'd1', seq, payload: { ...V, type: 'order.discount_set', onSaleId, discount, by: uid(90), at: at(s) } });
+  const opened: OrderEnvelope = { deviceId: 'd1', seq: 1, payload: { ...V, type: 'order.opened', tableId: uid(50), createdBy: uid(90), businessDate: '2026-11-06', createdAtDevice: at(0), menuVersion: 1 } };
+  assert.equal(savedDiscount(foldOrder(SALE, [opened]), SALE), null, 'none saved');
+  assert.deepEqual(savedDiscount(foldOrder(SALE, [opened, set(2, 1, ten)]), SALE), ten);
+  // Delivered out of order: the later one (by device time) still wins.
+  assert.equal(savedDiscount(foldOrder(SALE, [set(3, 2, null), opened, set(2, 1, ten)]), SALE), null, 'cleared');
+  const f = foldOrder(SALE, [opened, set(2, 1, ten)]);
+  assert.equal(savedDiscount(f, uid(2)), null, 'the split (another open sale of the visit) has no discount');
+  assert.deepEqual(savedDiscount(foldOrder(SALE, [opened, set(2, 1, ten, uid(2))]), uid(2)), ten, 'one set on the split applies to it');
+  assert.ok(OutboxEvent.safeParse({ ...V, type: 'order.discount_set', onSaleId: SALE, discount: { ...ten, value: 0 }, by: uid(90), at: at(1) }).success === false, 'a 0% discount is not one');
+});
 
 function shuffle<T>(xs: T[], r: ReturnType<typeof rng>): T[] {
   const a = [...xs];
@@ -240,7 +264,7 @@ test('order fold property: with one shared clock, the fold equals replaying even
     const h = history(seed, false);
     const f = foldOrder(SALE, h);
     const want = replay(h);
-    assert.deepEqual({ tableId: f.tableId, lines: f.lines }, want, `seed ${seed}`);
+    assert.deepEqual({ tableId: f.tableId, lines: f.lines, discount: f.discount }, want, `seed ${seed}`);
     assert.deepEqual(f.anomalies, [], `seed ${seed}`);
   }
 });

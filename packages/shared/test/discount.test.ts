@@ -107,7 +107,7 @@ test('discount cap: a percentage by its rate, a flat amount by its share of the 
 const folded = (lineId: string, unit: number, gst: number, qty: number): FoldedLine => ({
   ...line(lineId, unit, gst, qty), lineId, addedBy: 'u', addedAt: '2026-11-15T10:00:00Z', removedBy: null, removedAt: null,
 });
-const foldOf = (lines: FoldedLine[]): OrderFold => ({ saleId: 's', opened: null, tableId: null, lines, anomalies: [] });
+const foldOf = (lines: FoldedLine[]): OrderFold => ({ saleId: 's', opened: null, tableId: null, lines, discount: null, anomalies: [] });
 
 test('checkPayment: totals the paid lines with the payment discount, and checks each line share', () => {
   const ids = ['00000000-0000-4000-8000-00000000000a', '00000000-0000-4000-8000-00000000000b', '00000000-0000-4000-8000-00000000000c'];

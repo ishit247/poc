@@ -165,6 +165,21 @@ export const OrderMoved = z.object({
 });
 
 /**
+ * A cashier puts a bill discount on an open order to be paid later, or clears it (`discount: null`); docs/discounts-plan.md
+ * step 4. Folds like `order.moved`: the latest wins. `saleId` is the root, as for line events; `onSaleId` is the open sale
+ * it was set on, so a split made after a payment does not inherit it. The payment still fixes the discount (it carries its own).
+ */
+export const OrderDiscountSet = z.object({
+  type: z.literal('order.discount_set'),
+  schemaVersion: z.literal(ORDER_SCHEMA_VERSION),
+  saleId: uuid,
+  onSaleId: uuid,
+  discount: BillDiscount.nullable(),
+  by: uuid,
+  at: deviceTime,
+});
+
+/**
  * Someone at the counter cancels an unpaid order, on any device of its outlet (step 7c): a cashier any open order, a
  * waiter only one they opened (the same rule as `POST /orders/:id/void`). `saleId` is the open sale (the root, or a split
  * the server made after a payment), as a payment names it. Not a line event: like a payment it closes a sale, so it is
@@ -221,14 +236,15 @@ export const SaleVoided = z.object({
 
 export const OutboxEvent = z.discriminatedUnion('type', [
   SaleCreated, PaymentTaken, PrintReprinted, ShiftOpened, ShiftClosed, SaleVoided,
-  OrderOpened, OrderLineAdded, OrderLineChanged, OrderLineRemoved, OrderMoved, OrderVoided,
+  OrderOpened, OrderLineAdded, OrderLineChanged, OrderLineRemoved, OrderMoved, OrderDiscountSet, OrderVoided,
 ]);
-export const OrderEvent = z.discriminatedUnion('type', [OrderOpened, OrderLineAdded, OrderLineChanged, OrderLineRemoved, OrderMoved]);
+export const OrderEvent = z.discriminatedUnion('type', [OrderOpened, OrderLineAdded, OrderLineChanged, OrderLineRemoved, OrderMoved, OrderDiscountSet]);
 export type OrderOpened = z.infer<typeof OrderOpened>;
 export type OrderLineAdded = z.infer<typeof OrderLineAdded>;
 export type OrderLineChanged = z.infer<typeof OrderLineChanged>;
 export type OrderLineRemoved = z.infer<typeof OrderLineRemoved>;
 export type OrderMoved = z.infer<typeof OrderMoved>;
+export type OrderDiscountSet = z.infer<typeof OrderDiscountSet>;
 export type OrderEvent = z.infer<typeof OrderEvent>;
 export type SaleVoided = z.infer<typeof SaleVoided>;
 export type OrderVoided = z.infer<typeof OrderVoided>;

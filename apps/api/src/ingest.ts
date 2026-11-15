@@ -34,7 +34,7 @@ const MODES: GstRounding[] = ['half_up', 'up', 'down'];
 const KNOWN: Record<string, readonly number[]> = {
   'sale.created': [1], 'payment.taken': [1, 2], 'print.reprinted': [1], 'shift.opened': [1], 'shift.closed': [1], 'sale.voided': [1],
   'order.opened': [2], 'order.line_added': [2], 'order.line_changed': [2], 'order.line_removed': [2], 'order.moved': [2],
-  'order.voided': [2],
+  'order.discount_set': [2], 'order.voided': [2],
 };
 
 export async function ingest(p: DevicePrincipal, e: Envelope, settings: TradingSettings): Promise<Result> {

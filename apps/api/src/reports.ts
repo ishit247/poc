@@ -25,7 +25,7 @@ const OUTLET = text('outlet', 'Outlet');
 // Paid sales in range: the base every sales report reads. A refunded or void sale is reported by `voids`.
 // `device_id` here is the counter that took the money (a table order may be paid on another device, step 7b).
 const PAID = `
-  SELECT s.id, COALESCE(s.paid_device_id, s.device_id) AS device_id, s.created_by, s.channel, s.business_date, s.total_paise, s.tax_paise, s.created_at_device,
+  SELECT s.id, COALESCE(s.paid_device_id, s.device_id) AS device_id, s.created_by, s.channel, s.business_date, s.total_paise, s.tax_paise, s.discount_paise, s.created_at_device,
          o.name AS outlet, o.timezone
     FROM sale s JOIN outlet o ON o.id = s.outlet_id
    WHERE s.outlet_id = ANY($1::uuid[]) AND s.business_date BETWEEN $2::date AND $3::date AND s.status = 'paid'`;
@@ -48,10 +48,12 @@ async function sales(c: pg.PoolClient, a: Args): Promise<ReportResult> {
                        COALESCE(sum(amount_paise) FILTER (WHERE method = 'aggregator'), 0) AS online
                   FROM payment WHERE sale_id IN (SELECT id FROM b) GROUP BY sale_id)
      SELECT b.outlet, ${by.label} AS label, count(*)::int AS sales, sum(b.total_paise)::bigint AS gross, sum(b.tax_paise)::bigint AS tax,
+            sum(b.discount_paise)::bigint AS discount, (count(*) FILTER (WHERE b.discount_paise > 0))::int AS discounted,
             sum(p.cash)::bigint AS cash, sum(p.upi)::bigint AS upi, sum(p.online)::bigint AS online
        FROM b LEFT JOIN p ON p.sale_id = b.id ${by.join}
       GROUP BY b.outlet${by.group ? ', ' + by.group : ''} ORDER BY ${by.order}, b.outlet`, [a.outletIds, a.from, a.to]);
-  const columns = [...by.head, int('sales', 'Sales'), money('gross', 'Gross'), money('tax', 'Tax'), money('cash', 'Cash'), money('upi', 'UPI'), money('online', 'Online')];
+  const columns = [...by.head, int('sales', 'Sales'), money('gross', 'Gross'), money('tax', 'Tax'),
+    money('discount', 'Discounts'), int('discounted', 'Discounted bills'), money('cash', 'Cash'), money('upi', 'UPI'), money('online', 'Online')];
   return shape(columns, r.rows);
 }
 
@@ -60,11 +62,12 @@ async function items(c: pg.PoolClient, a: Args): Promise<ReportResult> {
   const r = await c.query(
     `WITH b AS (${PAID})
      SELECT b.outlet, ${byItem ? 'l.name_snapshot AS label, cat.name AS category' : 'cat.name AS label'},
-            sum(l.qty)::bigint AS qty, sum(l.line_total_paise)::bigint AS net, sum(l.tax_paise)::bigint AS tax
+            sum(l.qty)::bigint AS qty, sum(l.line_total_paise - l.discount_paise)::bigint AS net, sum(l.tax_paise)::bigint AS tax,
+            sum(l.discount_paise)::bigint AS discount
        FROM b JOIN sale_line l ON l.sale_id = b.id AND l.removed_at IS NULL JOIN item i ON i.id = l.item_id JOIN category cat ON cat.id = i.category_id
       GROUP BY b.outlet, ${byItem ? 'l.item_id, l.name_snapshot, cat.name' : 'cat.id, cat.name'} ORDER BY net DESC, label`, [a.outletIds, a.from, a.to]);
   const columns = [OUTLET, text('label', byItem ? 'Item' : 'Category'), ...(byItem ? [text('category', 'Category')] : []),
-    int('qty', 'Quantity'), money('net', 'Before tax'), money('tax', 'Tax')];
+    int('qty', 'Quantity'), money('net', 'Before tax, after discount'), money('discount', 'Discount share'), money('tax', 'Tax')];
   return shape(columns, r.rows);
 }
 

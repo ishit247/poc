@@ -13,7 +13,7 @@
 //      resolve to the earliest event and are reported as anomalies, never silently merged.
 import { totals, type CartLine, type CartTotals } from './cart.ts';
 import { paise, type DiscountRule, type Paise } from './money.ts';
-import type { OrderEvent, OrderLineAdded, OrderOpened } from './events.ts';
+import type { BillDiscount, OrderEvent, OrderLineAdded, OrderOpened } from './events.ts';
 import { DEFAULT_SETTINGS, type TradingSettings } from './settings.ts';
 
 /** An order event as received: its payload plus the outbox identity of the device that wrote it. */
@@ -41,6 +41,8 @@ export interface OrderFold {
   opened: OrderOpened | null; // null until the open event arrives
   tableId: string | null;
   lines: FoldedLine[]; // every line ever added, removed ones included, in event order of their adds
+  /** The latest `order.discount_set` (rule 3, latest wins); `rule` null when it was cleared. See `savedDiscount`. */
+  discount: { rule: BillDiscount | null; onSaleId: string; by: string; at: string } | null;
   anomalies: OrderAnomaly[];
 }
 
@@ -84,6 +86,7 @@ export function foldOrder(saleId: string, events: readonly OrderEnvelope[]): Ord
 
   let opened: OrderOpened | null = null;
   let movedTo: string | null = null;
+  let discount: OrderFold['discount'] = null;
   const adds = new Map<string, OrderLineAdded>();
   const qty = new Map<string, number>();
   const removed = new Map<string, { by: string; at: string }>();
@@ -114,6 +117,9 @@ export function foldOrder(saleId: string, events: readonly OrderEnvelope[]): Ord
       case 'order.moved':
         movedTo = p.tableId;
         break;
+      case 'order.discount_set':
+        discount = { rule: p.discount, onSaleId: p.onSaleId, by: p.by, at: p.at };
+        break;
     }
   }
 
@@ -128,10 +134,17 @@ export function foldOrder(saleId: string, events: readonly OrderEnvelope[]): Ord
     };
   });
 
-  return { saleId, opened, tableId: movedTo ?? opened?.tableId ?? null, lines, anomalies };
+  return { saleId, opened, tableId: movedTo ?? opened?.tableId ?? null, lines, discount, anomalies };
 }
 
 export const liveLines = (f: OrderFold): FoldedLine[] => f.lines.filter((l) => l.removedAt === null);
+
+/**
+ * The discount saved for the visit's open sale `openSaleId`, or null. One set on an earlier sale of the visit (paid since,
+ * so the open sale is a split) does not carry over: what arrives after a payment carries no discount (docs/discounts-plan.md).
+ */
+export const savedDiscount = (f: OrderFold, openSaleId: string): BillDiscount | null =>
+  f.discount && f.discount.onSaleId === openSaleId ? f.discount.rule : null;
 
 /** A line row on a CLOSED (paid, refunded or void) sale of the same table visit. */
 export interface ClosedLine {

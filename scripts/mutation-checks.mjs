@@ -294,6 +294,11 @@ const MUTANTS = [
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('webhooks.test.ts'))),
   // --- online orders not completed (PLAN 17 Q16): a separate day-close line
   M('dc-online-not-completed-any-status', 'apps/api/src/routes/dayclose.ts', "AND oo.status IN ('rejected', 'cancelled', 'expired')`, [outletId, date])", '`, [outletId, date])', API_TESTS('zz-reports.test.ts')),
+  // --- discounts step 3: reports and day close (zz-reports.test.ts)
+  M('disc-dc-discount-all-statuses', 'apps/api/src/routes/dayclose.ts', "sum(discount_paise) FILTER (WHERE status = 'paid')", 'sum(discount_paise)', API_TESTS('zz-reports.test.ts')),
+  M('disc-report-discount-dropped', 'apps/api/src/reports.ts', 'sum(b.discount_paise)::bigint AS discount', '0::bigint AS discount', API_TESTS('zz-reports.test.ts')),
+  M('disc-report-discounted-bills-all', 'apps/api/src/reports.ts', 'count(*) FILTER (WHERE b.discount_paise > 0)', 'count(*)', API_TESTS('zz-reports.test.ts')),
+  M('disc-items-net-before-discount', 'apps/api/src/reports.ts', 'sum(l.line_total_paise - l.discount_paise)::bigint AS net', 'sum(l.line_total_paise)::bigint AS net', API_TESTS('zz-reports.test.ts')),
   M('dc-online-not-completed-any-day', 'apps/api/src/routes/dayclose.ts', 'WHERE s.outlet_id = $1 AND s.business_date = $2::date AND oo.status', 'WHERE s.outlet_id = $1 AND $2::date IS NOT NULL AND oo.status', API_TESTS('zz-reports.test.ts')),
   // --- offline lock (PLAN 7.2, apps/counter/src/lock.ts)
   ...[
@@ -759,7 +764,19 @@ const MUTANTS = [
     ['tab-discount-order-not-repriced', 'apps/counter/src/sale.ts', 'sale = { ...sale, ...priced(sale.lines, settings!, discount) };', ''],
     ['tab-discount-not-on-receipt', 'packages/shared/src/receipt-text.ts', 'if (v.discount && v.discount.paise > 0) {', 'if (false) {'],
     ['tab-discount-not-on-slip', 'packages/shared/src/shift.ts', 'if (v.discounts && v.discounts.count > 0) out.push', 'if (false) out.push'],
+    // --- discounts step 4: a discount saved on an order (tablet store)
+    ['tab-saved-disc-waiter', 'apps/counter/src/order.ts', "if (actor.role !== 'cashier') throw new Error('Only a cashier may give a discount.');", ''],
+    ['tab-saved-disc-cap-unchecked', 'apps/counter/src/order.ts', 'discountProblem(sale.subtotalPaise, discount, settings)', 'null'],
+    ['tab-saved-disc-draft-dropped', 'apps/counter/src/order.ts', "    if (discount) await write(device, { type: 'order.discount_set'", "    if (false) await write(device, { type: 'order.discount_set'"],
+    ['tab-saved-disc-unfit-applied', 'apps/counter/src/order.ts', '  if (problem) {\n    const t = totals(live, s);', '  if (false) {\n    const t = totals(live, s);'],
   ].map(([id, file, from, to]) => M(id, file, from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/discount.test.ts'], noDb: true })),
+  // --- discounts step 4: the fold and the server
+  M('saved-disc-split-inherits', 'packages/shared/src/order.ts', 'f.discount && f.discount.onSaleId === openSaleId ? f.discount.rule : null', 'f.discount ? f.discount.rule : null', SHARED_ORDER),
+  M('saved-disc-not-latest', 'packages/shared/src/order.ts', "        discount = { rule: p.discount, onSaleId: p.onSaleId, by: p.by, at: p.at };", "        if (!discount) discount = { rule: p.discount, onSaleId: p.onSaleId, by: p.by, at: p.at };", SHARED_ORDER),
+  ...[
+    ['saved-disc-waiter-allowed', "if (role !== 'cashier') throw new Reject('not_a_cashier');", ''],
+    ['saved-disc-not-open-unchecked', "if (open !== ev.onSaleId) throw new Reject('not_open');", ''],
+  ].map(([id, from, to]) => M(id, 'apps/api/src/order-ingest.ts', from, to, API_TESTS('discounts.test.ts'))),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });

@@ -149,11 +149,23 @@ async function writeOpen(c: pg.PoolClient, p: DevicePrincipal, rootId: string, f
     [openId, flags, t.subtotal, t.tax, t.roundOff, t.total, fold.tableId]);
 }
 
-/** `order.line_added`, `order.line_changed`, `order.line_removed`, `order.moved`. */
+/**
+ * `order.line_added`, `order.line_changed`, `order.line_removed`, `order.moved`, `order.discount_set`. A saved discount is
+ * stored as its event only (docs/discounts-plan.md step 4): the open sale's money stays before it, since the payment fixes
+ * the discount. Rewriting the open sale still bumps the visit, so other tablets pull the event.
+ */
 export async function applyOrderChange(c: pg.PoolClient, p: DevicePrincipal, e: Envelope, ev: LineEvent, s: TradingSettings): Promise<void> {
   const v = await visitOf(c, p, ev.saleId);
   if (v.rootStatus === 'void') throw new Reject('sale_void');
   if (!(await worksHere(c, p.outletId, ev.by))) throw new Reject('unknown_user');
+  if (ev.type === 'order.discount_set') {
+    // Whoever may take the payment may give the discount: a cashier (the tablet shows Pay to cashiers only).
+    const role = (await c.query('SELECT role FROM app_user WHERE id = $1', [ev.by])).rows[0]?.role;
+    if (role !== 'cashier') throw new Reject('not_a_cashier');
+    // Set on a sale that is no longer the visit's open one (paid, or voided, first): nothing left to discount.
+    const open = (await c.query(`SELECT id FROM sale WHERE order_root_id = $1 AND status = 'open'`, [v.rootId])).rows[0]?.id;
+    if (open !== ev.onSaleId) throw new Reject('not_open');
+  }
 
   const flags: string[] = [];
   if (Date.parse(ev.at) > Date.now() + SKEW_MS) flags.push('clock_ahead');
@@ -174,7 +186,7 @@ export async function applyOrderChange(c: pg.PoolClient, p: DevicePrincipal, e: 
   if (ev.type === 'order.line_added') {
     // Two different lines under one id: keep the first, refuse the second (the fold would otherwise pick by clock).
     if (fold.anomalies.some((a) => a.kind === 'line_conflict' && a.lineId === ev.lineId)) throw new Reject('line_conflict');
-  } else if (ev.type !== 'order.moved') {
+  } else if (ev.type !== 'order.moved' && ev.type !== 'order.discount_set') {
     if (!fold.lines.some((l) => l.lineId === ev.lineId)) {
       if (await lineRefused(c, v.rootId, ev.lineId)) throw new Reject('line_rejected');
       throw new Defer('line_not_yet_received');
@@ -209,7 +221,7 @@ export async function payOrder(c: pg.PoolClient, p: DevicePrincipal, saleId: str
   const rows = (await c.query(
     `SELECT line_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, added_by, added_at, removed_by, removed_at
        FROM sale_line WHERE sale_id = $1`, [saleId])).rows;
-  const view: OrderFold = { saleId, opened: null, tableId: null, lines: rows.map(toFolded), anomalies: [] };
+  const view: OrderFold = { saleId, opened: null, tableId: null, lines: rows.map(toFolded), discount: null, anomalies: [] };
 
   const tries = variants(s);
   let check = checkPayment(view, ev.lines, ev.totalPaise, tries[0], ev.discount);

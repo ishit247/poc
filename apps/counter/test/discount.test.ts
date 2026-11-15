@@ -10,7 +10,7 @@ import {
 } from '@pos/shared';
 import { db, type DeviceInfo } from '../src/db.ts';
 import { createSale, payOrder, type Actor } from '../src/sale.ts';
-import { addToOrder, openOrder } from '../src/order.ts';
+import { addToOrder, openOrder, setLineQty, setOrderDiscount } from '../src/order.ts';
 import { closeShift } from '../src/shift.ts';
 import { toReceiptView } from '../src/receipt.ts';
 import { seedShift } from './helpers.ts';
@@ -121,6 +121,51 @@ test('a running order paid with a discount: v2 lines in the order shown with the
   assert.equal(pay.totalPaise, want.total);
   const check = checkPayment(fold, pay.lines, pay.totalPaise, settings, pay.discount);
   assert.equal(check.kind, 'ok', JSON.stringify(check));
+});
+
+test('saved discount (step 4): set on an order, shown with the shared rule, the money left before it, cleared; a waiter cannot', async () => {
+  let s = await openOrder({ device, settings, actor: waiter, menuVersion: 1 });
+  s = await addToOrder({ device, settings, actor: waiter, saleId: s.id, entry: tea, qty: 3 });
+  s = await addToOrder({ device, settings, actor: waiter, saleId: s.id, entry: cake });
+  const before = await state();
+  await assert.rejects(setOrderDiscount({ device, actor: waiter, settings, saleId: s.id, discount: tenPercent }), /Only a cashier/);
+  await assert.rejects(setOrderDiscount({ device, actor: cashier, settings, saleId: s.id, discount: { ...tenPercent, value: 1001 } }), /At most 10%/);
+  assert.deepEqual(await state(), before, 'refused: nothing written');
+
+  s = await setOrderDiscount({ device, actor: cashier, settings, saleId: s.id, discount: tenPercent });
+  const want = totals(s.lines.map((l) => ({ ...l, unitPaise: paise(l.unitPaise) })), settings, tenPercent);
+  assert.deepEqual(s.saved, { discount: tenPercent, problem: null, discountPaise: want.discount, taxPaise: want.tax, roundOffPaise: want.roundOff, totalPaise: want.total });
+  assert.equal(s.totalPaise, totals(s.lines.map((l) => ({ ...l, unitPaise: paise(l.unitPaise) })), settings).total, 'the money fields stay before it, as on the server');
+  assert.equal(s.discount, undefined, 'nothing a payment would send by itself');
+  const ev = (await payloads()).at(-1)!;
+  assert.deepEqual(ev.type === 'order.discount_set' && [ev.saleId, ev.onSaleId, ev.discount, ev.by], [s.id, s.id, tenPercent, cashier.id]);
+
+  const n = await db.outbox.count();
+  await setOrderDiscount({ device, actor: cashier, settings, saleId: s.id, discount: { ...tenPercent } });
+  assert.equal(await db.outbox.count(), n, 'saving the same again writes nothing');
+
+  // Lines removed until the flat discount no longer fits: kept, shown as not applied, with why.
+  s = await setOrderDiscount({ device, actor: cashier, settings, saleId: s.id, discount: { kind: 'amount', value: 1500, reason: 'Complaint' } });
+  assert.equal(s.saved!.problem, null);
+  s = await setLineQty({ device, actor: cashier, settings, saleId: s.id, lineId: s.lines.find((l) => l.name === 'Cake')!.lineId!, qty: 0 });
+  assert.match(s.saved!.problem ?? '', /At most 10%/);
+  assert.deepEqual([s.saved!.discountPaise, s.saved!.totalPaise], [0, s.totalPaise]);
+
+  s = await setOrderDiscount({ device, actor: cashier, settings, saleId: s.id, discount: null });
+  assert.equal(s.saved, undefined, 'cleared');
+});
+
+test('saved discount: a draft cart saved as an order keeps its discount; Pay still sends its own', async () => {
+  await assert.rejects(openOrder({ device, settings, actor: waiter, menuVersion: 1, cart, discount: tenPercent }), /Only a cashier/);
+  assert.equal(await db.sales.count(), 0, 'refused before anything is saved');
+  const s = await openOrder({ device, settings, actor: cashier, menuVersion: 1, cart, discount: tenPercent });
+  assert.deepEqual(s.saved?.discount, tenPercent);
+  assert.equal(s.saved!.totalPaise, totals(cart, settings, tenPercent).total);
+  // Paid without it (the cashier chose No discount at Pay): the payment carries none.
+  const paid = await payOrder({ device, actor: cashier, saleId: s.id, tenders: cash(s.totalPaise) });
+  const pay = (await payloads()).at(-1)!;
+  assert.ok(pay.type === 'payment.taken' && pay.schemaVersion === 2 && pay.discount === null && pay.totalPaise === s.totalPaise);
+  assert.equal(paid.discountPaise ?? 0, 0);
 });
 
 test('an order cannot be discounted over the cap, and stays open', async () => {

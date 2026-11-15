@@ -56,6 +56,9 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
     `SELECT count(*) FILTER (WHERE status = 'paid')::int AS paid,
             COALESCE(sum(total_paise) FILTER (WHERE status = 'paid'), 0)::bigint AS gross,
             COALESCE(sum(tax_paise) FILTER (WHERE status = 'paid'), 0)::bigint AS tax,
+            -- Gross is already after the bill discount (total_paise = subtotal - discount + tax + round-off); this line explains it.
+            COALESCE(sum(discount_paise) FILTER (WHERE status = 'paid'), 0)::bigint AS discount,
+            count(*) FILTER (WHERE status = 'paid' AND discount_paise > 0)::int AS discounted,
             count(*) FILTER (WHERE status = 'void')::int AS voids,
             COALESCE(sum(total_paise) FILTER (WHERE status = 'void'), 0)::bigint AS "voidTotal",
             count(*) FILTER (WHERE status = 'refunded')::int AS refunds,
@@ -87,6 +90,7 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
   return {
     onlineNotCompleted: online.n, onlineNotCompletedPaise: Number(online.total),
     paidSales: s.paid, grossPaise: Number(s.gross), taxPaise: Number(s.tax),
+    discountPaise: Number(s.discount), discountedSales: s.discounted,
     cashPaise: by.cash ?? 0, upiPaise: by.upi ?? 0, onlineGrossPaise: by.aggregator ?? 0,
     voids: s.voids, voidTotalPaise: Number(s.voidTotal), refunds: s.refunds, refundTotalPaise: Number(s.refundTotal),
     shifts: shifts.rows.map((r) => ({ ...r, float: Number(r.float), counted: Number(r.counted), expected: Number(r.expected), variance: Number(r.variance), refused: Number(r.refused), refundedCash: Number(r.refundedCash) })),

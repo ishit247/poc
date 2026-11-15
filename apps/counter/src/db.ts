@@ -57,6 +57,12 @@ export interface LocalSale {
   ownerDeviceId?: string;
   /** Fold anomalies seen while merging another device's events: shown, not merged away (should not happen). */
   anomalies?: string[];
+  /**
+   * An open order's saved discount (`order.discount_set`, docs/discounts-plan.md step 4), and the bill it makes. The money
+   * fields above stay BEFORE it, as on the server: the payment fixes the discount, and Pay passes it explicitly. Set by
+   * `refold` only. `saved.problem`: it no longer fits the bill (or the cap), and Pay opens without it.
+   */
+  saved?: { discount: BillDiscount; problem: string | null; discountPaise: number; taxPaise: number; roundOffPaise: number; totalPaise: number };
   /** For an order, the LIVE lines only, each with its lineId; removed lines stay in the fold, not here. */
   /** `discountPaise` is the line's share of the bill discount; absent (0) until one is given at Pay. */
   lines: { lineId?: string; itemId: string; name: string; unitPaise: number; gstRateBp: number; qty: number; netPaise: number; discountPaise?: number; taxPaise: number }[];

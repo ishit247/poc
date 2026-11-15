@@ -1,6 +1,6 @@
 // Real-browser run of bill discounts (docs/discounts-plan.md step 2) against the Docker stack on :8080, with installed
 // Edge, at 1024x768 and 820x1180: the manager sets the cap and a reason in Settings → Selling rules, then a cashier gives
-// a percentage discount on a counter sale and a flat one on a running order, syncs, and closes the drawer.
+// a percentage discount on a counter sale and a flat one on a running order, syncs, and closes the drawer; step 3: the manager sees them in day close and the reports.
 // Usage: node scripts/browser-discount.mjs   (stack up on a `fresh` seed, counter image rebuilt).
 // Writes .validation/browser-discount.log and screenshots. Dev data only: tenant A (half-up GST, no round-off), staff PIN from scripts/seed.ts.
 import http from 'node:http';
@@ -180,6 +180,32 @@ async function cashier({ width, height }) {
   await ctx.close();
 }
 
+/** Step 3: after the cashier run, the manager's day close and the sales report show the discounts given today. */
+async function managerViews({ width, height }) {
+  const tag = `${width}x${height}`;
+  const { ctx, page, T } = await tablet(width, height);
+  await T('more-menu').click(); await T('mgr-open').click();
+  await T('mgr-email').fill('a1@example.test'); await T('mgr-password').fill('dev-password-123'); await T('mgr-login').click();
+  await T('mgr-tab-close').click();
+  await T('mgr-sub-totals').click();
+  await T('dc-discounts').waitFor({ timeout: 10000 });
+  const dc = await T('dc-discounts').innerText();
+  const m = dc.match(/^(\d+) · ₹([\d,]+\.\d\d)$/);
+  check(`${tag}: day close lists the discounts (bills · ₹)`, !!m && Number(m[1]) >= 2 && Number(m[2].replace(/,/g, '')) >= 5, dc);
+  check(`${tag}: day close totals fit without sideways scroll`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: `${out}/screens/discount-${tag}-5-dayclose.png`, fullPage: true });
+  await T('mgr-tab-reports').click();
+  await T('rep-table').waitFor({ timeout: 10000 });
+  const heads = (await T('rep-table').locator('thead th').allInnerTexts()).map((h) => h.toLowerCase());
+  check(`${tag}: sales report has Discounts and Discounted bills columns`, heads.includes('discounts') && heads.includes('discounted bills'), heads.join(' | '));
+  await T('rep-kind').selectOption('items');
+  await page.waitForFunction(() => /discount share/i.test(document.querySelector('[data-testid="rep-table"] thead')?.textContent ?? ''), null, { timeout: 10000 }).catch(() => {});
+  const ih = (await T('rep-table').locator('thead th').allInnerTexts()).map((h) => h.toLowerCase());
+  check(`${tag}: items report is after discount, with its share`, ih.includes('before tax, after discount') && ih.includes('discount share'), ih.join(' | '));
+  await page.screenshot({ path: `${out}/screens/discount-${tag}-6-reports.png`, fullPage: true });
+  await ctx.close();
+}
+
 /** Discounts off: the button is there (no layout shift) but disabled, and says why. */
 async function off({ width, height }) {
   const tag = `${width}x${height}`;
@@ -206,6 +232,7 @@ try {
   for (const size of [{ width: 1024, height: 768 }, { width: 820, height: 1180 }]) {
     await settings(size);
     await cashier(size);
+    await managerViews(size);
     await off(size);
   }
 } catch (e) {

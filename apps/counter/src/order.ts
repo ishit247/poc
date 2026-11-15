@@ -21,11 +21,11 @@
 //   turns it into this device's paid `sales` row, see `payOrder`). A cashier, or the waiter who opened it, may void it
 //   here too (step 7c, `voidOrder`).
 import {
-  addItem, foldOrder, liveLines, openLines, totals, DEFAULT_SETTINGS, OrderEvent, ORDER_SCHEMA_VERSION,
-  type Cart, type ClosedLine, type MenuEntry, type OrderEnvelope, type OrderOpened, type TradingSettings,
+  addItem, foldOrder, liveLines, openLines, savedDiscount, totals, DEFAULT_SETTINGS, OrderEvent, ORDER_SCHEMA_VERSION,
+  type BillDiscount, type Cart, type ClosedLine, type MenuEntry, type OrderEnvelope, type OrderOpened, type TradingSettings,
 } from '@pos/shared';
 import { db, getMeta, type DeviceInfo, type LocalSale, type VisitRow } from './db.ts';
-import { businessDate, queue, type Actor } from './sale.ts';
+import { businessDate, discountProblem, queue, type Actor } from './sale.ts';
 
 export interface LocalTable { id: string; code: string; sortOrder: number; isDefault: boolean }
 
@@ -71,6 +71,30 @@ export async function localSettings(): Promise<TradingSettings> {
 }
 
 const rootOf = (s: LocalSale) => s.rootId ?? s.id;
+
+/**
+ * The bill a saved discount makes on these live lines (`LocalSale.saved`), or undefined without one. A discount that no
+ * longer fits (lines removed since, or the cap lowered) is kept and shown with why, at the undiscounted money; Pay opens
+ * without it. Priced by the same `totals` as Pay (`priced`, sale.ts), so the two agree.
+ */
+function savedBill(live: Cart, subtotal: number, d: BillDiscount | null, s: TradingSettings): LocalSale['saved'] {
+  if (!d) return undefined;
+  const problem = live.length ? discountProblem(subtotal, d, s) : 'There is nothing on this order to discount.';
+  if (problem) {
+    const t = totals(live, s);
+    return { discount: d, problem, discountPaise: 0, taxPaise: t.tax, roundOffPaise: t.roundOff, totalPaise: t.total };
+  }
+  const t = totals(live, s, d);
+  return { discount: d, problem: null, discountPaise: t.discount, taxPaise: t.tax, roundOffPaise: t.roundOff, totalPaise: t.total };
+}
+
+const sameDiscount = (a: BillDiscount | null, b: BillDiscount | null) =>
+  a === b || (!!a && !!b && a.kind === b.kind && a.value === b.value && a.reason === b.reason);
+
+/** Who may save a discount on an order: whoever may take its payment (docs/discounts-plan.md). The server checks the same. */
+function checkMayDiscount(actor: Actor): void {
+  if (actor.role !== 'cashier') throw new Error('Only a cashier may give a discount.');
+}
 
 const ALL = () => [db.sales, db.outbox, db.meta, db.orderEvents, db.entities, db.visits];
 
@@ -131,13 +155,15 @@ async function refold(device: DeviceInfo, rootId: string, settings: TradingSetti
 
   const live = liveLines({ ...fold, lines: openLines(fold, visit?.closed ?? []) });
   const t = totals(live, settings);
-  const { anomalies: _stale, ownerDeviceId: _owner, ...rest } = base;
+  const saved = savedBill(live, t.subtotal, savedDiscount(fold, saleId), settings);
+  const { anomalies: _stale, ownerDeviceId: _owner, saved: _oldSaved, ...rest } = base;
   const next: LocalSale = {
     ...rest, id: saleId, rootId, tableId: fold.tableId ?? base.tableId,
     lines: live.map((l, i) => ({ lineId: l.lineId, itemId: l.itemId, name: l.name, unitPaise: l.unitPaise, gstRateBp: l.gstRateBp, qty: l.qty, netPaise: t.lines[i]!.net, taxPaise: t.lines[i]!.tax })),
     subtotalPaise: t.subtotal, taxPaise: t.tax, roundOffPaise: t.roundOff, totalPaise: t.total,
     ...(fold.anomalies.length ? { anomalies: fold.anomalies.map((a) => a.kind) } : {}),
     ...(mine ? {} : { ownerDeviceId: visit!.ownerDeviceId }),
+    ...(saved ? { saved } : {}),
   };
   if (mine) await db.sales.put(next);
   else await db.visits.put({ ...visit!, view: next });
@@ -212,10 +238,17 @@ function checkQty(qty: number, settings: TradingSettings): void {
  * so the server flags it rather than refusing, and the tablet does the same (it simply allows it).
  */
 export async function openOrder(args: {
-  device: DeviceInfo; actor: Actor; settings: TradingSettings; menuVersion: number; tableId?: string; cart?: Cart; now?: Date;
+  device: DeviceInfo; actor: Actor; settings: TradingSettings; menuVersion: number; tableId?: string; cart?: Cart;
+  /** A discount the cashier put on the draft cart: saved with the order (`order.discount_set`), checked first. */
+  discount?: BillDiscount | null; now?: Date;
 }): Promise<LocalSale> {
-  const { device, actor, settings, menuVersion, cart = [] } = args;
+  const { device, actor, settings, menuVersion, cart = [], discount = null } = args;
   for (const l of cart) checkQty(l.qty, settings);
+  if (discount) {
+    checkMayDiscount(actor);
+    const why = cart.length ? discountProblem(totals(cart, settings).subtotal, discount, settings) : 'There is nothing on this order to discount.';
+    if (why) throw new Error(why);
+  }
   const now = args.now ?? new Date();
   return db.transaction('rw', ALL(), async () => {
     const tableId = args.tableId ?? (await tables()).find((t) => t.isDefault)?.id;
@@ -233,6 +266,7 @@ export async function openOrder(args: {
     for (const l of cart) {
       await write(device, { type: 'order.line_added', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, lineId: crypto.randomUUID(), itemId: l.itemId, name: l.name, unitPaise: l.unitPaise, gstRateBp: l.gstRateBp, qty: l.qty, by: actor.id, at: await stamp(now) });
     }
+    if (discount) await write(device, { type: 'order.discount_set', schemaVersion: ORDER_SCHEMA_VERSION, saleId: sale.id, onSaleId: sale.id, discount, by: actor.id, at: await stamp(now) });
     return refolded(device, sale, settings);
   });
 }
@@ -280,6 +314,28 @@ export async function setLineQty(args: {
 }
 
 export const removeLine = (args: Omit<Parameters<typeof setLineQty>[0], 'qty'>) => setLineQty({ ...args, qty: 0 });
+
+/**
+ * A cashier saves a bill discount on an open order, this device's or another's, to be paid later; `null` clears it
+ * (docs/discounts-plan.md step 4). Refused as Pay would refuse it (`discountProblem`). Saving what is already saved writes
+ * nothing. Pay opens with it filled in and still sends its own discount: the payment fixes it.
+ */
+export async function setOrderDiscount(args: {
+  device: DeviceInfo; actor: Actor; settings: TradingSettings; saleId: string; discount: BillDiscount | null; now?: Date;
+}): Promise<LocalSale> {
+  const { device, actor, settings, discount } = args;
+  checkMayDiscount(actor);
+  return db.transaction('rw', ALL(), async () => {
+    const sale = await openOrderRow(args.saleId);
+    if (sameDiscount(sale.saved?.discount ?? null, discount)) return sale;
+    if (discount) {
+      const why = sale.lines.length ? discountProblem(sale.subtotalPaise, discount, settings) : 'There is nothing on this order to discount.';
+      if (why) throw new Error(why);
+    }
+    await write(device, { type: 'order.discount_set', schemaVersion: ORDER_SCHEMA_VERSION, saleId: rootOf(sale), onSaleId: sale.id, discount, by: actor.id, at: await stamp(args.now ?? new Date()) });
+    return refolded(device, sale, settings);
+  });
+}
 
 /**
  * Voids an open table order with a reason, this device's own or another device's (step 7c). A cashier may void any open

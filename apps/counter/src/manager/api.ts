@@ -10,6 +10,8 @@ export interface Me {
 export interface Totals {
   paidSales: number; grossPaise: number; taxPaise: number; cashPaise: number; upiPaise: number; onlineGrossPaise: number;
   voids: number; voidTotalPaise: number; refunds: number; refundTotalPaise: number; varianceTotalPaise: number;
+  /** Bill discounts given on paid sales (already out of `grossPaise`). Absent on days frozen before discounts existed. */
+  discountPaise?: number; discountedSales?: number;
   /** Platform orders received this day that never completed (PLAN 17 Q16). Absent on days frozen before it existed. */
   onlineNotCompleted?: number; onlineNotCompletedPaise?: number;
   shifts: { id: string; cashier: string; counter: string; float: number; counted: number; expected: number; variance: number; refused?: number; refundedCash?: number }[];

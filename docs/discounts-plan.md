@@ -2,7 +2,7 @@
 
 # Discounts — plan
 
-Status: **steps 1 and 2 done 2026-11-15 (server, shared rule, schema; tablet, receipt, slip, Settings); step 3 (reports, day close) next.** Model plan: **HIGH** for steps 1 and 2 (money arithmetic, GST,
+Status: **all three steps done 2026-11-15** (server, shared rule, schema; tablet, receipt, slip, Settings; reports, day close). Model plan: **HIGH** for steps 1 and 2 (money arithmetic, GST,
 sync events, ingest); STANDARD for step 3.
 
 ## Decided (PLAN 17 Q17, 2026-11-15)
@@ -116,13 +116,86 @@ Evidence: tablet 100/100 (`test/discount.test.ts` 5 new: event split matches `to
 8/8 caught (`.validation/mutation-discount-step2.log`), `--check` 553/553; `scripts/browser-discount.mjs` 61/61 at
 1024x768 and 820x1180 (Settings, % on a counter sale, ₹ on a running order, server rows unflagged, shift close, off).
 
+## Step 3 notes (built 2026-11-15)
+
+- **Gross or net, report by report.** `total_paise` is already after the discount, so every figure built on it stays
+  as it was and is net of discount: Sales (all `by` views), Hourly, Online, Voids, Unavailable, Settlement, day-close
+  gross. Left unchanged on purpose. Cash/UPI/online mix sums payments, already after the discount.
+- **Sales report** gains `Discounts` (sum of `sale.discount_paise`) and `Discounted bills` columns, in every `by`
+  view (day, outlet, counter, cashier, channel). Paid sales only.
+- **Items report**: `Before tax` is now `Before tax, after discount` (`line_total − line discount`), plus a
+  `Discount share` column. Items net + tax still adds up to the bills (before round-off).
+- **Day close**: totals gain `discountPaise` and `discountedSales` (paid sales only; a voided or refunded discounted
+  bill is not a discount given). Shown as a `Discounts  n · ₹x` row under Exceptions on the Totals tab, only when the
+  field exists (days frozen before this lack it, as with online-not-completed). Gross is unchanged (after discount).
+- Voids and refunds show the bill amount actually charged; nothing to change.
+
+Evidence: API `zz-reports.test.ts` and `zz-online-dayclose.test.ts` 7/7 (fixture gains a discounted paid bill and a
+discounted voided bill); 4 `disc-*` mutants 4/4 caught, `--check` 557/557; typecheck API and counter clean;
+`scripts/browser-discount.mjs` extended with the manager's day-close and Reports views (see the log).
+
 ## Steps
 
 | # | Step | Model | State |
 |---|------|-------|-------|
 | 1 | Shared rule (`discountLines`, `totals`), events, schema 0004 in place, ingest and order-ingest checks and flag, seed; shared, DB and API tests; mutants (`discount-*`) | HIGH | **done 2026-11-15**: tests above; 16 `discount-*` mutants and the 6 re-pointed (`sale-total-unchecked`, `order-totals-count-removed`, `order-pay-removed-line-unpaid`, `order-pay-fold-qty`, `order-pay-total-unchecked`, `ro-pay-fold-qty`) 22/22 caught, log `.validation/mutation-discount-step1.log`; `--check` 545/545 |
 | 2 | Settings (cap, reasons) in Settings → Selling rules; tablet Pay dialog, store, receipt and shift slip; tablet tests; `scripts/browser-discount.mjs` at 1024x768 and 820x1180 (counter sale, running-order payment, through shift close) | HIGH (store), STANDARD (screen) | **done 2026-11-15**: see step 2 notes |
-| 3 | Reports and day-close discount lines; API tests; browser check of the reports | STANDARD | not started |
+| 3 | Reports and day-close discount lines; API tests; browser check of the reports | STANDARD | **done 2026-11-15**: see step 3 notes |
+
+## Saved discount on an order (decided 2026-11-15, steps 4 and 5)
+
+The user asked for a second way in: a **Discount** button on the Sell screen's bill, so a discount can be put on a bill
+and **saved with the order to pay later**. The Pay dialog keeps its own Discount control as it is, and opens with the
+saved discount already filled in. So both flows remain. This changes Q17's "given at Pay" only in *where* the
+discount can be chosen: it is still **fixed by the payment** (the payment event carries it, and every step 1 to 3
+check, flag and report applies unchanged).
+
+- **Who:** a cashier (whoever sees Pay). A waiter sees a saved discount in the total but cannot set or clear it.
+- **What:** the same `BillDiscount` (% or ₹, reason), within the same cap, refused by the same `discountProblem`.
+- **Draft cart:** the discount is held on the Sell screen with the cart. Save order (or leaving Sell) writes it
+  onto the new order. Pay opens with it. Print bill prints it.
+- **Running order:** a new order event, `order.discount_set { saleId: root, onSaleId, discount | null, by, at }`.
+  It folds like `order.moved`: the latest wins (rule 3) and `null` clears it. `onSaleId` is the open sale it was set
+  on. After a payment, the split-off order is a new open sale, so the old discount does not apply to it ("lines that
+  arrive after a payment carry no discount", as in step 1). The fold reports `discount`. The tablet's `refold` applies
+  it only when `onSaleId` is the open sale.
+- **Server:** it checks the event (the user works here as a cashier, the visit is known or deferred, `onSaleId` is
+  the visit's open sale or `not_open`). It stores the event and nothing else. **No schema change.** The open sale's
+  money on the server stays before the discount, because the payment fixes it. The event travels to other tablets in
+  `/sync/orders` with the visit's other events.
+- **Tablet shows** the order's subtotal, `Discount (reason)  −₹x`, GST on the rest, and the total. Held orders and
+  the table map show the discounted total. If lines are removed so the saved discount no longer fits (nothing left to
+  pay), it is shown as not applied, with why, and Pay opens without it.
+- **Sell screen layout:** Save order and Print bill become icon buttons (title and aria-label), and a Discount icon
+  joins them in the action row. Clear stays plain, and the Pay buttons stay the large ones.
+
+| # | Step | Model | State |
+|---|------|-------|-------|
+| 4 | Event `order.discount_set`, fold `discount`, ingest checks; tablet `setOrderDiscount`, `openOrder` with a discount, `refold` totals with it, pulled views too; shared, API and tablet tests; mutants | HIGH | **done 2026-11-15**: see step 4 notes |
+| 5 | Sell: icon buttons, Discount dialog (the Pay dialog's discount fields, shared), draft-cart discount, Pay prefill, draft bill line; browser check at 1024x768 and 820x1180 (cashier and waiter, draft and order, default and map mode) | STANDARD | not started |
+
+### Step 4 notes (built 2026-11-15)
+
+- **Shared:** `OrderDiscountSet` (`events.ts`) is in `OutboxEvent` and `OrderEvent`, so it travels with the visit's
+  events in `/sync/orders` and on the server's own fold. `OrderFold.discount` is the latest one (`rule` null =
+  cleared). `savedDiscount(fold, openSaleId)` applies it only when `onSaleId` is that open sale.
+- **Server** (`order-ingest.ts` `applyOrderChange`): the visit is known (or deferred `sale_not_yet_received`). The
+  `by` user works here and is a **cashier** (`not_a_cashier` otherwise). `onSaleId` is the visit's open sale
+  (`not_open` otherwise: it was paid or voided first). Then the visit is refolded and rewritten as for a line event:
+  the money is unchanged, but the rewrite bumps `order_visit`, so other tablets pull it. **No schema change.**
+- **Tablet** (`order.ts`): `setOrderDiscount` (cashier only, `discountProblem`, the same value again writes nothing,
+  `null` clears). `openOrder({ discount })` writes it after the lines, which is the draft cart's "Save order".
+  `refold` puts **`LocalSale.saved`** `{ discount, problem, discountPaise, taxPaise, roundOffPaise, totalPaise }` on
+  the row or view. The row's own money fields stay before the discount, as on the server. A discount that no longer
+  fits keeps `saved` with `problem` set, at the undiscounted money.
+- **For step 5:** show `saved.totalPaise` (the due) wherever an order's total is shown. Open the Pay dialog with
+  `saved.discount` filled in when `problem` is null. Pay still passes its discount to `payOrder` explicitly: without
+  it, the payment carries none.
+
+Evidence: shared 72/72 (the fold property test now generates discount events; `savedDiscount` unit test); API 271/271
+(`discounts.test.ts` 7/7: deferred, applied, waiter refused, bad payload, pulled, paid without it, `not_open` after
+payment, the split takes its own); tablet 102/102 (2 new); 8 mutants 8/8 caught
+(`.validation/mutation-discount-step4.log`), `--check` 565/565.
 
 ## Tests that must exist
 
