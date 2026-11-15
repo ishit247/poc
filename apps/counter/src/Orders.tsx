@@ -4,6 +4,7 @@ import { formatRupees, paise } from '@pos/shared';
 import type { DeviceInfo, LocalSale } from './db.ts';
 import { payOrder, recentReceipts, recordReprint, visibleOpenOrders, type Actor } from './sale.ts';
 import { PayDialog } from './PayDialog.tsx';
+import { localSettings } from './order.ts';
 import { Receipt } from './Receipt.tsx';
 import { DraftBill } from './DraftBill.tsx';
 import { RefundDialog, RefundSlip } from './RefundDialog.tsx';
@@ -105,9 +106,14 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
       )}
       {paying && (
         <PayDialog
+          lines={paying.lines}
           total={paise(paying.totalPaise)}
+          discountable={paying.kind === 'order'}
           onCancel={() => setPaying(null)}
-          onConfirm={async (tenders) => { setDone(await payOrder({ device, actor, saleId: paying.id, tenders })); setPaying(null); }}
+          onConfirm={async (tenders, discount) => {
+            setDone(await payOrder({ device, actor, saleId: paying.id, tenders, discount, settings: discount ? await localSettings() : undefined }));
+            setPaying(null);
+          }}
         />
       )}
     </main>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_SETTINGS, LOGO_MAX_BYTES, LOGO_TYPES, QTY_CAP_MAX, REFUND_REASON_MAX, REFUND_REASONS_MAX, ROUND_OFF_STEPS, type TradingSettings } from '@pos/shared';
+import { DEFAULT_SETTINGS, parsePercentBp, LOGO_MAX_BYTES, LOGO_TYPES, QTY_CAP_MAX, REFUND_REASON_MAX, REFUND_REASONS_MAX, ROUND_OFF_STEPS, type TradingSettings } from '@pos/shared';
 import { api, type Me } from './api.ts';
 
 type Outlet = Me['outlets'][number];
@@ -43,6 +43,14 @@ export function Settings({ token }: { token: string }) {
   );
 }
 
+// One reason per line; blank lines and repeats (any case) are dropped, so the list saves as the cashier will see it.
+// The limits are the shared `reasonList` schema's (settings.ts), for refund and discount reasons alike.
+function reasonLines(text: string): string[] {
+  const seen = new Set<string>();
+  return text.split('\n').map((x) => x.trim()).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
+}
+const listOk = (xs: readonly string[]) => xs.length <= REFUND_REASONS_MAX && xs.every((x) => x.length <= REFUND_REASON_MAX);
+
 function Trading({ token }: { token: string }) {
   const [saved, setSaved] = useState<TradingSettings | null>(null);
   const [s, setS] = useState<TradingSettings>(DEFAULT_SETTINGS);
@@ -52,7 +60,12 @@ function Trading({ token }: { token: string }) {
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
   const [reasons, setReasons] = useState(DEFAULT_SETTINGS.refundReasons.join('\n'));
-  const adopt = (v: TradingSettings) => { setSaved(v); setS(v); setQty(String(v.maxLineQty)); setDays(String(v.offlineDays)); setReasons(v.refundReasons.join('\n')); };
+  const [cap, setCap] = useState(String(DEFAULT_SETTINGS.discountMaxBp / 100));
+  const [dReasons, setDReasons] = useState(DEFAULT_SETTINGS.discountReasons.join('\n'));
+  const adopt = (v: TradingSettings) => {
+    setSaved(v); setS(v); setQty(String(v.maxLineQty)); setDays(String(v.offlineDays)); setReasons(v.refundReasons.join('\n'));
+    setCap(String(v.discountMaxBp / 100)); setDReasons(v.discountReasons.join('\n'));
+  };
   useEffect(() => {
     void api('/settings', token).then((r) => { if (r.status === 200) adopt(r.body as TradingSettings); else setError('Could not load the settings.'); })
       .catch(() => setError('Could not reach the server.'));
@@ -61,16 +74,17 @@ function Trading({ token }: { token: string }) {
   const q = Number(qty), d = Number(days);
   const qtyOk = Number.isInteger(q) && q >= 1 && q <= QTY_CAP_MAX;
   const daysOk = Number.isInteger(d) && d >= 1 && d <= 60;
-  // One reason per line; blank lines and repeats (any case) are dropped, so the list saves as the cashier will see it.
-  const list = useMemo(() => {
-    const seen = new Set<string>();
-    return reasons.split('\n').map((x) => x.trim()).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
-  }, [reasons]);
-  const reasonsOk = list.length <= REFUND_REASONS_MAX && list.every((x) => x.length <= REFUND_REASON_MAX);
-  const next: TradingSettings = { ...s, maxLineQty: q, offlineDays: d, refundReasons: list };
+  const list = useMemo(() => reasonLines(reasons), [reasons]);
+  const dList = useMemo(() => reasonLines(dReasons), [dReasons]);
+  const reasonsOk = listOk(list);
+  const dReasonsOk = listOk(dList);
+  const capBp = parsePercentBp(cap);
+  const next: TradingSettings = { ...s, maxLineQty: q, offlineDays: d, refundReasons: list, discountMaxBp: capBp ?? 0, discountReasons: dList };
   const changed = !!saved && JSON.stringify(next) !== JSON.stringify(saved);
+  const reasonsWhy = `up to ${REFUND_REASONS_MAX}, each up to ${REFUND_REASON_MAX} letters`;
   const why = !qtyOk ? `Quantity limit: 1 to ${QTY_CAP_MAX}` : !daysOk ? 'Offline days: 1 to 60'
-    : !reasonsOk ? `Refund reasons: up to ${REFUND_REASONS_MAX}, each up to ${REFUND_REASON_MAX} letters` : !changed ? 'Nothing changed' : undefined;
+    : !reasonsOk ? `Refund reasons: ${reasonsWhy}` : capBp === null ? 'Largest discount: 0 to 100 (%)'
+    : !dReasonsOk ? `Discount reasons: ${reasonsWhy}` : !changed ? 'Nothing changed' : undefined;
 
   const save = async () => {
     setBusy(true); setError(''); setDone(false);
@@ -104,6 +118,14 @@ function Trading({ token }: { token: string }) {
         <label className="m-field">Refund reasons, one per line (cashiers pick one or type their own)
           <textarea data-testid="set-refund-reasons" rows={5} value={reasons} onChange={(e) => { setReasons(e.target.value); setDone(false); }} />
           {!reasonsOk && <span className="error" role="alert">Up to {REFUND_REASONS_MAX} reasons, each up to {REFUND_REASON_MAX} letters.</span>}
+        </label>
+        <label className="m-field">Largest bill discount a cashier may give, % (0 turns discounts off)
+          <input data-testid="set-discount-cap" inputMode="decimal" value={cap} onChange={(e) => { setCap(e.target.value); setDone(false); }} />
+          {capBp === null && <span className="error" role="alert">A percentage from 0 to 100, like 10 or 12.5.</span>}
+        </label>
+        <label className="m-field">Discount reasons, one per line (cashiers pick one or type their own)
+          <textarea data-testid="set-discount-reasons" rows={4} value={dReasons} onChange={(e) => { setDReasons(e.target.value); setDone(false); }} />
+          {!dReasonsOk && <span className="error" role="alert">Up to {REFUND_REASONS_MAX} reasons, each up to {REFUND_REASON_MAX} letters.</span>}
         </label>
         <p className="muted">Tablets use new rules after their next sync. Bills already rung up keep the rules they were made under.</p>
         <Note ok={done} error={error} />

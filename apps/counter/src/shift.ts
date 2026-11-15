@@ -87,9 +87,11 @@ export async function slipFor(shift: LocalShift, device: DeviceInfo): Promise<Sh
   const expected = expectedCash(shift.openingCashPaise, [...payments, ...refusedPays], refunds);
   const sumOf = (ps: readonly { method: string; amountPaise: number }[], m: string) => ps.filter((p) => p.method === m).reduce((a, p) => a + p.amountPaise, 0);
   const sum = (m: string) => sumOf(payments, m);
+  const discounted = sales.filter((s) => (s.discountPaise ?? 0) > 0);
   return {
     outletName: device.outletName, counterCode: device.counterCode, cashier: shift.userName, openedAt: shift.openedAt, closedAt: shift.closedAt!,
     timeZone: device.timezone, openingCashPaise: shift.openingCashPaise, cashSalesPaise: sum('cash'), upiSalesPaise: sum('upi'), salesCount: sales.length,
+    discounts: { count: discounted.length, paise: discounted.reduce((a, s) => a + s.discountPaise!, 0) },
     refused: { count: refused.length, cashPaise: sumOf(refusedPays, 'cash'), upiPaise: sumOf(refusedPays, 'upi') },
     refunds: { count: refunded.length, cashPaise: sumOf(refunds, 'cash'), upiPaise: sumOf(refunds, 'upi') },
     countedCashPaise: shift.countedCashPaise!, variancePaise: shift.countedCashPaise! - expected,

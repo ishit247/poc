@@ -2,7 +2,7 @@
 
 # Discounts — plan
 
-Status: **step 1 done 2026-11-15 (server, shared rule, schema); step 2 (tablet) next.** Model plan: **HIGH** for steps 1 and 2 (money arithmetic, GST,
+Status: **steps 1 and 2 done 2026-11-15 (server, shared rule, schema; tablet, receipt, slip, Settings); step 3 (reports, day close) next.** Model plan: **HIGH** for steps 1 and 2 (money arithmetic, GST,
 sync events, ingest); STANDARD for step 3.
 
 ## Decided (PLAN 17 Q17, 2026-11-15)
@@ -92,12 +92,36 @@ Evidence: shared 71/71 (`test/discount.test.ts` 9 new), DB 50/50 (2 new), API 27
 `settings.test.ts` extended), tablet 95/95 (2 expectations now include `discountPaise: 0`); fresh start passed.
 Mutants: see the step table.
 
+## Step 2 notes (built 2026-11-15)
+
+- **Store** (`apps/counter/src/sale.ts`): `priced(lines, settings, discount)` is the one place the tablet prices a bill;
+  the Pay dialog previews with it and `createSale`/`payOrder` save with it. `discountProblem` refuses what the dialog
+  does not offer (cap 0 = off, over the cap by `discountOverCap`, nothing left to pay), so a refused discount writes
+  nothing and spends no receipt number. A discount is only given with payment (`createSale` without tenders refuses
+  one). `payOrder` reprices the order's lines **in the order shown** and sends each line's share on the v2 payment;
+  it needs `settings` with a discount. An open *whole* sale (v1 payment) cannot take one: the dialog disables it.
+- `LocalSale` gains `discount`, `discountPaise` and per line `discountPaise` (all optional: older rows read as none).
+- **Pay dialog**: a plain **Discount** button shares one slot with **No discount** at the left of the action row;
+  disabled with the reason as its title when discounts are off or the bill cannot take one. % or ₹, the value, the
+  reason (combobox plus the manager's picks), and a line "Bill ₹x, discount −₹y before GST, GST ₹z". The due, the cash
+  placeholder, quick cash and change follow the discounted total. Confirm is disabled with the reason until the
+  discount is complete. The dialog is 580 px wide with a sticky action row, so Confirm stays in view at 1024x768.
+- **Receipt**: `Discount 10% (Staff meal)  -3.00` between Sub Total and GST; a reason too long for 32 characters goes
+  on the next line. **Shift slip**: `Discounts (n)  x` under Bills, only when one was given.
+- **Settings → Selling rules**: "Largest bill discount a cashier may give, %" (0 to 100, two decimals; 0 = off) and a
+  discount-reasons list with the refund list's limits. `parsePercentBp` (money.ts) parses both this and the dialog.
+
+Evidence: tablet 100/100 (`test/discount.test.ts` 5 new: event split matches `totals`, v2 payment accepted by
+`checkPayment` on the fold, refusals write nothing, receipt and slip lines); shared 71/71; 8 `tab-discount-*` mutants
+8/8 caught (`.validation/mutation-discount-step2.log`), `--check` 553/553; `scripts/browser-discount.mjs` 61/61 at
+1024x768 and 820x1180 (Settings, % on a counter sale, ₹ on a running order, server rows unflagged, shift close, off).
+
 ## Steps
 
 | # | Step | Model | State |
 |---|------|-------|-------|
 | 1 | Shared rule (`discountLines`, `totals`), events, schema 0004 in place, ingest and order-ingest checks and flag, seed; shared, DB and API tests; mutants (`discount-*`) | HIGH | **done 2026-11-15**: tests above; 16 `discount-*` mutants and the 6 re-pointed (`sale-total-unchecked`, `order-totals-count-removed`, `order-pay-removed-line-unpaid`, `order-pay-fold-qty`, `order-pay-total-unchecked`, `ro-pay-fold-qty`) 22/22 caught, log `.validation/mutation-discount-step1.log`; `--check` 545/545 |
-| 2 | Settings (cap, reasons) in Settings → Selling rules; tablet Pay dialog, store, receipt and shift slip; tablet tests; `scripts/browser-discount.mjs` at 1024x768 and 820x1180 (counter sale, running-order payment, through shift close) | HIGH (store), STANDARD (screen) | not started |
+| 2 | Settings (cap, reasons) in Settings → Selling rules; tablet Pay dialog, store, receipt and shift slip; tablet tests; `scripts/browser-discount.mjs` at 1024x768 and 820x1180 (counter sale, running-order payment, through shift close) | HIGH (store), STANDARD (screen) | **done 2026-11-15**: see step 2 notes |
 | 3 | Reports and day-close discount lines; API tests; browser check of the reports | STANDARD | not started |
 
 ## Tests that must exist

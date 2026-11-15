@@ -27,6 +27,8 @@ export interface ShiftSlipView {
   cashSalesPaise: number;
   upiSalesPaise: number;
   salesCount: number;
+  /** Bill discounts given on this shift's sales; the sales above are already after them. Absent on older slips. */
+  discounts?: { count: number; paise: number };
   /**
    * Money this drawer took for payments the server refused (phase 12 step 7d): another device's closing of the order
    * stood. Not in the sales above; the cash IS in `expectedCash` (it is in the drawer). Absent on older slips.
@@ -66,6 +68,7 @@ export function renderShiftSlip(v: ShiftSlipView, width = RECEIPT_WIDTH): string
     row('UPI sales', money(v.upiSalesPaise), width),
     row('Bills', String(v.salesCount), width),
   ];
+  if (v.discounts && v.discounts.count > 0) out.push(row(`Discounts (${v.discounts.count})`, money(v.discounts.paise), width));
   // The customer paid, the server refused it: refund it or hand it to the manager. Its cash is in "expected" below.
   if (v.refused && v.refused.count > 0) {
     out.push(rule, `Taken, refused by server (${v.refused.count})`);

@@ -76,6 +76,15 @@ header button { min-height: 40px; }
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 10; }
 .dialog { background: var(--surface); border-radius: 12px; padding: 16px; width: 460px; max-width: 94vw; display: flex; flex-direction: column; gap: 12px; }
 .dialog h2 { margin: 0; }
+/* Wide enough for quick cash and the reason picks on one row each; Confirm stays in view if the content still scrolls. */
+.dialog.pay { width: min(580px, 94vw); max-height: 96vh; overflow: auto; }
+.dialog.pay .actions { position: sticky; bottom: -16px; background: var(--surface); padding: 8px 0 16px; margin-bottom: -16px; }
+.dialog.pay .discount-summary { margin: -6px 0 0; }
+.discount-panel { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.discount-panel .modes { flex: none; }
+.discount-panel .modes button { white-space: nowrap; }
+.discount-panel .row input { flex: 1; min-width: 0; min-height: 48px; }
+.discount-panel > input { min-height: 44px; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; }
 .modes { display: flex; gap: 8px; }
 .modes button { flex: 1; }

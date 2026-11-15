@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { liveQuery } from 'dexie';
-import { addItem, formatRupees, paise, setQty, totals, type Cart, type MenuEntry, type Tender } from '@pos/shared';
+import { addItem, formatRupees, paise, setQty, totals, type BillDiscount, type Cart, type MenuEntry, type Tender } from '@pos/shared';
 import { db, type DeviceInfo, type LocalSale } from './db.ts';
 import type { MenuView } from './menu.ts';
 import { createSale, payOrder, type Actor } from './sale.ts';
@@ -164,10 +164,10 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
     } catch (e) { setMessage(e instanceof Error ? e.message : 'Not allowed.'); }
   };
 
-  const finish = async (tenders: Tender[]) => {
+  const finish = async (tenders: Tender[], discount: BillDiscount | null) => {
     const sale = inOrder
-      ? await payOrder({ device, actor, saleId: activeOrder.id, tenders })
-      : await createSale({ device, actor, cart, settings: menu.settings, menuVersion: menu.menuVersion, tenders });
+      ? await payOrder({ device, actor, saleId: activeOrder.id, tenders, discount, settings: menu.settings })
+      : await createSale({ device, actor, cart, settings: menu.settings, menuVersion: menu.menuVersion, tenders, discount });
     setCart([]); setOrderId(null); setPaying(null); setQ('');
     setDone(sale);
   };
@@ -394,7 +394,10 @@ export function Sell({ device, actor, menu }: { device: DeviceInfo; actor: Actor
           </div>
         </div>
       )}
-      {paying && <PayDialog key={paying} initialMode={paying} total={paise(total)} onCancel={() => setPaying(null)} onConfirm={finish} />}
+      {paying && (
+        <PayDialog key={paying} initialMode={paying} lines={inOrder ? activeOrder.lines : cart} total={paise(total)}
+          discountable={!inOrder || activeOrder.kind === 'order'} onCancel={() => setPaying(null)} onConfirm={finish} />
+      )}
     </div>
   );
 }

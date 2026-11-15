@@ -1,7 +1,10 @@
 // Writing a sale. The sale, its outbox events and the receipt counter are written in ONE
 // IndexedDB transaction, so there is no state where a receipt number was spent without the
 // sale, or a sale exists that the server will never hear about.
-import { nextReceipt, OutboxEvent, totals, type OutboxEventInput, validatePayments, EVENT_SCHEMA_VERSION, ORDER_SCHEMA_VERSION, paise, type Cart, type Tender, type TradingSettings } from '@pos/shared';
+import {
+  discountOn, discountOverCap, nextReceipt, OutboxEvent, totals, type OutboxEventInput, validatePayments, EVENT_SCHEMA_VERSION, ORDER_SCHEMA_VERSION,
+  paise, type BillDiscount, type Cart, type DiscountRule, type Tender, type TradingSettings,
+} from '@pos/shared';
 import { currentShift, db, getMeta, type DeviceInfo, type LocalSale } from './db.ts';
 
 export interface Actor { id: string; name: string; role: 'cashier' | 'waiter' }
@@ -14,8 +17,47 @@ export function businessDate(timezone: string, now = new Date()): string {
 const saleCreated = (s: LocalSale): OutboxEventInput => ({
   type: 'sale.created', schemaVersion: EVENT_SCHEMA_VERSION, saleId: s.id, channel: s.channel, createdBy: s.createdBy,
   businessDate: s.businessDate, createdAtDevice: s.createdAt, menuVersion: s.menuVersion, lines: s.lines,
-  subtotalPaise: s.subtotalPaise, taxPaise: s.taxPaise, roundOffPaise: s.roundOffPaise, totalPaise: s.totalPaise,
+  subtotalPaise: s.subtotalPaise, discount: s.discount ?? null, discountPaise: s.discountPaise ?? 0,
+  taxPaise: s.taxPaise, roundOffPaise: s.roundOffPaise, totalPaise: s.totalPaise,
 });
+
+const pct = (bp: number) => `${bp / 100}%`;
+
+/**
+ * Why this discount may not be given on a bill of `subtotal`, or null if it may. The Pay dialog offers nothing this
+ * refuses, and the store refuses it again. Over the cap is only FLAGGED by the server (the cap may have changed while
+ * this tablet was offline); the tablet does not offer it at all. Mirrors: `discountOverCap`, `discountOn` (money.ts).
+ */
+export function discountProblem(subtotal: number, d: DiscountRule, s: Pick<TradingSettings, 'discountMaxBp'>): string | null {
+  if (s.discountMaxBp === 0) return 'Discounts are off. A manager can turn them on in Settings.';
+  if (discountOverCap(paise(subtotal), d, s.discountMaxBp)) return `At most ${pct(s.discountMaxBp)} of the bill may be taken off.`;
+  try { discountOn(paise(subtotal), d); } catch { return 'A discount must come to at least 0.01 and leave something to pay.'; }
+  return null;
+}
+
+/** A line of a bill on screen: a cart line, or an order's line (with its lineId). */
+export type BillLine = Pick<LocalSale['lines'][number], 'lineId' | 'itemId' | 'name' | 'unitPaise' | 'gstRateBp' | 'qty'>;
+
+/**
+ * A bill's lines and money from `totals`, with the bill discount split over the lines (in the lines' order, which is
+ * the order they are sent in) when one is given. Lines keep their lineId. Throws an Error fit to show for a discount
+ * `discountProblem` refuses.
+ */
+export function priced(bill: readonly BillLine[], s: TradingSettings, discount: BillDiscount | null = null) {
+  const cart: Cart = bill.map((l) => ({ itemId: l.itemId, name: l.name, unitPaise: paise(l.unitPaise), gstRateBp: l.gstRateBp, qty: l.qty }));
+  if (discount) {
+    const why = discountProblem(totals(cart, s).subtotal, discount, s);
+    if (why) throw new Error(why);
+  }
+  const t = totals(cart, s, discount);
+  return {
+    lines: t.lines.map((l, i) => ({
+      ...(bill[i]!.lineId ? { lineId: bill[i]!.lineId } : {}),
+      itemId: l.itemId, name: l.name, unitPaise: l.unitPaise, gstRateBp: l.gstRateBp, qty: l.qty, netPaise: l.net, discountPaise: l.discount, taxPaise: l.tax,
+    })),
+    subtotalPaise: t.subtotal, discount, discountPaise: t.discount, taxPaise: t.tax, roundOffPaise: t.roundOff, totalPaise: t.total,
+  };
+}
 
 /** Queues an event and returns its outbox seq (the device order the server replays, and the fold's event identity). */
 export async function queue(event: OutboxEventInput): Promise<number> {
@@ -41,7 +83,11 @@ async function takePayment(device: DeviceInfo, sale: LocalSale, tenders: Tender[
   if (sale.kind === 'order') {
     // v2: exactly the lines on screen, at the quantities on screen, for the total on screen. The payment wins on the
     // server (step 4), so what is listed here is what the receipt says, whatever another device did meanwhile.
-    await queue({ ...common, schemaVersion: ORDER_SCHEMA_VERSION, lines: sale.lines.map((l) => ({ lineId: l.lineId!, qty: l.qty })), totalPaise: sale.totalPaise });
+    // In the order shown, which is the order the discount was split in (the server splits in this order too).
+    await queue({
+      ...common, schemaVersion: ORDER_SCHEMA_VERSION, lines: sale.lines.map((l) => ({ lineId: l.lineId!, qty: l.qty, discountPaise: l.discountPaise ?? 0 })),
+      discount: sale.discount ?? null, totalPaise: sale.totalPaise,
+    });
     // Settled: the paid sale row is the record now. Kept events are filed under the visit's root (a split's id differs).
     await db.orderEvents.where('saleId').equals(sale.rootId ?? sale.id).delete();
   } else {
@@ -50,20 +96,19 @@ async function takePayment(device: DeviceInfo, sale: LocalSale, tenders: Tender[
   return { ...sale, status: 'paid', shiftId, businessDate: date, receiptNo: issued.receiptNo, receiptSeq: issued.receiptSeq, payments };
 }
 
-/** Saves a new order; with `tenders` it is paid in the same step (cashier). */
+/** Saves a new order; with `tenders` it is paid in the same step (cashier), and may carry a bill discount. */
 export async function createSale(args: {
-  device: DeviceInfo; actor: Actor; cart: Cart; settings: TradingSettings; menuVersion: number; tenders?: Tender[]; now?: Date;
+  device: DeviceInfo; actor: Actor; cart: Cart; settings: TradingSettings; menuVersion: number; tenders?: Tender[]; discount?: BillDiscount | null; now?: Date;
 }): Promise<LocalSale> {
   const { device, actor, cart, settings, menuVersion, tenders } = args;
   if (cart.length === 0) throw new RangeError('empty cart');
   if (tenders && actor.role !== 'cashier') throw new Error('only a cashier takes payment');
+  if (args.discount && !tenders) throw new Error('A discount is given when the bill is paid.');
   const now = args.now ?? new Date();
-  const t = totals(cart, settings);
   const open: LocalSale = {
     id: crypto.randomUUID(), status: 'open', createdBy: actor.id, createdByName: actor.name, channel: 'counter',
     businessDate: businessDate(device.timezone, now), createdAt: now.toISOString(), menuVersion,
-    lines: t.lines.map((l) => ({ itemId: l.itemId, name: l.name, unitPaise: l.unitPaise, gstRateBp: l.gstRateBp, qty: l.qty, netPaise: l.net, taxPaise: l.tax })),
-    subtotalPaise: t.subtotal, taxPaise: t.tax, roundOffPaise: t.roundOff, totalPaise: t.total,
+    ...priced(cart, settings, args.discount ?? null),
     receiptNo: null, receiptSeq: null, payments: [],
   };
   return db.transaction('rw', db.sales, db.outbox, db.meta, db.shifts, async () => {
@@ -81,8 +126,12 @@ export async function createSale(args: {
  * is from this device's series and the cash is in this drawer, which is what the server records too (`paid_device_id`,
  * this shift). The view is dropped, and `refold` never brings it back while this row is paid.
  */
-export async function payOrder(args: { device: DeviceInfo; actor: Actor; saleId: string; tenders: Tender[]; now?: Date }): Promise<LocalSale> {
+export async function payOrder(args: {
+  device: DeviceInfo; actor: Actor; saleId: string; tenders: Tender[]; discount?: BillDiscount | null; settings?: TradingSettings; now?: Date;
+}): Promise<LocalSale> {
   if (args.actor.role !== 'cashier') throw new Error('only a cashier takes payment');
+  const { discount = null, settings } = args;
+  if (discount && !settings) throw new RangeError('a discount needs the trading settings');
   return db.transaction('rw', [db.sales, db.outbox, db.meta, db.shifts, db.orderEvents, db.visits], async () => {
     const own = await db.sales.get(args.saleId);
     const visit = own ? undefined : await db.visits.where('openSaleId').equals(args.saleId).first();
@@ -92,6 +141,11 @@ export async function payOrder(args: { device: DeviceInfo; actor: Actor; saleId:
       sale = rest;
     }
     if (!sale || sale.status !== 'open') throw new Error('that order is not open');
+    if (discount) {
+      // Only a running order's v2 payment carries a discount; an open whole sale's v1 payment has nowhere to put one.
+      if (sale.kind !== 'order') throw new Error('This bill cannot take a discount.');
+      sale = { ...sale, ...priced(sale.lines, settings!, discount) };
+    }
     const paid = await takePayment(args.device, sale, args.tenders, businessDate(args.device.timezone, args.now ?? new Date()), await drawerFor(args.actor));
     await db.sales.put(paid);
     if (visit) {

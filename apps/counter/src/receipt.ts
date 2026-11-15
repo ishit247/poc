@@ -17,7 +17,11 @@ export function toReceiptView(sale: LocalSale, device: DeviceInfo, outlet: Outle
     outletName: device.outletName, address: outlet.address, gstEnabled: outlet.gstEnabled, gstin: outlet.gstin, fssaiNo: outlet.fssaiNo,
     receiptNo: sale.receiptNo, at: sale.createdAt, timezone: device.timezone, staffName: sale.createdByName, reprint,
     lines: sale.lines.map((l) => ({ name: l.name, qty: l.qty, unitPaise: l.unitPaise, netPaise: l.netPaise, gstRateBp: l.gstRateBp, taxPaise: l.taxPaise })),
-    subtotalPaise: sale.subtotalPaise, taxPaise: sale.taxPaise, roundOffPaise: sale.roundOffPaise, totalPaise: sale.totalPaise,
+    subtotalPaise: sale.subtotalPaise,
+    discount: sale.discount && sale.discountPaise
+      ? { paise: sale.discountPaise, bp: sale.discount.kind === 'percent' ? sale.discount.value : null, reason: sale.discount.reason }
+      : null,
+    taxPaise: sale.taxPaise, roundOffPaise: sale.roundOffPaise, totalPaise: sale.totalPaise,
     payments: sale.payments.map((p) => ({ method: p.method, amountPaise: p.amountPaise, changePaise: p.changePaise })),
   };
 }

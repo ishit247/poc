@@ -749,6 +749,17 @@ const MUTANTS = [
     ['discount-db-free-meal', 'CHECK (discount_paise = 0 OR discount_paise < subtotal_paise),', ''],
     ['discount-db-no-reason', 'CHECK ((discount_paise > 0) = (discount_reason IS NOT NULL)),', ''],
   ].map(([id, from, to]) => M(id, TRADING, from, to, DB_TESTS)),
+  // --- discounts step 2: the tablet store, receipt and shift slip (apps/counter/test/discount.test.ts)
+  ...[
+    ['tab-discount-cap-unchecked', 'apps/counter/src/sale.ts', 'if (discountOverCap(paise(subtotal), d, s.discountMaxBp)) return', 'if (false) return'],
+    ['tab-discount-off-allowed', 'apps/counter/src/sale.ts', "if (s.discountMaxBp === 0) return 'Discounts are off.", "if (false) return 'Discounts are off."],
+    ['tab-discount-unpaid-allowed', 'apps/counter/src/sale.ts', 'if (args.discount && !tenders) throw', 'if (false) throw'],
+    ['tab-discount-not-on-event', 'apps/counter/src/sale.ts', 'discount: s.discount ?? null, discountPaise: s.discountPaise ?? 0,', 'discount: null, discountPaise: 0,'],
+    ['tab-discount-v2-shares-dropped', 'apps/counter/src/sale.ts', 'qty: l.qty, discountPaise: l.discountPaise ?? 0 })', 'qty: l.qty, discountPaise: 0 })'],
+    ['tab-discount-order-not-repriced', 'apps/counter/src/sale.ts', 'sale = { ...sale, ...priced(sale.lines, settings!, discount) };', ''],
+    ['tab-discount-not-on-receipt', 'packages/shared/src/receipt-text.ts', 'if (v.discount && v.discount.paise > 0) {', 'if (false) {'],
+    ['tab-discount-not-on-slip', 'packages/shared/src/shift.ts', 'if (v.discounts && v.discounts.count > 0) out.push', 'if (false) out.push'],
+  ].map(([id, file, from, to]) => M(id, file, from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/discount.test.ts'], noDb: true })),
 ];
 
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });

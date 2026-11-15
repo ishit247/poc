@@ -2,7 +2,7 @@
 // with no network lives here: the pulled catalogue and staff, the receipt counter, open
 // orders, and the outbox of events waiting to sync (push is phase 4).
 import Dexie, { type Table } from 'dexie';
-import type { ClosedLine, OrderEvent, OutboxEvent, PinAttemptState, ReceiptCounter, PaymentRecord } from '@pos/shared';
+import type { BillDiscount, ClosedLine, OrderEvent, OutboxEvent, PinAttemptState, ReceiptCounter, PaymentRecord } from '@pos/shared';
 
 export interface DeviceInfo {
   credential: string;
@@ -58,8 +58,12 @@ export interface LocalSale {
   /** Fold anomalies seen while merging another device's events: shown, not merged away (should not happen). */
   anomalies?: string[];
   /** For an order, the LIVE lines only, each with its lineId; removed lines stay in the fold, not here. */
-  lines: { lineId?: string; itemId: string; name: string; unitPaise: number; gstRateBp: number; qty: number; netPaise: number; taxPaise: number }[];
+  /** `discountPaise` is the line's share of the bill discount; absent (0) until one is given at Pay. */
+  lines: { lineId?: string; itemId: string; name: string; unitPaise: number; gstRateBp: number; qty: number; netPaise: number; discountPaise?: number; taxPaise: number }[];
   subtotalPaise: number;
+  /** The bill discount given at Pay (docs/discounts-plan.md), fixed once paid. Absent or null: none. */
+  discount?: BillDiscount | null;
+  discountPaise?: number;
   taxPaise: number;
   roundOffPaise: number;
   totalPaise: number;

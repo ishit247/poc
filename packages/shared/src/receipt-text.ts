@@ -21,6 +21,8 @@ export interface ReceiptView {
   draft?: boolean;
   lines: { name: string; qty: number; unitPaise: number; netPaise: number; gstRateBp: number; taxPaise: number }[];
   subtotalPaise: number;
+  /** The bill discount given at Pay, before GST (docs/discounts-plan.md). `bp` is set for a percentage. Absent: none. */
+  discount?: { paise: number; bp: number | null; reason: string } | null;
   taxPaise: number;
   roundOffPaise: number;
   totalPaise: number;
@@ -144,6 +146,14 @@ export function renderReceipt(v: ReceiptView, width = RECEIPT_WIDTH): string[] {
   out.push(dash);
 
   out.push(row('Sub Total', rs(v.subtotalPaise), width));
+  if (v.discount && v.discount.paise > 0) {
+    // GST below is on the discounted amount, so the discount is shown before it.
+    const amount = `-${rs(v.discount.paise)}`;
+    const label = `Discount${v.discount.bp === null ? '' : ` ${v.discount.bp / 100}%`}`;
+    const full = `${label} (${v.discount.reason})`;
+    if (full.length + amount.length + 1 <= width) out.push(row(full, amount, width));
+    else out.push(row(label, amount, width), ...wrap(`(${v.discount.reason})`, width, 1));
+  }
   for (const g of gstSplit(v.lines)) {
     out.push(row(`CGST @${rateLabel(g.rateBp)}`, rs(g.cgstPaise), width));
     out.push(row(`SGST @${rateLabel(g.rateBp)}`, rs(g.sgstPaise), width));

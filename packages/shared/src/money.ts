@@ -127,6 +127,13 @@ export const parseGstBp = (s: string): number | null => {
   return bp >= 0 && bp <= 4000 ? bp : null;
 };
 
+/** A percentage as typed, "10" or "12.5", to basis points (0 to 10000), or null. Discounts and the discount cap. */
+export const parsePercentBp = (s: string): number | null => {
+  const m = /^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(s.trim());
+  const bp = m ? Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0')) : NaN;
+  return bp >= 0 && bp <= 10000 ? bp : null;
+};
+
 /** Parses user-typed rupees ("125", "125.5", "125.50") exactly, without floats. */
 export function parseRupees(input: string): Paise {
   const m = /^(\d{1,9})(?:\.(\d{1,2}))?$/.exec(input.trim());
