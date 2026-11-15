@@ -12,7 +12,7 @@ export interface Totals {
   voids: number; voidTotalPaise: number; refunds: number; refundTotalPaise: number; varianceTotalPaise: number;
   /** Platform orders received this day that never completed (PLAN 17 Q16). Absent on days frozen before it existed. */
   onlineNotCompleted?: number; onlineNotCompletedPaise?: number;
-  shifts: { id: string; cashier: string; counter: string; float: number; counted: number; expected: number; variance: number; refused?: number }[];
+  shifts: { id: string; cashier: string; counter: string; float: number; counted: number; expected: number; variance: number; refused?: number; refundedCash?: number }[];
   lateAdjustments?: { id: string; businessDate: string; receiptNo: string; status: string; totalPaise: number }[];
   receiptGaps?: { deviceId: string; counter: string; missing: number[] }[];
   refusedReceipts?: RefusedReceipt[];

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expectedCash, renderShiftSlip, RECEIPT_WIDTH, type ShiftSlipView } from '../src/index.ts';
+import { expectedCash, renderRefundSlip, renderShiftSlip, RECEIPT_WIDTH, type ShiftSlipView } from '../src/index.ts';
 
 test('expected cash is the float plus the cash part only; UPI and change are not in the drawer', () => {
   assert.equal(expectedCash(50_000, [], []), 50_000);
@@ -38,4 +38,20 @@ test('the slip lists refunds: cash out of the drawer, UPI paid back; nothing whe
   assert.ok(lines.some((l) => /^ Cash, from drawer\s+-6\.00$/.test(l)), lines.join('\n'));
   assert.ok(lines.some((l) => /^ UPI, paid back\s+4\.50$/.test(l)));
   assert.ok(!renderShiftSlip({ ...view, refunds: { count: 0, cashPaise: 0, upiPaise: 0 } }).some((l) => /Refunded/.test(l)));
+});
+
+test('the refund slip fits 32 columns, names the bill, each method and the total, and wraps the reason', () => {
+  const lines = renderRefundSlip({
+    outletName: view.outletName, counterCode: 'C1', receiptNo: 'C1-20260301-0007', cashier: view.cashier,
+    refundedAt: '2026-03-01T05:00:00Z', timeZone: 'Asia/Kolkata', reason: 'Wrong item served, customer returned the whole tray',
+    refunds: [{ method: 'cash', amountPaise: 600 }, { method: 'upi', amountPaise: 450 }],
+  });
+  assert.ok(lines.every((l) => l.length <= RECEIPT_WIDTH), lines.join('\n'));
+  assert.ok(lines.includes('REFUND'));
+  assert.ok(lines.some((l) => /^Bill\s+C1-20260301-0007$/.test(l)));
+  assert.ok(lines.some((l) => /^Refunded\s+01\/03\/2026 10:30$/.test(l)), 'time in the outlet timezone');
+  assert.ok(lines.some((l) => /^Cash, from drawer\s+6\.00$/.test(l)));
+  assert.ok(lines.some((l) => /^UPI, to pay back\s+4\.50$/.test(l)));
+  assert.ok(lines.some((l) => /^Total refunded\s+10\.50$/.test(l)));
+  assert.ok(lines.join('').includes('customer returned the whole tray'), 'the whole reason prints');
 });

@@ -197,6 +197,19 @@ test('expected cash: a cash refund leaves the drawer at force-close, a UPI one d
   const fc = await app.inject({ method: 'POST', url: `/outlets/${w.outletId}/shifts/${shift}/force-close`, headers: bearer(w.mgr), payload: { countedCashPaise: 11_050 } });
   assert.equal(fc.statusCode, 200, fc.body);
   assert.deepEqual([fc.json().expectedCashPaise, fc.json().variancePaise], [11_050, 0]);
+  // Day close's drawer row says how much cash went back out, so the manager can read the expected figure.
+  // The preview needs today's business_day row, which ingest opens with the first sale; these sales were written
+  // directly, so open it here as ingest would (on a fresh seed nothing else has).
+  const today = await withTenant(A, async (c) => {
+    const d = (await c.query("SELECT (now() AT TIME ZONE timezone)::date::text AS d FROM outlet WHERE id = $1", [w.outletId])).rows[0].d as string;
+    if (!(await c.query('SELECT 1 FROM business_day WHERE outlet_id = $1 AND date = $2', [w.outletId, d])).rowCount) {
+      await c.query('INSERT INTO business_day (tenant_id, outlet_id, date) VALUES ($1, $2, $3)', [A, w.outletId, d]);
+    }
+    return d;
+  });
+  const day = (await app.inject({ method: 'GET', url: `/outlets/${w.outletId}/day-close?date=${today}`, headers: bearer(w.mgr) })).json();
+  const row = (day.totals.shifts as { id: string; expected: number; refundedCash: number }[]).find((s) => s.id === shift);
+  assert.deepEqual([row?.expected, row?.refundedCash], [11_050, 600]);
   // The drawer is closed: no refund can follow and move a figure already fixed.
   const late = await paidSale(A, w.outletId, w.deviceId, cashier.userId, shift);
   assert.equal((await refund(app, cashier.token, late)).statusCode, 404);

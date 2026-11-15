@@ -5,6 +5,8 @@ import type { GstRounding } from './money.ts';
 
 export const QTY_CAP_MAX = 999;
 export const ROUND_OFF_STEPS = [0, 10, 50, 100] as const; // paise; 0 = no bill round-off
+export const REFUND_REASONS_MAX = 10; // the CHECK on tenant_setting.refund_reasons in 0004
+export const REFUND_REASON_MAX = 60;
 
 export const TradingSettings = z
   .object({
@@ -12,13 +14,19 @@ export const TradingSettings = z
     gstRounding: z.enum(['half_up', 'up', 'down']),
     billRoundTo: z.union([z.literal(0), z.literal(10), z.literal(50), z.literal(100)]),
     offlineDays: z.number().int().min(1).max(60),
+    /** Offered when a cashier refunds (RefundDialog.tsx); a typed reason is still allowed. Not a selling rule: ingest ignores it. */
+    refundReasons: z.array(z.string().trim().min(1).max(REFUND_REASON_MAX)).max(REFUND_REASONS_MAX)
+      .refine((xs) => new Set(xs.map((x) => x.toLowerCase())).size === xs.length, 'each reason once'),
   })
   .strict();
 
 export type TradingSettings = Omit<z.infer<typeof TradingSettings>, 'gstRounding'> & { gstRounding: GstRounding };
 
 /** Used until a tenant has saved settings; matches the column defaults in 0004. */
-export const DEFAULT_SETTINGS: TradingSettings = { maxLineQty: 99, gstRounding: 'half_up', billRoundTo: 0, offlineDays: 7 };
+export const DEFAULT_SETTINGS: TradingSettings = {
+  maxLineQty: 99, gstRounding: 'half_up', billRoundTo: 0, offlineDays: 7,
+  refundReasons: ['Wrong item served', 'Customer changed mind', 'Food quality', 'Item ran out', 'Charged by mistake'],
+};
 
 export const LOGO_MAX_BYTES = 256 * 1024;
 export const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;

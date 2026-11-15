@@ -155,7 +155,7 @@ const MUTANTS = [
   ...[
     ['tablet-waiter-reprints', "if (args.actor.role !== 'cashier') throw new Error('only a cashier reprints a receipt');", ''],
     ['tablet-reprint-unpaid', "if (!sale || sale.status !== 'paid') throw new Error('only a paid sale has a receipt to reprint');", ''],
-    ['tablet-recent-includes-open', "where('status').equals('paid')", "where('status').anyOf('paid', 'open')"],
+    ['tablet-recent-includes-open', "where('status').anyOf('paid', 'refunded')", "where('status').anyOf('paid', 'refunded', 'open')"],
   ].map(([id, from, to]) => M(id, 'apps/counter/src/sale.ts', from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/receipt.test.ts'], noDb: true })),
   // --- phase 6: day close
   ...[
@@ -708,7 +708,11 @@ const MUTANTS = [
     ['refund-force-close-ignored', 'apps/api/src/routes/dayclose.ts', 'await refundsOf(c, ps.data.shiftId)', '[]'],
     ['refund-of-any-shift', 'apps/api/src/refunds.ts', 'FROM refund WHERE shift_id = $1', 'FROM refund WHERE $1::uuid IS NOT NULL'],
     ['refund-pull-any-device', 'apps/api/src/routes/sync.ts', 'FROM refund WHERE version > $1 AND device_id = $4', 'FROM refund WHERE version > $1 AND $4::uuid IS NOT NULL'],
+    // step 3: day close's drawer row names the cash paid back out of that drawer, cash only
+    ['refund-dayclose-upi-as-cash', 'apps/api/src/routes/dayclose.ts', "WHERE r.shift_id = s.id AND r.method = 'cash'", 'WHERE r.shift_id = s.id'],
   ].map(([id, file, from, to]) => M(id, file, from, to, API_TESTS('refunds.test.ts'))),
+  M('refund-slip-total-wrong', 'packages/shared/src/shift.ts', "row('Total refunded', money(v.refunds.reduce((a, r) => a + r.amountPaise, 0)), width)", "row('Total refunded', money(v.refunds[0]?.amountPaise ?? 0), width)",
+    { cwd: 'packages/shared', cmd: ['node', '--import', 'tsx', '--test', 'test/shift.test.ts'], noDb: true }),
   ...[
     ['refund-close-ignored', 'apps/api/src/ingest.ts', 'await refundsOf(c, ev.shiftId)', '[]'],
     ['tab-refund-slip-ignored', 'apps/counter/src/shift.ts', '[...payments, ...refusedPays], refunds);', '[...payments, ...refusedPays], []);'],
@@ -717,7 +721,9 @@ const MUTANTS = [
     ['tab-refund-pull-ignored', 'apps/counter/src/sync.ts', "if (c.type === 'refund') await applyRefund(", "if (c.type === 'refund') void ("],
     ['tab-refund-any-shift', 'apps/counter/src/refund.ts', 'if (!shift || sale.shiftId !== shift.id)', 'if (!shift)'],
     ['tab-refund-any-cashier', 'apps/counter/src/refund.ts', 'if (shift.userId !== actor.id) return', "if (shift.userId === '') return"],
-    ['tab-refund-unsent', 'apps/counter/src/refund.ts', "(r.payload as { saleId?: string }).saleId === sale.id).count()) > 0", "(r.payload as { saleId?: string }).saleId === sale.id).count()) > 1e9"],
+    ['tab-refund-unsent', 'apps/counter/src/refund.ts', 'if (unsent.has(sale.id)) return', "if (unsent.has('')) return"],
+    ['tab-refund-list-ignores-drawer', 'apps/counter/src/refund.ts', 'sales.map((s) => [s.id, whyNot(s, actor, state)])', 'sales.map((s) => [s.id, null])'],
+    ['tab-refund-unsent-rejected', 'apps/counter/src/refund.ts', 'if (!r.rejected && id) unsent.add(id)', 'if (id) unsent.add(id)'],
   ].map(([id, file, from, to]) => M(id, file, from, to, { cwd: 'apps/counter', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', 'test/refund.test.ts'] })),
 ];
 

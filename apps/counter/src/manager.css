@@ -288,7 +288,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .me-details .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .me-details .two.three { grid-template-columns: repeat(3, 1fr); }
 .me-details .err { color: var(--error); font-weight: 600; }
-.me-details textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit; }
+.me-details textarea, .m-field textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit; }
 .me-pic-big { display: flex; align-items: center; gap: 12px; }
 .me-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 .me-tags button { border-radius: 999px; min-height: 44px; }

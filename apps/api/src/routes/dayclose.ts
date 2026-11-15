@@ -69,7 +69,9 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
   // A shift belongs to the day it was opened on, in the outlet's own timezone.
   const shifts = await c.query(
     `SELECT s.id, u.name AS cashier, ct.code AS counter, s.opening_cash_paise AS "float", s.counted_cash_paise AS counted,
-            s.expected_cash_paise AS expected, s.variance_paise AS variance, s.refused_cash_paise AS refused
+            s.expected_cash_paise AS expected, s.variance_paise AS variance, s.refused_cash_paise AS refused,
+            -- Cash refunds paid out of this drawer (docs/refunds-plan.md): already out of expected; shown so it explains it.
+            (SELECT COALESCE(sum(r.amount_paise), 0) FROM refund r WHERE r.shift_id = s.id AND r.method = 'cash')::bigint AS "refundedCash"
        FROM shift s JOIN app_user u ON u.id = s.user_id JOIN device d ON d.id = s.device_id JOIN counter ct ON ct.id = d.counter_id
        JOIN outlet o ON o.id = s.outlet_id
       WHERE s.outlet_id = $1 AND (s.opened_at AT TIME ZONE o.timezone)::date = $2 AND s.closed_at IS NOT NULL
@@ -87,7 +89,7 @@ async function totals(c: pg.PoolClient, outletId: string, dayId: string, date: s
     paidSales: s.paid, grossPaise: Number(s.gross), taxPaise: Number(s.tax),
     cashPaise: by.cash ?? 0, upiPaise: by.upi ?? 0, onlineGrossPaise: by.aggregator ?? 0,
     voids: s.voids, voidTotalPaise: Number(s.voidTotal), refunds: s.refunds, refundTotalPaise: Number(s.refundTotal),
-    shifts: shifts.rows.map((r) => ({ ...r, float: Number(r.float), counted: Number(r.counted), expected: Number(r.expected), variance: Number(r.variance), refused: Number(r.refused) })),
+    shifts: shifts.rows.map((r) => ({ ...r, float: Number(r.float), counted: Number(r.counted), expected: Number(r.expected), variance: Number(r.variance), refused: Number(r.refused), refundedCash: Number(r.refundedCash) })),
     varianceTotalPaise: shifts.rows.reduce((a, r) => a + Number(r.variance), 0),
   };
 }

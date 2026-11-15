@@ -86,3 +86,34 @@ export function renderShiftSlip(v: ShiftSlipView, width = RECEIPT_WIDTH): string
   if (v.unsyncedCount > 0) out.push(rule, `${v.unsyncedCount} record${v.unsyncedCount === 1 ? '' : 's'} not yet sent.`, 'Check totals with the manager.');
   return out;
 }
+
+export interface RefundSlipView {
+  outletName: string;
+  counterCode: string;
+  receiptNo: string;
+  cashier: string;
+  refundedAt: string;
+  timeZone: string;
+  reason: string;
+  /** The server's refund rows, one per method (docs/refunds-plan.md). */
+  refunds: readonly { method: 'cash' | 'upi'; amountPaise: number }[];
+}
+
+/** The slip a refund prints (58 mm): which bill, how much went back by which way, and why. Kept with the drawer cash. */
+export function renderRefundSlip(v: RefundSlipView, width = RECEIPT_WIDTH): string[] {
+  const rule = '-'.repeat(width);
+  const out: string[] = [
+    v.outletName.slice(0, width),
+    'REFUND',
+    rule,
+    row('Bill', v.receiptNo, width),
+    row('Counter', v.counterCode, width),
+    row('Cashier', v.cashier.slice(0, width - 8), width),
+    row('Refunded', stamp(v.refundedAt, v.timeZone), width),
+    rule,
+  ];
+  for (const r of v.refunds) out.push(row(r.method === 'cash' ? 'Cash, from drawer' : 'UPI, to pay back', money(r.amountPaise), width));
+  out.push(row('Total refunded', money(v.refunds.reduce((a, r) => a + r.amountPaise, 0)), width), rule);
+  for (let s = `Reason: ${v.reason}`; s.length > 0; s = s.slice(width)) out.push(s.slice(0, width));
+  return out;
+}

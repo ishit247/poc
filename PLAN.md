@@ -42,7 +42,7 @@ day close, reports). Smaller gaps per phase are in [docs/build-notes.md](docs/bu
 | 5 | Printing | browser print, 58 mm layout, reprint trail | layout tests, mutants; reprint in `browser-flow` | **nothing printed on the real ATPOS H58BT**; no WebUSB, Bluetooth, ESC/POS or drawer kick | [build-notes.md](docs/build-notes.md) |
 | 6 | Shifts, day close | yes, incl. manager force-close and the day-close void screen | API tests, mutants; `browser-flow` | days closed out of date order may mis-list late adjustments | [build-notes.md](docs/build-notes.md) |
 | 7 | Online orders (manual provider) | yes | API tests, mutants; queue 23/23 and settlements 18/18 in a browser; `browser-flow` | — | [build-notes.md](docs/build-notes.md) |
-| 8 | Reports | yes; day close's separate "online not completed" line (2026-11-15, Q16) | 5 tests, 33 mutants, 34/34 browser checks | multi-outlet view in a browser; `EXPLAIN` on large data; refunds: route and expected cash, no screen yet ([plan](docs/refunds-plan.md)) | [build-notes.md](docs/build-notes.md) |
+| 8 | Reports, refunds | yes; day close's separate "online not completed" line (2026-11-15, Q16); **refunds, all 3 steps done 2026-11-15** (Q15): cashier's Refund on Recent receipts (reason picked from the manager's list in Settings, PIN typed again), 58 mm refund slip, expected cash less cash refunds on tablet and server, day close's "cash refunded" per drawer | 5 tests, 33 mutants, 34/34 browser checks; refunds: API `refunds.test.ts` + `settings.test.ts` 8/8, tablet 95/95, shared 62/62, refund mutants caught, `browser-refund` 47/47 (Edge, 1024x768 cash and 820x1180 UPI, each through the drawer close) | multi-outlet view in a browser; `EXPLAIN` on large data; refunds: no manager path for another cashier's or a closed shift's sale (later decision); refund slip not printed on the real H58BT; PIN mask (`-webkit-text-security`) not checked outside Chromium; **discounts planned, not started** (Q17) | [build-notes.md](docs/build-notes.md), [refunds-plan.md](docs/refunds-plan.md), [discounts-plan.md](docs/discounts-plan.md) |
 | 9 | Aggregator adapters | **scaffold** (placeholder contract); manager Platforms tab (integration setup, item mapping) and the counter's unmapped-line note done 2026-11-15 | webhook tests; secrets sealed (phase 11 step 6); `integrations.test.ts` 3/3, 7/7 mutants, `browser-platforms.mjs` 29/29 (Edge, 1024 and 820 wide) | everything against real Zomato/Swiggy; no menu or stock push; Platforms tab not in Safari/Firefox or on a real tablet | [build-notes.md](docs/build-notes.md) |
 | 10 | Dynamic UPI | no (optional) | | | |
 | 11 | Platform admin, billing, hardening | steps 1 to 5; step 6 partly (sealed secrets, backup and restore drill, runbook, device revoke and rename screen) | 19 plus 10 plus 11 mutants; browser 13/13 for onboarding; step 6: 7/7 mutants, restore drill passed, `browser-tablets.mjs` 22/22 | off-site backups and PITR (Q4); console has no impersonation, usage or audit screens; billing deferred (Q8) | [phase11-platform-admin.md](docs/phase11-platform-admin.md), [runbook.md](docs/runbook.md) |
@@ -85,14 +85,13 @@ Fixed in this pass (the 2026-11-06 findings):
 2. Finish phase 11 step 6: (the full mutation run is done, 2026-11-15; rerun it before a phase is called done, in the
    background, to a log, never two runs at once), off-site backups and PITR (Q4); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
    additive-only migrations (section 18) before the first real tenant.
-3. Refunds, three steps, HIGH: [docs/refunds-plan.md](docs/refunds-plan.md) (decisions in section 17, Q15). Step 1
-   (schema, route, tests, mutants) and step 2 (expected cash less cash refunds, both sides; tablet store and pull)
-   done 2026-11-15; next is step 3, the cashier's Refund screen (STANDARD), which `refundSale`/`whyNotRefundable` in
-   `apps/counter/src/refund.ts` are ready for.
-4. Phase 9 against real partner APIs once access is known (Q1): replace the placeholder payload and signature, the
+3. Phase 9 against real partner APIs once access is known (Q1): replace the placeholder payload and signature, the
    senders, and add menu/stock push.
 
-Done and struck from this list (detail in the phase files): the phase 9 UI (2026-11-15: manager Platforms tab for
+Done and struck from this list (detail in the phase files): refunds, all three steps (2026-11-15,
+[docs/refunds-plan.md](docs/refunds-plan.md): step 3 is the cashier's Refund on Recent receipts, the refund slip and day close's cash-refunded
+line, refund reasons kept by the manager in Settings; `browser-refund` 47/47 in Edge at 1024x768 and 820x1180 on a fresh seed; its 8 new or changed mutants caught; a manager path for
+other cashiers' or closed shifts' sales is still a later decision), the phase 9 UI (2026-11-15: manager Platforms tab for
 integration setup and item mapping, unmapped lines on the counter's order card; `integrations.test.ts` 3/3, 7/7 mutants,
 `browser-platforms.mjs` 29/29 in Edge at 1024 and 820 wide), the manager Settings tab (2026-11-15: selling rules, logo,
 outlet address/FSSAI/GST; API tests 12/12 in `tenancy-host`, 3/3 logo mutants caught, `browser-settings` 25/25 in Edge at
@@ -411,7 +410,9 @@ below has `tenant_id` with RLS unless noted.
 - `sale(id = client uuid, outlet_id, business_day_id, shift_id, device_id, channel, status, receipt_no, device_seq, menu_version, subtotal_paise, tax_paise, total_paise, created_at_device, received_at, void_reason, flags text[])`
 - `sale_line(sale_id, item_id, name_snapshot, unit_price_paise, gst_rate_bp, qty, line_total_paise)`
 - `payment(sale_id, method[cash|upi|aggregator], amount_paise, tendered_paise, change_paise, upi_ref)`
-- `refund(sale_id, amount_paise, method, reason, approved_by)`
+- `refund(sale_id, method[cash|upi], amount_paise, reason, shift_id, device_id, refunded_by, refunded_at)`: one row per
+  payment method of a whole refunded sale, `UNIQUE(sale_id, method)`, insert-only; a cash refund names its drawer's shift.
+  Refund reasons offered to the cashier: `tenant_setting.refund_reasons` (built 2026-11-15, [refunds-plan](docs/refunds-plan.md))
 - `sync_event(id = client uuid, device_id, device_seq, kind, schema_version, payload jsonb, received_at, result)` — the idempotency ledger; `UNIQUE(device_id, device_seq)`
 
 **Online orders:** `online_order(sale_id, provider, external_order_id, status, accept_by, customer_label, delivery_note, raw_payload)` with `UNIQUE(tenant_id, provider, external_order_id)`; `online_order_event`; `integration_outbox`; `provider_credential(tenant_id, outlet_id, provider, secret_ref)`; `settlement_import`, `settlement_line`.
@@ -592,9 +593,15 @@ mismatches, sync health. CSV export. Today's figures are labelled provisional.
     online, with a reason, audited. **The cashier** refunds a sale of **their own open shift**, on the tablet of that
     shift, after **typing their PIN again** (the sign-in lockout counts those attempts). So cash goes back out of the
     drawer it went into (that drawer's expected cash drops); UPI is recorded as paid back outside the app. Sales of
-    other or closed shifts are not refundable yet; a manager path for them is a later decision.
+    other or closed shifts are not refundable yet; a manager path for them is a later decision. The reason is picked
+    from a list the manager keeps in Settings (up to 10) or typed. **Built 2026-11-15**, all three steps:
+    [docs/refunds-plan.md](docs/refunds-plan.md).
 16. *Resolved (2026-11-15):* online orders that end `rejected`, `cancelled` or `expired` are reported as a separate
     "online not completed" line on the outlet's local date they were received, beside the cashier void count, not in it.
+17. *Resolved (2026-11-15):* **discounts** are one bill discount (% or ₹) given at Pay on a counter sale, before GST,
+    spread over the lines; the cashier gives it alone up to a manager-set cap (default 0 = off), with a reason from a
+    manager-kept list or typed; works offline, and the server flags a discount over the cap. No per-item discount or
+    manager override in v1. Planned in three steps: [docs/discounts-plan.md](docs/discounts-plan.md).
 
 ## 18. Operations
 

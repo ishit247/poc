@@ -111,6 +111,11 @@ header button { min-height: 40px; }
 .orders .amt { min-width: 90px; text-align: right; font-variant-numeric: tabular-nums; margin-right: 6px; }
 .orders .pay-btn { height: 36px; padding: 0 16px; background: #d9f0e1; color: #14532d; border: 1px solid #a8d8b9; font-weight: 600; }
 :root[data-theme='dark'] .orders .pay-btn { background: #25483a; color: #cdeedb; border-color: #3b6b57; }
+.pin-mask { -webkit-text-security: disc; }
+.reason-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.reason-picks button { min-height: 44px; padding: 0 12px; font-size: 15px; }
+.reason-picks button.active { background: var(--active-bg); border-color: var(--primary); }
+.orders .refund-btn { height: 36px; padding: 0 12px; font-size: 15px; }
 .orders .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 36px; padding: 0; }
 .online h2 { display: flex; align-items: center; gap: 12px; }
 .online h2 button { margin-left: auto; }

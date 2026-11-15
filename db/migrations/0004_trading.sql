@@ -9,6 +9,10 @@ CREATE TABLE tenant_setting (
   gst_rounding  text NOT NULL DEFAULT 'half_up' CHECK (gst_rounding IN ('half_up', 'up', 'down')),
   bill_round_to int  NOT NULL DEFAULT 0 CHECK (bill_round_to IN (0, 10, 50, 100)),
   offline_days  int  NOT NULL DEFAULT 7 CHECK (offline_days BETWEEN 1 AND 60),
+  -- Reasons a cashier picks from when refunding (docs/refunds-plan.md); they can still type their own. Each one is
+  -- 1..60 characters, checked by the API (TradingSettings); the list is short so the tablet's picker stays short.
+  refund_reasons text[] NOT NULL DEFAULT ARRAY['Wrong item served', 'Customer changed mind', 'Food quality', 'Item ran out', 'Charged by mistake']
+                CHECK (cardinality(refund_reasons) <= 10),
   version       bigint NOT NULL DEFAULT 0,
   updated_at    timestamptz NOT NULL DEFAULT now()
 );

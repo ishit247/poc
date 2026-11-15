@@ -103,8 +103,9 @@ export async function payOrder(args: { device: DeviceInfo; actor: Actor; saleId:
 }
 
 /** Paid receipts, newest first, for reprinting. */
+/** The cashier's latest receipts: paid, and refunded (shown as such, with a refund slip instead of a reprint). */
 export async function recentReceipts(limit = 20): Promise<LocalSale[]> {
-  const paid = await db.sales.where('status').equals('paid').toArray();
+  const paid = await db.sales.where('status').anyOf('paid', 'refunded').toArray();
   return paid.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
 }
 

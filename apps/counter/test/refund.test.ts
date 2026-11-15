@@ -8,7 +8,7 @@ import { db, type DeviceInfo } from '../src/db.ts';
 import { createSale, type Actor } from '../src/sale.ts';
 import { pull, push } from '../src/sync.ts';
 import { closeShift, managerCloseShift, openShift, slipFor } from '../src/shift.ts';
-import { refundSale, whyNotRefundable } from '../src/refund.ts';
+import { refundByMethod, refundSale, whyNotRefundable, whyNotRefundableEach } from '../src/refund.ts';
 import { signInOnline } from '../src/online.ts';
 import { buildApp } from '../../api/src/app.ts';
 import { pool, withTenant } from '../../api/src/db.ts';
@@ -63,6 +63,8 @@ test('a cash refund comes out of the slip and the server alike; UPI does not tou
   await createSale({ device, actor, cart: addItem([], tea, 1), settings: DEFAULT_SETTINGS, menuVersion: 1, tenders: split(1050, 0).slice(0, 1) });
 
   assert.match(await whyNotRefundable(refunded, actor) ?? '', /not reached the server/, 'still in the outbox');
+  // The dialog names what will be paid out; it matches what the server answers below.
+  assert.deepEqual(refundByMethod(refunded), [{ method: 'cash', amountPaise: 1200 }, { method: 'upi', amountPaise: 900 }]);
   await assert.rejects(refundSale({ actor, token, saleId: refunded.id, reason: 'wrong item', pin: PIN }), /not reached the server/);
   await push(device);
   await assert.rejects(refundSale({ actor, token, saleId: refunded.id, reason: 'wrong item', pin: '000000' }), /Wrong PIN/);
@@ -126,6 +128,11 @@ test('only this drawer’s paid bills are offered, and only to its cashier', asy
   assert.match(await whyNotRefundable(sale, { ...actor, id: crypto.randomUUID(), name: 'Other' }) ?? '', /belongs to/);
   assert.match(await whyNotRefundable({ ...sale, shiftId: crypto.randomUUID() }, actor) ?? '', /drawer open now/);
   assert.match(await whyNotRefundable({ ...sale, status: 'void' }, actor) ?? '', /Only a paid bill/);
+  // An event the server refused for good is not "waiting to be sent": it does not block the offer.
+  await db.outbox.add({ eventId: crypto.randomUUID(), createdAt: new Date().toISOString(), payload: { type: 'print.reprinted', saleId: sale.id } as never, rejected: 'test' });
+  // The list form (Recent receipts) gives each sale the same answer as the single form.
+  const other = { ...sale, id: crypto.randomUUID(), shiftId: crypto.randomUUID() };
+  assert.deepEqual([...(await whyNotRefundableEach([sale, other], actor))].map(([, why]) => why === null), [true, false]);
   await closeShift({ device, actor, countedCashPaise: 1050 });
   assert.match(await whyNotRefundable(sale, actor) ?? '', /drawer open now/, 'a closed drawer');
 });

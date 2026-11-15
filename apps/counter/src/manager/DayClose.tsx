@@ -244,7 +244,8 @@ export function DayClose({ token, onBlockers }: { token: string; onBlockers?: (n
                       {t.shifts.map((s) => (
                         <tr key={s.id}>
                           <td>{s.counter}</td><td>{s.cashier}</td><td className="num">{rs(s.float)}</td><td className="num">{rs(s.counted)}</td>
-                          <td className="num">{rs(s.expected)}{s.refused ? <span className="warn" data-testid="mgr-shift-refused"> (of which {rs(s.refused)} refused)</span> : null}</td>
+                          <td className="num">{rs(s.expected)}{s.refused ? <span className="warn" data-testid="mgr-shift-refused"> (of which {rs(s.refused)} refused)</span> : null}
+                            {s.refundedCash ? <span className="muted" data-testid="mgr-shift-refunded"> (after {rs(s.refundedCash)} cash refunded)</span> : null}</td>
                           <td className={`num${s.variance === 0 ? '' : ' warn'}`}>{rs(s.variance)}</td>
                         </tr>
                       ))}

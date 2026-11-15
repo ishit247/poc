@@ -1,28 +1,51 @@
 // A cashier refunds a whole paid sale of their own open shift (docs/refunds-plan.md). Online only: the server decides,
 // after the cashier types their PIN again, and the tablet stores the answer against the sale so the shift slip's expected
 // cash drops by the cash paid out, as the server's does. A lost answer is repaired by pull (sync.ts, `applyRefund`).
-import { currentShift, db, type LocalSale } from './db.ts';
+import { currentShift, db, type LocalSale, type LocalShift } from './db.ts';
 import type { Actor } from './sale.ts';
 import { call } from './online.ts';
 
 type RefundRow = NonNullable<LocalSale['refunds']>[number];
 
+/** What the offer rule reads from the tablet: the open drawer, and the sales still waiting in the outbox. */
+interface OfferState { shift: LocalShift | undefined; unsent: ReadonlySet<string> }
+
+async function offerState(): Promise<OfferState> {
+  const unsent = new Set<string>();
+  await db.outbox.each((r) => { const id = (r.payload as { saleId?: string }).saleId; if (!r.rejected && id) unsent.add(id); });
+  return { shift: await currentShift(), unsent };
+}
+
 /**
  * Mirror of the route's rule (apps/api/src/routes/refunds.ts): a paid sale of THIS tablet's open shift, refunded by that
- * shift's cashier. Null when the sale may be refunded; otherwise why not, in the cashier's words. The screen hides or
- * disables Refund with this; `refundSale` checks it again.
+ * shift's cashier. Null when the sale may be refunded; otherwise why not, in the cashier's words.
  */
-export async function whyNotRefundable(sale: LocalSale, actor: Actor): Promise<string | null> {
-  const shift = await currentShift();
+function whyNot(sale: LocalSale, actor: Actor, { shift, unsent }: OfferState): string | null {
   if (sale.status === 'refunded') return 'Already refunded.';
   if (sale.status !== 'paid') return 'Only a paid bill can be refunded.';
   if (!shift || sale.shiftId !== shift.id) return 'Only a bill from the drawer open now can be refunded.';
   if (shift.userId !== actor.id) return `This drawer belongs to ${shift.userName}.`;
   // The server must hold the sale and its payment, or it cannot refund it (and would answer "not found").
-  if ((await db.outbox.filter((r) => !r.rejected && (r.payload as { saleId?: string }).saleId === sale.id).count()) > 0) {
-    return 'This bill has not reached the server yet. Connect to the network, press Sync, and try again.';
-  }
+  if (unsent.has(sale.id)) return 'This bill has not reached the server yet. Connect to the network, press Sync, and try again.';
   return null;
+}
+
+/** The offer rule for one sale. `refundSale` checks it again before calling the server. */
+export async function whyNotRefundable(sale: LocalSale, actor: Actor): Promise<string | null> {
+  return whyNot(sale, actor, await offerState());
+}
+
+/** The offer rule for a list (the cashier's recent receipts), with one read of the drawer and the outbox. */
+export async function whyNotRefundableEach(sales: readonly LocalSale[], actor: Actor): Promise<Map<string, string | null>> {
+  const state = await offerState();
+  return new Map(sales.map((s) => [s.id, whyNot(s, actor, state)]));
+}
+
+/** "₹6.00 cash from this drawer, ₹4.50 UPI to pay back": what a refund of this sale pays out, by method. */
+export function refundByMethod(sale: LocalSale): RefundRow[] {
+  const by = new Map<'cash' | 'upi', number>();
+  for (const p of sale.payments) by.set(p.method, (by.get(p.method) ?? 0) + p.amountPaise);
+  return [...by].map(([method, amountPaise]) => ({ method, amountPaise }));
 }
 
 /** Records refund rows on a local sale (merging by method) and marks it refunded. Call inside a transaction on `db.sales`. */

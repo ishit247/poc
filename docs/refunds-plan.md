@@ -2,7 +2,7 @@
 
 # Refunds — plan
 
-Status: **steps 1 and 2 done 2026-11-15; step 3 not started.** Model plan: **HIGH** (money, the cash drawer, sync,
+Status: **steps 1 to 3 done 2026-11-15.** Model plan: **HIGH** (money, the cash drawer, sync,
 authorisation).
 
 ## Decided (PLAN 17 Q15, revised 2026-11-15; 7.6; invariant 4)
@@ -52,13 +52,31 @@ authorisation).
   manager close, offer rule). Mutants `refund-cash-kept-in-drawer`, `refund-*-ignored`, `refund-of-any-shift`,
   `refund-pull-any-device`, `tab-refund-*`.
 
-## Notes for step 3
+## What step 3 built
 
-- The screen gets a token from `signInOnline` (`online.ts`), then calls `refundSale`; it shows `whyNotRefundable`
-  as the disabled reason. The PIN is the cashier's, typed again.
-- A slip printed while a refund's answer was lost is short by that refund until a pull; the server's figure is right.
-- Day close's drawer section: the shift row stores no refund total. Either add `refunded_cash_paise` to `shift`
-  (written at close, like `refused_cash_paise`) or sum `refund` by shift in the day-close query.
+- **Tablet, Orders → Recent receipts** (`Orders.tsx`): lists paid and refunded bills. Each row has a plain Refund button
+  in one slot, disabled with the reason as its title (`whyNotRefundableEach` in `refund.ts`: one read of the drawer and
+  the outbox for the whole list, the same rule as `whyNotRefundable`). A refunded bill is tagged Refunded; its Refund
+  and Reprint are disabled.
+- **Dialog** (`RefundDialog.tsx`): names the payout by method (`refundByMethod`, mirroring the route's grouping of
+  payments), takes a reason and the PIN. One PIN entry: `signInOnline` opens the session, then `refundSale` sends the
+  same PIN for the route's re-check. A wrong PIN or no network refunds nothing and says so.
+- **Reasons:** the manager keeps a list (Settings → Selling rules, one per line; `tenant_setting.refund_reasons`, up to
+  10 of up to 60 characters, case-insensitively unique; in `TradingSettings`, pulled with the other settings). The
+  dialog offers it as a combobox (`<datalist>`) and as tap buttons; a typed reason is still allowed. The PIN field is
+  `type="text"` masked by CSS (`.pin-mask`): with a password field present, the browser treated the dialog as a login
+  form and filled a saved email into Reason.
+- **Refund slip** (58 mm): `renderRefundSlip` in `packages/shared/src/shift.ts`, shown with Print after the server
+  answers. Its time is the tablet's clock at the answer; the server's `refunded_at` is the record.
+- **Day close:** the drawer row sums `refund` cash by shift in the query (`refundedCash`, no schema change; the frozen
+  totals carry it) and the Shifts table shows "(after ₹x cash refunded)" next to Expected.
+- **Tests:** `packages/shared/test/shift.test.ts` (refund slip), `apps/counter/test/refund.test.ts` (list rule, a
+  rejected outbox row does not block, payout by method), `apps/api/test/refunds.test.ts` (day-close `refundedCash`).
+  Browser: `scripts/browser-refund.mjs` (1024x768 cash refund, 820x1180 UPI refund, each through the shift close).
+  Mutants: `tab-refund-list-ignores-drawer`, `tab-refund-unsent-rejected`, `refund-dayclose-upi-as-cash`,
+  `refund-slip-total-wrong`; `tab-refund-unsent` and `tablet-recent-includes-open` updated.
+- Still true: a slip printed while a refund's answer was lost is short by that refund until a pull; the server's
+  figure is right.
 
 ## Remaining design
 
@@ -70,11 +88,12 @@ authorisation).
    refund response is stored locally against the open shift, so the slip agrees with the server without a pull; a
    pull change covers a refund the tablet missed the answer to.
 5. *(Moot for the cashier rule: day close refuses while a shift is open, so the day is always open.)*
-6. **Screens.** The cashier's sales list for the open shift (`Orders.tsx` / `Shift.tsx`): Refund on a paid sale, a
+6. *(Built in step 3; see above.)* **Screens.** The cashier's sales list for the open shift (`Orders.tsx` / `Shift.tsx`): Refund on a paid sale, a
    reason, a confirmation naming the amount by method ("₹6.00 cash from this drawer, ₹4.50 UPI to pay back"), then the
    PIN. Mirror the rule in the route's comment: offer it only for this tablet's open shift. Day close: refunds line
    exists; add cash refunds to the drawer section. Receipt: optional refund slip (58 mm).
-7. **Tests still owed.** *(Close, force-close and slip = server: built in step 2.)* Browser: refund on a tablet at 1024 and 820, then close the drawer.
+7. *(Built: close, force-close and slip = server in step 2; the browser run in step 3, `scripts/browser-refund.mjs`.)*
+8. **Later:** a manager path for another cashier's or a closed shift's sale (see Decided).
 
 ## Steps
 
@@ -82,4 +101,4 @@ authorisation).
 |---|------|-------|
 | 1 | Schema, seed, route, API and DB tests, mutants | done 2026-11-15 |
 | 2 | `expectedCash` with refunds: server close paths, tablet store and slip; tests and mutants | done 2026-11-15 |
-| 3 | Cashier screen, refund slip, day-close drawer line; browser check | not started |
+| 3 | Cashier screen, refund slip, day-close drawer line; browser check | done 2026-11-15 |

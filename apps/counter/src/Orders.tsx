@@ -6,6 +6,8 @@ import { payOrder, recentReceipts, recordReprint, visibleOpenOrders, type Actor 
 import { PayDialog } from './PayDialog.tsx';
 import { Receipt } from './Receipt.tsx';
 import { DraftBill } from './DraftBill.tsx';
+import { RefundDialog, RefundSlip } from './RefundDialog.tsx';
+import { whyNotRefundableEach } from './refund.ts';
 
 const rs = (n: number) => formatRupees(paise(n));
 /** 08:51:41 PM: two-digit hours, so the rows of a list line up. */
@@ -22,7 +24,9 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
   const [done, setDone] = useState<LocalSale | null>(null);
   const [copy, setCopy] = useState<LocalSale | null>(null);
   const [bill, setBill] = useState<LocalSale | null>(null);
-  const [recent, setRecent] = useState<LocalSale[]>([]);
+  const [recent, setRecent] = useState<{ sale: LocalSale; whyNot: string | null }[]>([]);
+  const [refunding, setRefunding] = useState<LocalSale | null>(null);
+  const [refunded, setRefunded] = useState<{ sale: LocalSale; rows: { method: 'cash' | 'upi'; amountPaise: number }[]; reason: string } | null>(null);
 
   useEffect(() => {
     const sub = liveQuery(() => visibleOpenOrders(actor)).subscribe({ next: setOrders });
@@ -30,10 +34,16 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
   }, [actor]);
   useEffect(() => {
     if (actor.role !== 'cashier') return; // a waiter never sees paid receipts
-    const sub = liveQuery(() => recentReceipts()).subscribe({ next: setRecent });
+    // Live on the outbox and the drawer too: a bill becomes refundable once it has synced.
+    const sub = liveQuery(async () => {
+      const sales = await recentReceipts();
+      const why = await whyNotRefundableEach(sales, actor);
+      return sales.map((sale) => ({ sale, whyNot: why.get(sale.id) ?? null }));
+    }).subscribe({ next: setRecent });
     return () => sub.unsubscribe();
   }, [actor]);
 
+  if (refunded) return <RefundSlip {...refunded} device={device} actor={actor} onClose={() => setRefunded(null)} />;
   if (done) return <Receipt sale={done} device={device} onClose={() => setDone(null)} />;
   if (copy) return <Receipt sale={copy} device={device} reprint onReprint={() => recordReprint({ actor, saleId: copy.id })} onClose={() => setCopy(null)} />;
   if (bill) {
@@ -68,17 +78,30 @@ export function Orders({ device, actor }: { device: DeviceInfo; actor: Actor }) 
         <>
           <h2>Recent receipts</h2>
           <ul>
-            {recent.map((s) => (
-              <li key={s.id} data-testid="recent-receipt">
-                <div className="what"><span className="muted"><span className="when">{when(s.createdAt)}</span> ·</span> {s.receiptNo}</div>
-                <span className="row">
-                  <b className="amt">₹{rs(s.totalPaise)}</b>
-                  <button data-testid="reprint" className="icon-btn" title="Reprint" aria-label="Reprint" onClick={() => setCopy(s)}><PrintIcon /></button>
-                </span>
-              </li>
-            ))}
+            {recent.map(({ sale: s, whyNot }) => {
+              const isRefunded = s.status === 'refunded';
+              return (
+                <li key={s.id} data-testid="recent-receipt" data-status={s.status}>
+                  <div className="what">
+                    <span className="muted"><span className="when">{when(s.createdAt)}</span> ·</span> {s.receiptNo}
+                    {isRefunded && <span className="warn" data-testid="refunded-tag"> · Refunded</span>}
+                  </div>
+                  <span className="row">
+                    <b className="amt">₹{rs(s.totalPaise)}</b>
+                    {/* One slot: Refund on a paid bill, the same button disabled (with why) on any other. */}
+                    <button data-testid="refund" className="refund-btn" disabled={whyNot !== null} title={whyNot ?? 'Refund the whole bill'}
+                      onClick={() => setRefunding(s)}>Refund</button>
+                    <button data-testid="reprint" className="icon-btn" disabled={isRefunded} title={isRefunded ? 'Refunded: no copy of the receipt' : 'Reprint'} aria-label="Reprint" onClick={() => setCopy(s)}><PrintIcon /></button>
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </>
+      )}
+      {refunding && (
+        <RefundDialog sale={refunding} device={device} actor={actor} onCancel={() => setRefunding(null)}
+          onDone={(rows, reason) => { setRefunded({ sale: refunding, rows, reason }); setRefunding(null); }} />
       )}
       {paying && (
         <PayDialog
