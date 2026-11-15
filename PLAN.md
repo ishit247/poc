@@ -86,10 +86,11 @@ Fixed in this pass (the 2026-11-06 findings):
    background, to a log, never two runs at once), off-site backups and PITR (Q4), integration
    admin (Q1); see [docs/phase11-platform-admin.md](docs/phase11-platform-admin.md). Then decide the cut-over to
    additive-only migrations (section 18) before the first real tenant.
-3. Small manager screens owed (API exists): tenant settings, logo, outlet address/FSSAI ([docs/build-notes.md](docs/build-notes.md)).
-4. Phase 9 UI (integrations, item mapping, showing `unmappedLines`) once partner access is known.
+3. Phase 9 UI (integrations, item mapping, showing `unmappedLines`) once partner access is known.
 
-Done and struck from this list (detail in the phase files): the 23 INVALID mutants (2026-11-15: the runner matches
+Done and struck from this list (detail in the phase files): the manager Settings tab (2026-11-15: selling rules, logo,
+outlet address/FSSAI/GST; API tests 12/12 in `tenancy-host`, 3/3 logo mutants caught, `browser-settings` 25/25 in Edge at
+1024 and 820 wide), the 23 INVALID mutants (2026-11-15: the runner matches
 against LF text so CRLF checkouts work, `--check` validates every pattern without running tests, 483/483 match; the
 11 that needed new text or a CRLF-free pattern were each run and caught). Full mutation run 2026-11-15, log
 `.validation/mutation-full-2026-11-15.log`: 467/483 caught on the first pass, none survived. The other 16 were

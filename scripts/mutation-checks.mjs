@@ -418,7 +418,9 @@ const MUTANTS = [
   // --- login picks the tenant (D12)
   M('login-lookup-any-email', 'db/migrations/0001_tenancy.sql', "AND lower(email) = nullif(lower(current_setting('app.login_email', true)), ''))", ')', API_TESTS('tenancy-host.test.ts')),
   M('email-unique-per-tenant', 'db/migrations/0001_tenancy.sql', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (lower(email));', 'CREATE UNIQUE INDEX app_user_email_uq ON app_user (tenant_id, lower(email));', API_TESTS('tenancy-host.test.ts')),
-  M('device-logo-from-host', 'apps/api/src/routes/branding.ts', 'serveLogo(req, reply, req.principal!.tenantId)', 'serveLogo(req, reply, req.hostTenantId ?? req.principal!.tenantId)', API_TESTS('tenancy-host.test.ts')),
+  M('device-logo-from-host', 'apps/api/src/routes/branding.ts', "{ config: { scope: 'tenant', permission: 'device', ...limit(120) } }, async (req, reply) =>\n    serveLogo(req, reply, req.principal!.tenantId)", "{ config: { scope: 'tenant', permission: 'device', ...limit(120) } }, async (req, reply) =>\n    serveLogo(req, reply, req.hostTenantId ?? req.principal!.tenantId)", API_TESTS('tenancy-host.test.ts')),
+  M('mgr-logo-from-host', 'apps/api/src/routes/branding.ts', "app.get('/settings/logo', { config: cfg }, async (req, reply) => serveLogo(req, reply, req.principal!.tenantId));", "app.get('/settings/logo', { config: cfg }, async (req, reply) => serveLogo(req, reply, req.hostTenantId ?? '00000000-0000-0000-0000-000000000000'));", API_TESTS('tenancy-host.test.ts')),
+  M('mgr-logo-open-to-staff', 'apps/api/src/routes/branding.ts', "app.get('/settings/logo', { config: cfg }", "app.get('/settings/logo', { config: { scope: 'tenant', permission: 'staff' } }", API_TESTS('tenancy-host.test.ts')),
   M('outbox-one-tenant-only','apps/api/src/jobs/outbox.ts', 'for (const d of await scanDue()) {', 'for (const d of (await scanDue()).filter((x) => x.tenant_id.endsWith("a"))) {', API_TESTS('outbox.test.ts')),
   // --- tables and quick codes (phase 12 step 1; db/test/tables.test.mjs)
   ...[

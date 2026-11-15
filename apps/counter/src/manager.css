@@ -148,6 +148,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .m-login h1 { font-size: 22px; margin: 0; }
 .m-field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; color: var(--muted); }
 .m-field input, .m-field select { max-width: none; width: 100%; font-weight: 400; color: var(--fg); font-size: 16px; }
+/* Settings: a block of fields stacked in a card, and a checkbox beside its words (not the full-width field style). */
+.m-form { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.m-card > header + .m-form { border-top: 0; }
+.m-form .muted { margin: 0; font-size: 14px; }
+.m-form .m-field.inline { flex-direction: row; align-items: center; gap: 10px; font-size: 16px; color: var(--fg); }
+.m-form .m-field.inline input { width: 24px; height: 24px; flex: none; }
+.m-logo { display: flex; align-items: center; gap: 14px; min-height: 72px; }
+.m-logo img { max-height: 72px; max-width: 200px; object-fit: contain; }
 .m-pw { position: relative; }
 .m-pw button { position: absolute; right: 6px; top: 7px; min-height: 38px; }
 .m-pw input { padding-right: 76px; }

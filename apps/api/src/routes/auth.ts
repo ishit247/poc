@@ -146,9 +146,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       const u = (await c.query('SELECT name FROM app_user WHERE id = $1', [p.userId])).rows[0];
       const outlets = await c.query(
         `SELECT o.id, o.name, o.timezone, (now() AT TIME ZONE o.timezone)::date::text AS today,
+                o.address, o.fssai_no AS "fssaiNo", o.gst_enabled AS "gstEnabled", o.gstin,
                 COALESCE((SELECT json_agg(json_build_object('id', k.id, 'code', k.code) ORDER BY k.code) FROM counter k WHERE k.outlet_id = o.id), '[]') AS counters
            FROM outlet o WHERE o.id = ANY($1::uuid[]) ORDER BY o.name`, [p.outletIds]);
-      return { name: u?.name as string, role: p.role, outlets: outlets.rows as { id: string; name: string; timezone: string; today: string; counters: { id: string; code: string }[] }[] };
+      return { name: u?.name as string, role: p.role, outlets: outlets.rows as { id: string; name: string; timezone: string; today: string; address: string | null; fssaiNo: string | null; gstEnabled: boolean; gstin: string | null; counters: { id: string; code: string }[] }[] };
     });
   });
 

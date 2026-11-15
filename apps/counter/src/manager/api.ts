@@ -3,7 +3,10 @@ import { formatRupees, paise } from '@pos/shared';
 // Manager tools are online-only and never stored on the tablet: the session token lives in memory and
 // is gone on reload. Day close needs the server's view of every tablet, so there is nothing to do offline.
 
-export interface Me { name: string; outlets: { id: string; name: string; timezone: string; today: string }[] }
+export interface Me {
+  name: string;
+  outlets: { id: string; name: string; timezone: string; today: string; address?: string | null; fssaiNo?: string | null; gstEnabled?: boolean; gstin?: string | null }[];
+}
 export interface Totals {
   paidSales: number; grossPaise: number; taxPaise: number; cashPaise: number; upiPaise: number; onlineGrossPaise: number;
   voids: number; voidTotalPaise: number; refunds: number; refundTotalPaise: number; varianceTotalPaise: number;

@@ -188,6 +188,19 @@ test('logo upload: manager only, real PNG/JPEG/WebP only, size capped', async ()
     assert.equal((await app.inject({ method: 'GET', url: '/branding', headers: { host: HOST_A } })).json().logo.sha256, sha(next));
     // B is untouched.
     assert.notEqual((await app.inject({ method: 'GET', url: '/branding', headers: { host: HOST_B } })).json().logo.sha256, sha(next));
+    // The manager's own view of the logo: their tenant's bytes only; staff and anonymous callers are refused.
+    const seen = await app.inject({ method: 'GET', url: '/settings/logo', headers: bearer(a1) });
+    assert.equal(seen.statusCode, 200);
+    assert.equal(sha(seen.rawPayload), sha(next));
+    const b1 = await token(app, B, 'b1@example.test');
+    const seenB = await app.inject({ method: 'GET', url: '/settings/logo', headers: bearer(b1) });
+    assert.equal(seenB.statusCode, 200);
+    assert.notEqual(sha(seenB.rawPayload), sha(next), 'tenant B must not see tenant A’s logo');
+    assert.equal((await app.inject({ method: 'GET', url: '/settings/logo', headers: bearer(staff) })).statusCode, 403);
+    assert.equal((await app.inject({ method: 'GET', url: '/settings/logo' })).statusCode, 401);
+    // /me carries the outlet's receipt and GST details for the Settings screen.
+    const me = (await app.inject({ method: 'GET', url: '/me', headers: bearer(a1) })).json();
+    for (const o of me.outlets) assert.deepEqual(['address', 'fssaiNo', 'gstEnabled', 'gstin'].filter((k) => !(k in o)), []);
     const audited = await withTenant(A, (c) => c.query("SELECT detail FROM audit WHERE action = 'logo.set' ORDER BY at DESC LIMIT 1"));
     assert.equal(audited.rows[0].detail.sha256, sha(next));
     assert.equal(audited.rows[0].detail.bytes, next.length);

@@ -79,7 +79,7 @@ still open, and a trap that cost time once. Active phases keep their own file (p
 |---|---|
 | Tablet | `navigator.storage.persist()` is never called, and storage durability is unchecked on a real tablet |
 | Tablet | The offline-days lockout (`offlineDays`) is stored but not enforced |
-| Manager UI | No screens for tenant settings, the logo, or outlet address/FSSAI (API only) |
+| Manager UI | Done 2026-11-15: manager Settings tab (`apps/counter/src/manager/Settings.tsx`) for selling rules, logo, and per-outlet address/FSSAI/GST. Checked in Edge at 1024 and 820 wide only (`browser-settings.mjs` 25/25); not on a real tablet or Safari/Firefox. Logo is uploaded as picked (PNG/JPEG/WebP, 256 KB), not resized. Added `GET /settings/logo` (manager's own tenant) and address/FSSAI/GST fields on `/me` |
 | Printing | Nothing printed on the real H58BT; no WebUSB, Bluetooth, ESC/POS or drawer kick. Non-ASCII item names would need a code page or bitmap printing |
 | Receipt | The printed time is when the order was rung up, not when it was paid |
 | Day close | Late adjustments key on arrival time; closing days out of date order may list or miss some |

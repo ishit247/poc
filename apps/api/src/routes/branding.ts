@@ -69,7 +69,10 @@ export const brandingRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, sha256: sha };
   });
 
-  app.delete('/settings/logo', { config: cfg }, async (req, reply) => {
+  // Manager: see the current logo (the bearer token cannot ride an <img src>, so the screen fetches it as a blob).
+  app.get('/settings/logo', { config: cfg }, async (req, reply) => serveLogo(req, reply, req.principal!.tenantId));
+
+  app.delete('/settings/logo',{ config: cfg }, async (req, reply) => {
     const p = req.principal!;
     if (p.kind !== 'user') return reply.code(403).send({ error: 'forbidden' });
     await withTenant(p.tenantId, async (c) => {
