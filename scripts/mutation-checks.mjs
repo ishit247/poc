@@ -1,11 +1,12 @@
 // Mutation checks for the phase 3 guards: remove or weaken ONE guard, rebuild a fresh database,
 // run the tests that are meant to protect it, and require at least one to fail.
-//   node scripts/mutation-checks.mjs [--check] [id ...]      (no ids = all; --check only validates patterns)
+//   node scripts/mutation-checks.mjs [--check] [--slow] [id ...]   (no ids = all; --check only validates patterns; --slow = old full rebuild per mutant)
 // Each run is on a fresh database (a failing test can leave state that corrupts later results).
 // The mutated file is always restored, including on Ctrl-C. A mutant whose schema or code does not
 // load is reported BROKEN, not "caught": it proves nothing.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import pg from 'pg';
 
 const API_TESTS = (...f) => ({ cwd: 'apps/api', cmd: ['node', '--import', 'tsx', '--test', '--test-concurrency=1', ...f.map((x) => `test/${x}`)] });
 const DB_TESTS = { cwd: '.', cmd: ['node', '--test', 'db/test/rls.test.mjs', 'db/test/trading.test.mjs'] };
@@ -782,13 +783,90 @@ const MUTANTS = [
 const run =(cmd, cwd = '.') => spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
 // `--check`: only confirm every pattern still matches its file once; run no tests.
 const checkOnly = process.argv.includes('--check');
-const want = new Set(process.argv.slice(2).filter((a) => a !== '--check'));
+const want = new Set(process.argv.slice(2).filter((a) => a !== '--check' && a !== '--slow'));
 const todo = MUTANTS.filter((m) => !want.size || want.has(m.id));
 let original = null;
 let current = null;
 const restore = () => { if (current && original !== null) writeFileSync(current, original); };
 process.on('SIGINT', () => { restore(); process.exit(130); });
 
+// --- Fast reset (docs/mutation-speedup-plan.md, steps 1-2). The stack is built ONCE on the unmutated source and its
+// seeded database is kept as `pos_template`. Per mutant, `pos` is dropped and cloned from it (about a second) instead of
+// `docker compose down -v` + image rebuilds (about 25 s). Tests run in-process / against localhost:55432, never the
+// containers, so the containers are stopped. A schema mutant (db/migrations/*) instead gets an empty `pos`, then
+// migrate.mjs + seed.ts on the host. Mutants whose tests read item pictures (Garage) keep the old full start, because
+// the picture tests delete objects that a database clone would still point at. `--slow` forces the old path everywhere.
+const slow = process.argv.includes('--slow');
+// The tests run against their own fixture seed (scripts/seed-test.ts), not the demo seed, so restyling the demo data
+// cannot silently turn the suites red. Same steps as up-fresh.mjs, except the seed runs on the host.
+const SEED_FILE = 'scripts/seed-test.ts';
+const freshStart = () => {
+  const steps = [
+    ['docker', 'compose', '--profile', 'seed', 'down', '-v'],
+    ['docker', 'compose', 'up', '-d', '--build', '--wait'],
+    ['node', 'scripts/garage-init.mjs'],
+    ['node', '--import', 'tsx', SEED_FILE],
+  ];
+  for (const s of steps) { const r = run(s); if (r.status !== 0) return r; }
+  return { status: 0, stdout: '', stderr: '' };
+};
+const ADMIN_URL = process.env.MUTATION_ADMIN_URL ?? 'postgres://postgres:postgres@localhost:55432/postgres';
+const isSchema = (m) => m.file.startsWith('db/migrations/');
+const usesObjects = (m) => m.tests.cmd.some((a) => /item-images|tenancy-host/.test(a)) || /itemImages|objects\.ts|platform\.ts/.test(m.file);
+const fast = (m) => !slow && !m.tests.noDb && !usesObjects(m);
+const secs = (t0) => ((Date.now() - t0) / 1000).toFixed(1);
+const admin = async (...sql) => {
+  const c = new pg.Client({ connectionString: ADMIN_URL });
+  await c.connect();
+  try { for (const s of sql) await c.query(s); } finally { await c.end(); }
+};
+const dropPos = 'DROP DATABASE IF EXISTS pos WITH (FORCE)';
+const clonePos = () => admin(dropPos, 'CREATE DATABASE pos TEMPLATE pos_template OWNER pos_owner');
+let templateReady = false;
+const buildTemplate = async () => {
+  const r = freshStart();
+  if (r.status !== 0) throw new Error(`fresh start failed before the first mutant:\n${r.stderr}`);
+  run(['docker', 'compose', 'stop', 'api', 'counter', 'admin']); // they hold connections to pos
+  await admin('DROP DATABASE IF EXISTS pos_template WITH (FORCE)', 'CREATE DATABASE pos_template TEMPLATE pos OWNER pos_owner');
+  templateReady = true;
+};
+// Returns null when ready, or the failure text (the mutant's schema or seed did not load).
+const resetDb = async (m) => {
+  if (!isSchema(m)) { await clonePos(); return null; }
+  await admin(dropPos, 'CREATE DATABASE pos OWNER pos_owner', 'GRANT CONNECT ON DATABASE pos TO pos_app, app_platform');
+  for (const cmd of [['node', 'scripts/migrate.mjs'], ['node', '--import', 'tsx', SEED_FILE]]) {
+    const r = run(cmd);
+    if (r.status !== 0) return `${r.stderr}\n${r.stdout}`;
+  }
+  return null;
+};
+
+const TIMEOUT_MS = Number(process.env.MUTATION_TEST_TIMEOUT_S ?? 300) * 1000; // a hung suite is not a result
+const tap = (cmd) => cmd.flatMap((a) => (a === '--test' ? [a, '--test-reporter=tap'] : [a]));
+const testRun = (t) => spawnSync(tap(t.cmd)[0], tap(t.cmd).slice(1), { cwd: t.cwd, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024, timeout: TIMEOUT_MS, killSignal: 'SIGKILL' });
+// Mutants that need the full start run LAST: `down -v` also destroys pos_template.
+let templateLost = false;
+todo.sort((a, b) => Number(!a.tests.noDb && !fast(a)) - Number(!b.tests.noDb && !fast(b)));
+if (!checkOnly && todo.some(fast)) await buildTemplate();
+// Baseline: every test command must PASS on the unmutated code first. A suite that already fails (stale seed, broken
+// test) would "catch" every mutant and prove nothing. Nothing is mutated yet, so aborting here is safe.
+if (!checkOnly && !process.argv.includes('--no-baseline')) {
+  const seen = new Set(), red = [];
+  for (const m of todo.filter((x) => !x.tests.noDb)) {
+    const key = JSON.stringify(m.tests);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (templateReady) { const e = await resetDb({ file: '' }); if (e) throw new Error(e); } else freshStart();
+    const out = (() => { const r = testRun(m.tests); return `${r.stdout}\n${r.stderr}`; })();
+    const fail = Number(/^# fail (\d+)/m.exec(out)?.[1] ?? NaN);
+    if (fail !== 0) red.push(`${m.tests.cmd.slice(-2).join(' ')} (${Number.isNaN(fail) ? 'no report / timeout' : fail + ' failing'}) e.g. ${m.id}`);
+  }
+  if (red.length) {
+    console.log(`BASELINE RED: these suites fail with NO mutation, so mutants of them would all look "caught":\n  ${red.join('\n  ')}\nNothing was mutated. Fix them first (or pass --no-baseline).`);
+    if (templateReady) { await clonePos(); run(['docker', 'compose', 'start', 'api', 'counter', 'admin']); }
+    process.exit(2);
+  }
+}
 const results = [];
 for (const m of todo) {
   original = readFileSync(m.file, 'utf8');
@@ -802,22 +880,31 @@ for (const m of todo) {
   if (checkOnly) { results.push([m.id, 'caught', 'pattern ok (--check)']); continue; }
   try {
     writeFileSync(m.file, isRe ? text.replace(m.from, m.to) : m.all ? text.split(m.from).join(m.to) : text.replace(m.from, () => m.to));
+    const tUp = Date.now();
     if (!m.tests.noDb) {
-      const up = run(['node', 'scripts/up-fresh.mjs']);
-      if (up.status !== 0) {
-        // The mutant most likely does not build; the full output is kept so the cause can be read.
+      let err = null;
+      if (fast(m)) err = await resetDb(m);
+      else {
+        const up = freshStart();
+        if (up.status !== 0) err = `${up.stderr}\n${up.stdout}`;
+        else { templateLost = true; if (templateReady) run(['docker', 'compose', 'stop', 'api', 'counter', 'admin']); }
+      }
+      if (err !== null) {
+        // The mutant most likely does not build or load; the full output is kept so the cause can be read.
         const log = `.validation/broken-${m.id}.log`;
-        writeFileSync(log, `${up.stderr}\n${up.stdout}`);
+        writeFileSync(log, err);
         results.push([m.id, 'BROKEN', `fresh start failed under the mutation; see ${log}`]); console.log(results.at(-1).join(' | ')); continue;
       }
     }
-    const t = run(m.tests.cmd.flatMap((a) => (a === '--test' ? [a, '--test-reporter=tap'] : [a])), m.tests.cwd);
+    const upS = secs(tUp), tTest = Date.now();
+    const t = testRun(m.tests);
     const out = `${t.stdout}\n${t.stderr}`;
     const failed = [...out.matchAll(/^not ok \d+ - (.*)$/gm)].map((x) => x[1]);
     const fail = Number(/^# fail (\d+)/m.exec(out)?.[1] ?? NaN);
-    if (Number.isNaN(fail)) results.push([m.id, 'BROKEN', 'tests did not report']);
-    else if (fail > 0) results.push([m.id, 'caught', failed[0] ?? '(failure)']);
-    else results.push([m.id, 'SURVIVED', 'all tests passed with the guard removed']);
+    const timing = ` [up ${upS}s, test ${secs(tTest)}s]`;
+    if (Number.isNaN(fail)) results.push([m.id, 'BROKEN', 'tests did not report' + timing]);
+    else if (fail > 0) results.push([m.id, 'caught', (failed[0] ?? '(failure)') + timing]);
+    else results.push([m.id, 'SURVIVED', 'all tests passed with the guard removed' + timing]);
   } finally {
     restore();
   }
@@ -825,7 +912,10 @@ for (const m of todo) {
 }
 // Leave the database matching the restored source.
 // Not under --check: it ran nothing, and a rebuild here would wipe the database under any suite running beside it.
-if (!checkOnly && todo.some((m) => !m.tests.noDb)) run(['node', 'scripts/up-fresh.mjs']);
+if (!checkOnly && templateReady && !templateLost) {
+  await clonePos(); // the unmutated template, then the containers come back
+  run(['docker', 'compose', 'start', 'api', 'counter', 'admin']);
+} else if (!checkOnly && todo.some((m) => !m.tests.noDb)) freshStart();
 console.log('\n' + results.map((r) => r.join(' | ')).join('\n'));
 const bad = results.filter((r) => r[1] !== 'caught');
 console.log(`\n${results.length - bad.length}/${results.length} caught`);

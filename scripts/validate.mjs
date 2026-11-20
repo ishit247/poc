@@ -26,8 +26,8 @@ const STAGES = {
   },
   'unit-counter': { what: 'Tablet tests (sale, push, receipt)', run: 'pnpm --filter @pos/counter test', tests: true },
   fresh: {
-    what: 'DESTROYS the dev volume, reruns migrations 0001.., reseeds two tenants',
-    run: 'pnpm run up:fresh',
+    what: 'DESTROYS the dev volume, reruns migrations 0001.., reseeds the TEST fixture (scripts/seed-test.ts)',
+    run: 'pnpm run up:fresh:test',
     destructive: true,
     needsDb: true,
   },

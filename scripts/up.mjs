@@ -13,6 +13,7 @@ await client.connect();
 const seeded = (await client.query('SELECT count(*)::int AS n FROM platform_admin')).rows[0].n > 0; // not tenant-scoped, so RLS cannot hide it
 await client.end();
 if (seeded) console.log('database already seeded (use `pnpm run up:fresh` to reset)');
+else if (process.argv.includes('--test')) execFileSync(process.execPath, ['--import', 'tsx', 'scripts/seed-test.ts'], { stdio: 'inherit' }); // fixture data the API and DB tests are written against
 else run(['run', '--rm', 'seed']);
 
 console.log('\nCounter + API  http://localhost:8080  (API under /api)\nPlatform console  http://localhost:8081\nPostgres       localhost:55432\nTest accounts: docs/test-accounts.md');
