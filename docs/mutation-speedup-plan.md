@@ -2,7 +2,7 @@
 
 # Faster mutation runs — plan
 
-Status: **proposed 2026-11-15, not started.** Model plan: STANDARD (test tooling; no product behaviour changes).
+Status: **steps 1-2 done 2026-11-21; a full run takes about 45 min (was 4-5 h). Steps 3-5 not needed so far.** Model plan: STANDARD (test tooling; no product behaviour changes).
 
 ## Why a full run takes 3–4 hours
 
@@ -68,12 +68,33 @@ on rebuilding the stack, not on the tests.**
   schema dump).
 - `DROP DATABASE … WITH (FORCE)` needs Postgres 13+ and a connection as the owner, not as `pos_app`.
 
+## What was built (2026-11-21)
+
+In `scripts/mutation-checks.mjs`:
+
+- **Template reset.** The stack is built once; its seeded database is kept as `pos_template`, and the api, counter and admin
+  containers are stopped. Each source mutant: `DROP DATABASE pos WITH (FORCE)` + `CREATE DATABASE pos TEMPLATE pos_template`.
+  Schema mutants (`db/migrations/*`): empty `pos`, then `migrate.mjs` and the seed on the host; a migration or seed that
+  fails to load is BROKEN as before. Needs the Postgres superuser (`MUTATION_ADMIN_URL`, default `postgres:postgres@localhost:55432`).
+- **Garage:** mutants whose tests read pictures (`item-images`, `tenancy-host`) or whose file is `itemImages`/`objects`/`platform`
+  keep the full `down -v` start, because the picture tests delete objects. They run LAST, since `down -v` also destroys
+  `pos_template`.
+- **Timings** on every result line: `[up Xs, test Ys]`. Measured: reset 0.1-0.4 s (source), about 5 s (schema); full run about 45 min.
+- **Baseline check:** before mutating anything, each distinct test command runs once on the unmutated code and must pass.
+  Otherwise the run stops with `BASELINE RED` and lists the suites (`--no-baseline` skips it). Reason: a suite that already
+  fails "catches" every mutant. This happened on 2026-11-21: a demo-seed rename turned about 28 suites red, and partial
+  results of 169/169 caught were vacuous.
+- **Timeout:** a hung test run is killed after 300 s (`MUTATION_TEST_TIMEOUT_S`) and reported BROKEN.
+- **Separate test seed:** `scripts/seed-test.ts` is a frozen fixture the tests are written against ("School 1 Canteen" ...).
+  The runner and `pnpm run up:fresh:test` (also used by `validate.mjs`) seed it. `scripts/seed.ts` is free to change for demos.
+- `--slow` forces the old full rebuild per mutant, for comparison.
+
 ## Steps
 
 | # | Step | State |
 |---|------|-------|
-| 1 | Measure: per-mutant timing in the log | not started |
-| 2 | Template reset for code mutants; host-side migrate and seed for schema mutants; Garage handling | not started |
-| 3 | One template per schema state | not started |
-| 4 | Parallel workers (only if still too slow) | not started |
+| 1 | Measure: per-mutant timing in the log | done 2026-11-21 |
+| 2 | Template reset for code mutants; host-side migrate and seed for schema mutants; Garage handling | done 2026-11-21 |
+| 3 | One template per schema state | not needed: schema mutants cost about 5 s each |
+| 4 | Parallel workers | not needed at 45 min; revisit if the mutant count doubles |
 | 5 | Cache by content hash (optional) | not started |
